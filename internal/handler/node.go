@@ -96,6 +96,12 @@ func (h *NodeHandler) Update(w http.ResponseWriter, r *http.Request) {
 		respondError(w, 404, "node not found")
 		return
 	}
+
+	// Re-enqueue for embedding if content or summary changed
+	if req.Content != nil || req.Summary != nil {
+		_ = embedder.EnqueueNode(r.Context(), h.pool, node.ID)
+	}
+
 	respondJSON(w, 200, node)
 }
 
@@ -214,6 +220,14 @@ func (h *NodeHandler) Dedup(w http.ResponseWriter, r *http.Request) {
 	deleted := 0
 	for _, g := range groups {
 		for _, id := range g.IDs[1:] {
+			// Clean up edges referencing this duplicate node first
+			_, edgeErr := h.pool.Exec(r.Context(),
+				`DELETE FROM edges WHERE source_id = $1 OR target_id = $1`, id)
+			if edgeErr != nil {
+				slog.Error("dedup edge cleanup", "id", id, "error", edgeErr)
+				continue
+			}
+			// Then soft-delete the node
 			ok, err := h.repo.Delete(r.Context(), id)
 			if err != nil {
 				slog.Error("dedup delete", "id", id, "error", err)

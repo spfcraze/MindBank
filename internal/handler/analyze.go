@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -1007,14 +1008,69 @@ func (h *AnalyzeHandler) MergeDuplicates(w http.ResponseWriter, r *http.Request)
 		}
 
 		if !dryRun {
-			edgesMoved := 0
-			for _, oldID := range toMerge {
-				tag, _ := h.pool.Exec(r.Context(), `UPDATE edges SET source_id=$1 WHERE source_id=$2 AND target_id!=$1`, keepID, oldID)
-				edgesMoved += int(tag.RowsAffected())
-				tag, _ = h.pool.Exec(r.Context(), `UPDATE edges SET target_id=$1 WHERE target_id=$2 AND source_id!=$1`, keepID, oldID)
-				edgesMoved += int(tag.RowsAffected())
-				h.pool.Exec(r.Context(), `UPDATE nodes SET valid_to=now() WHERE id=$1 AND valid_to IS NULL`, oldID)
+			// Wrap entire merge operation in a transaction for atomicity
+			tx, txErr := h.pool.Begin(r.Context())
+			if txErr != nil {
+				slog.Error("merge: begin transaction", "label", label, "error", txErr)
+				mr.Status = "error: " + txErr.Error()
+				results = append(results, mr)
+				continue
 			}
+
+			edgesMoved := 0
+			txSuccess := true
+
+			for _, oldID := range toMerge {
+				// Transfer edges where old node is source
+				tag, execErr := tx.Exec(r.Context(),
+					`UPDATE edges SET source_id=$1 WHERE source_id=$2 AND target_id!=$1`,
+					keepID, oldID)
+				if execErr != nil {
+					slog.Error("merge: transfer source edges", "old_id", oldID, "error", execErr)
+					tx.Rollback(r.Context())
+					txSuccess = false
+					break
+				}
+				edgesMoved += int(tag.RowsAffected())
+
+				// Transfer edges where old node is target
+				tag, execErr = tx.Exec(r.Context(),
+					`UPDATE edges SET target_id=$1 WHERE target_id=$2 AND source_id!=$1`,
+					keepID, oldID)
+				if execErr != nil {
+					slog.Error("merge: transfer target edges", "old_id", oldID, "error", execErr)
+					tx.Rollback(r.Context())
+					txSuccess = false
+					break
+				}
+				edgesMoved += int(tag.RowsAffected())
+
+				// Soft-delete duplicate node
+				_, execErr = tx.Exec(r.Context(),
+					`UPDATE nodes SET valid_to=now() WHERE id=$1 AND valid_to IS NULL`,
+					oldID)
+				if execErr != nil {
+					slog.Error("merge: soft-delete node", "old_id", oldID, "error", execErr)
+					tx.Rollback(r.Context())
+					txSuccess = false
+					break
+				}
+			}
+
+			if !txSuccess {
+				mr.Status = "error: rolled back"
+				results = append(results, mr)
+				continue
+			}
+
+			// Commit transaction
+			if commitErr := tx.Commit(r.Context()); commitErr != nil {
+				slog.Error("merge: commit", "label", label, "error", commitErr)
+				mr.Status = "error: " + commitErr.Error()
+				results = append(results, mr)
+				continue
+			}
+
 			mr.EdgesMoved = edgesMoved
 			mr.Status = "merged"
 			mergedCount++

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"os"
 	"strings"
@@ -29,7 +30,8 @@ func APIKeyAuth(next http.Handler) http.Handler {
 
 		// Support "Bearer <key>" or just "<key>"
 		key := strings.TrimPrefix(auth, "Bearer ")
-		if key != expectedKey {
+		// Constant-time comparison to prevent timing attacks
+		if subtle.ConstantTimeCompare([]byte(key), []byte(expectedKey)) != 1 {
 			respondError(w, 401, "invalid API key")
 			return
 		}

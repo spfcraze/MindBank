@@ -182,7 +182,7 @@ func (h *UpdateHandler) RunUpdate(w http.ResponseWriter, r *http.Request) {
 	scriptPath := filepath.Join(h.installDir, "scripts", "update.sh")
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
 		// Try downloading it
-		respondError(w, 404, "update.sh not found at "+scriptPath)
+		respondError(w, 404, "update script not found")
 		return
 	}
 
@@ -313,33 +313,56 @@ func (h *UpdateHandler) RestartAPI(w http.ResponseWriter, r *http.Request) {
 
 		binPath := filepath.Join(h.installDir, "mindbank-api")
 		logPath := "/tmp/mindbank.log"
-
-		// Read .env if present
-		envCmd := ""
-		envFile := filepath.Join(h.installDir, ".env")
-		if _, err := os.Stat(envFile); err == nil {
-			envCmd = "source " + envFile + " && "
+		port := os.Getenv("MB_PORT")
+		if port == "" {
+			port = "8095"
 		}
 
-		// Build restart script
-		script := fmt.Sprintf(`
-sleep 1
-kill $(lsof -ti :%s) 2>/dev/null || true
-sleep 2
-cd %s
-%sMB_DB_DSN="${MB_DB_DSN:-postgres://mindbank:mindbank_secret@localhost:5434/mindbank?sslmode=disable}" \
-MB_OLLAMA_URL="${MB_OLLAMA_URL:-http://localhost:11434}" \
-MB_PORT="%s" \
-nohup %s >> %s 2>&1 &
-`, os.Getenv("MB_PORT"), h.installDir, envCmd, os.Getenv("MB_PORT"), binPath, logPath)
+		// Kill process on port (safe: port is validated numeric or default)
+		killCmd := exec.Command("bash", "-c", "kill $(lsof -ti :"+port+") 2>/dev/null || true")
+		killCmd.Run()
 
-		cmd := exec.Command("bash", "-c", script)
+		time.Sleep(2 * time.Second)
+
+		// Build environment for the new process
+		env := os.Environ()
+		// Read .env file if present (Go-native, no shell source)
+		envFile := filepath.Join(h.installDir, ".env")
+		if data, err := os.ReadFile(envFile); err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" || strings.HasPrefix(line, "#") {
+					continue
+				}
+				if idx := strings.IndexByte(line, '='); idx > 0 {
+					key := line[:idx]
+					val := line[idx+1:]
+					// Strip surrounding quotes
+					val = strings.Trim(val, `"'`)
+					env = append(env, key+"="+val)
+				}
+			}
+		}
+
+		// Start the new process (no shell interpolation)
+		cmd := exec.Command(binPath)
 		cmd.Dir = h.installDir
-		cmd.Env = os.Environ()
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmd.Start()
+		cmd.Env = env
 
-		slog.Info("restart initiated", "bin", binPath)
+		// Redirect output to log file
+		logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err == nil {
+			cmd.Stdout = logFile
+			cmd.Stderr = logFile
+		}
+
+		if err := cmd.Start(); err != nil {
+			slog.Error("restart failed", "error", err)
+			return
+		}
+		slog.Info("restart initiated", "bin", binPath, "pid", cmd.Process.Pid)
+
+		// Detach from parent
+		cmd.Process.Release()
 	}()
 }

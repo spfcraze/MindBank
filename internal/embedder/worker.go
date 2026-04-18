@@ -83,11 +83,13 @@ func (w *Worker) processBatch(ctx context.Context) {
 }
 
 func (w *Worker) processBatchItems(ctx context.Context, items []queueItem) {
-	// Step 1: Fetch content for all items
+	// Step 1: Fetch content for all items (truncate to 1500 chars for Ollama safety)
 	type itemWithContent struct {
 		queueItem
 		content string
 	}
+
+	const maxEmbedLen = 1500 // nomic-embed-text context = 8192 tokens, ~4 chars/token → ~32K, but keep short for speed
 
 	var batch []itemWithContent
 	for _, item := range items {
@@ -111,6 +113,10 @@ func (w *Worker) processBatchItems(ctx context.Context, items []queueItem) {
 		if err != nil {
 			w.markFailed(ctx, item.ID, fmt.Sprintf("fetch content: %v", err))
 			continue
+		}
+		// Truncate to safe length for Ollama
+		if len(content) > maxEmbedLen {
+			content = content[:maxEmbedLen]
 		}
 		batch = append(batch, itemWithContent{queueItem: item, content: content})
 	}
@@ -209,6 +215,11 @@ func (w *Worker) processItem(ctx context.Context, item queueItem) {
 	if err != nil {
 		w.markFailed(ctx, item.ID, fmt.Sprintf("fetch content: %v", err))
 		return
+	}
+
+	// Truncate to safe length for Ollama
+	if len(content) > 1500 {
+		content = content[:1500]
 	}
 
 	// Generate embedding
