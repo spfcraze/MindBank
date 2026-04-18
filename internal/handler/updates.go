@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -50,6 +51,7 @@ func NewUpdateHandler() *UpdateHandler {
 func RegisterUpdateRoutes(r chi.Router, h *UpdateHandler) {
 	r.Get("/updates/check", h.CheckUpdate)
 	r.Post("/updates/run", h.RunUpdate)
+	r.Post("/updates/restart", h.RestartAPI)
 	r.Get("/updates/status/{jobID}", h.GetStatus)
 }
 
@@ -294,4 +296,50 @@ func (h *UpdateHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, 200, job)
+}
+
+// RestartAPI handles POST /api/v1/updates/restart.
+// Returns immediately, then restarts the API process after a delay.
+func (h *UpdateHandler) RestartAPI(w http.ResponseWriter, r *http.Request) {
+	// Respond first, then restart in background
+	respondJSON(w, 200, map[string]string{
+		"status": "restarting",
+		"msg":    "API will restart in 3 seconds. Refresh the page.",
+	})
+
+	// Start a background process that waits, kills old, starts new
+	go func() {
+		time.Sleep(3 * time.Second)
+
+		binPath := filepath.Join(h.installDir, "mindbank-api")
+		logPath := "/tmp/mindbank.log"
+
+		// Read .env if present
+		envCmd := ""
+		envFile := filepath.Join(h.installDir, ".env")
+		if _, err := os.Stat(envFile); err == nil {
+			envCmd = "source " + envFile + " && "
+		}
+
+		// Build restart script
+		script := fmt.Sprintf(`
+sleep 1
+kill $(lsof -ti :%s) 2>/dev/null || true
+sleep 2
+cd %s
+%sMB_DB_DSN="${MB_DB_DSN:-postgres://mindbank:mindbank_secret@localhost:5434/mindbank?sslmode=disable}" \
+MB_OLLAMA_URL="${MB_OLLAMA_URL:-http://localhost:11434}" \
+MB_PORT="%s" \
+nohup %s >> %s 2>&1 &
+`, os.Getenv("MB_PORT"), h.installDir, envCmd, os.Getenv("MB_PORT"), binPath, logPath)
+
+		cmd := exec.Command("bash", "-c", script)
+		cmd.Dir = h.installDir
+		cmd.Env = os.Environ()
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Start()
+
+		slog.Info("restart initiated", "bin", binPath)
+	}()
 }

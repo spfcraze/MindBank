@@ -125,8 +125,8 @@ a.tab{text-decoration:none}.a.tab:hover{color:#888}
       <div class="log" id="updateLog"></div>
       <div id="restartSection" style="display:none;margin-top:12px">
         <p style="font-size:11px;color:#888;margin-bottom:8px">Update complete. Restart the API to apply changes:</p>
-        <button class="btn btn-red" onclick="location.reload()">Reload Page</button>
-        <span style="font-size:10px;color:#444;margin-left:8px">Then run: make run</span>
+        <button class="btn btn-red" onclick="restartAPI()" id="btnRestart">Restart API Now</button>
+        <span style="font-size:10px;color:#444;margin-left:8px" id="restartStatus"></span>
       </div>
     </div>
   </div>
@@ -135,6 +135,47 @@ a.tab{text-decoration:none}.a.tab:hover{color:#888}
 <script>
 let currentJobId = null;
 let pollInterval = null;
+
+async function restartAPI() {
+  const btn = document.getElementById('btnRestart');
+  const status = document.getElementById('restartStatus');
+  btn.disabled = true;
+  btn.textContent = 'Restarting...';
+  status.textContent = 'Killing old process, starting new one...';
+
+  try {
+    await fetch('/api/v1/updates/restart', { method: 'POST' });
+    // Wait for API to come back
+    status.textContent = 'Waiting for API to start...';
+    let attempts = 0;
+    const checkInterval = setInterval(async () => {
+      attempts++;
+      try {
+        const resp = await fetch('/api/v1/health');
+        if (resp.ok) {
+          clearInterval(checkInterval);
+          status.innerHTML = '<span style="color:#00ff88">✓ API restarted! </span>';
+          btn.textContent = 'Restarted ✓';
+          btn.classList.remove('btn-red');
+          btn.classList.add('btn-blue');
+          // Reload after a moment
+          setTimeout(() => location.reload(), 2000);
+        }
+      } catch (e) {
+        if (attempts > 15) {
+          clearInterval(checkInterval);
+          status.innerHTML = '<span style="color:#ff4444">API not responding. Check logs.</span>';
+          btn.textContent = 'Retry';
+          btn.disabled = false;
+        }
+      }
+    }, 1000);
+  } catch (e) {
+    status.innerHTML = '<span style="color:#ff4444">Error: ' + e.message + '</span>';
+    btn.disabled = false;
+    btn.textContent = 'Restart API Now';
+  }
+}
 
 async function checkUpdate() {
   const btn = document.getElementById('btnCheck');
