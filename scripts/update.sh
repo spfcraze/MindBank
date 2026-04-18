@@ -266,7 +266,7 @@ else
     tar -xzf "$TMPDIR/mindbank.tar.gz" -C "$TMPDIR"
 
     # Find extracted dir (GitHub tarballs have a root dir like spfcraze-MindBank-abc1234)
-    EXTRACTED=$(find "$TMPDIR" -maxdepth 1 -type d -name "*MindBank*" -o -name "*mindbank*" | head -1)
+    EXTRACTED=$(find "$TMPDIR" -maxdepth 1 -type d \( -name "*MindBank*" -o -name "*mindbank*" \) | head -1)
     if [ -z "$EXTRACTED" ]; then
         EXTRACTED=$(ls -d "$TMPDIR"/*/ 2>/dev/null | head -1)
     fi
