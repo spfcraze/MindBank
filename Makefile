@@ -16,14 +16,14 @@ run: db-up ## Start everything (Postgres + API)
 	@echo "Starting MindBank API..."
 	@pkill -f "./mindbank" 2>/dev/null || true
 	@sleep 1
-	@MB_DB_DSN="postgres://mindbank:${MB_POSTGRES_PASSWORD:-mindbank_secret}@localhost:${MB_PG_PORT:-5434}/mindbank?sslmode=disable" \
-		MB_OLLAMA_URL="http://localhost:${MB_OLLAMA_PORT:-11434}" \
-		MB_PORT=${MB_PORT:-8095} \
+	@MB_DB_DSN="postgres://mindbank:$${MB_POSTGRES_PASSWORD:-mindbank_secret}@localhost:$${MB_PG_PORT:-5434}/mindbank?sslmode=disable" \
+		MB_OLLAMA_URL="http://localhost:$${MB_OLLAMA_PORT:-11434}" \
+		MB_PORT=$${MB_PORT:-8095} \
 		nohup ./mindbank >> /tmp/mindbank.log 2>&1 &
 	@sleep 2
-	@curl -s http://localhost:${MB_PORT:-8095}/api/v1/health || echo "Starting..."
+	@curl -s http://localhost:$${MB_PORT:-8095}/api/v1/health || echo "Starting..."
 	@echo ""
-	@echo "Dashboard: http://localhost:${MB_PORT:-8095}"
+	@echo "Dashboard: http://localhost:$${MB_PORT:-8095}"
 
 stop: ## Stop everything
 	@pkill -f "./mindbank" 2>/dev/null && echo "API stopped" || echo "API not running"
@@ -73,7 +73,7 @@ clean: ## Remove binary and volumes
 	docker compose down -v
 
 health: ## Health check
-	@curl -s http://localhost:${MB_PORT:-8095}/api/v1/health | python3 -m json.tool 2>/dev/null || curl -s http://localhost:${MB_PORT:-8095}/api/v1/health
+	@curl -s http://localhost:$${MB_PORT:-8095}/api/v1/health | python3 -m json.tool 2>/dev/null || curl -s http://localhost:$${MB_PORT:-8095}/api/v1/health
 
 # === Docker ===
 
@@ -82,7 +82,7 @@ docker-build: ## Build Docker image
 
 docker-run: ## Run with Docker Compose
 	docker compose up -d
-	@echo "Dashboard: http://localhost:${MB_PORT:-8095}"
+	@echo "Dashboard: http://localhost:$${MB_PORT:-8095}"
 
 docker-stop: ## Stop Docker Compose
 	docker compose down
