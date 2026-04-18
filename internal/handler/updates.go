@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -197,19 +198,71 @@ func (h *UpdateHandler) RunUpdate(w http.ResponseWriter, r *http.Request) {
 	h.jobs[jobID] = job
 	h.mu.Unlock()
 
-	// Run update in background
+	// Run update in background with streaming output
 	go func() {
-		cmd := exec.Command("bash", scriptPath, "--yes", "--no-restart")
+		// Use stdbuf to force line-buffered output (bash buffers when piped)
+		// Fallback: use bash -u if stdbuf not available (e.g., macOS)
+		var cmd *exec.Cmd
+		if _, err := exec.LookPath("stdbuf"); err == nil {
+			cmd = exec.Command("stdbuf", "-oL", "bash", scriptPath, "--yes", "--no-restart")
+		} else {
+			cmd = exec.Command("bash", scriptPath, "--yes", "--no-restart")
+		}
 		cmd.Dir = h.installDir
 		cmd.Env = append(os.Environ(),
 			"MINDBANK_DIR="+h.installDir,
 			"AUTO_YES=true",
 		)
 
-		output, err := cmd.CombinedOutput()
+		// Get separate stdout/stderr pipes for streaming
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			h.mu.Lock()
+			job.Output += "\nError: " + err.Error()
+			job.Status = "error"
+			h.mu.Unlock()
+			return
+		}
+		stderr, err := cmd.StderrPipe()
+		if err != nil {
+			h.mu.Lock()
+			job.Output += "\nError: " + err.Error()
+			job.Status = "error"
+			h.mu.Unlock()
+			return
+		}
+
+		if err := cmd.Start(); err != nil {
+			h.mu.Lock()
+			job.Output += "\nError starting update: " + err.Error()
+			job.Status = "error"
+			h.mu.Unlock()
+			return
+		}
+
+		// Stream stdout and stderr in real-time
+		done := make(chan struct{}, 2)
+		streamScanner := func(r io.Reader) {
+			scanner := bufio.NewScanner(r)
+			for scanner.Scan() {
+				h.mu.Lock()
+				job.Output += scanner.Text() + "\n"
+				h.mu.Unlock()
+			}
+			done <- struct{}{}
+		}
+
+		go streamScanner(stdout)
+		go streamScanner(stderr)
+
+		// Wait for both streams to finish
+		<-done
+		<-done
+
+		// Wait for process to exit
+		err = cmd.Wait()
 
 		h.mu.Lock()
-		job.Output += string(output)
 		if err != nil {
 			job.Status = "error"
 			job.Output += "\nError: " + err.Error()
