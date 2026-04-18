@@ -232,6 +232,21 @@ func (h *NodeHandler) Dedup(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Recalculate triggers importance score recalculation for all nodes.
+func (h *NodeHandler) Recalculate(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.repo.RecalculateImportance(r.Context())
+	if err != nil {
+		slog.Error("recalculate importance", "error", err)
+		respondError(w, 500, "recalculation failed: "+err.Error())
+		return
+	}
+	slog.Info("importance recalculated", "rows_updated", rows)
+	respondJSON(w, 200, map[string]any{
+		"status":       "ok",
+		"rows_updated": rows,
+	})
+}
+
 // nodeTypeList returns a formatted list of valid node types for error messages.
 func nodeTypeList() []string {
 	types := models.AllNodeTypes()

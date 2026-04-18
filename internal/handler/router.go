@@ -152,6 +152,7 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 			r.Post("/", nh.Create)
 			r.Get("/", nh.List)
 			r.Post("/dedup", nh.Dedup)
+			r.Post("/recalculate", nh.Recalculate)
 			r.Get("/{id}", nh.Get)
 			r.Put("/{id}", nh.Update)
 			r.Delete("/{id}", nh.Delete)

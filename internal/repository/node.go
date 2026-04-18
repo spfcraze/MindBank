@@ -393,3 +393,40 @@ func (r *NodeRepo) GetHistory(ctx context.Context, id string) ([]models.NodeHist
 	}
 	return history, nil
 }
+
+// RecalculateImportance updates the importance column for all current nodes
+// using the same scoring formula as the snapshot: recency, frequency, connectivity, type weight.
+func (r *NodeRepo) RecalculateImportance(ctx context.Context) (int64, error) {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE nodes SET importance = sub.score
+		FROM (
+			SELECT n.id,
+				(
+					0.30 * COALESCE(1.0 - EXTRACT(EPOCH FROM (now() - n.last_accessed)) / 2592000.0, 0.5)::real
+					+ 0.25 * LEAST(n.access_count::real / 100.0, 1.0)::real
+					+ 0.20 * LEAST((SELECT COUNT(*)::real / 20.0 FROM edges WHERE source_id = n.id OR target_id = n.id), 1.0)::real
+					+ 0.15 * n.importance
+					+ 0.10 * CASE n.node_type
+						WHEN 'decision' THEN 1.0
+						WHEN 'preference' THEN 0.9
+						WHEN 'problem' THEN 0.9
+						WHEN 'advice' THEN 0.8
+						WHEN 'fact' THEN 0.7
+						WHEN 'person' THEN 0.7
+						WHEN 'project' THEN 0.7
+						WHEN 'event' THEN 0.5
+						WHEN 'topic' THEN 0.4
+						WHEN 'concept' THEN 0.3
+						ELSE 0.5
+					END::real
+				) AS score
+			FROM nodes n
+			WHERE n.valid_to IS NULL
+		) sub
+		WHERE nodes.id = sub.id AND nodes.valid_to IS NULL
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("recalculate importance: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
