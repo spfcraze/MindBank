@@ -318,11 +318,25 @@ func (h *UpdateHandler) RestartAPI(w http.ResponseWriter, r *http.Request) {
 			port = "8095"
 		}
 
-		// Kill process on port (safe: port is validated numeric or default)
+		// Kill process on port
+		slog.Info("restart: killing old process", "port", port)
 		killCmd := exec.Command("bash", "-c", "kill $(lsof -ti :"+port+") 2>/dev/null || true")
 		killCmd.Run()
 
-		time.Sleep(2 * time.Second)
+		// Wait for port to be released (up to 10 seconds)
+		slog.Info("restart: waiting for port release")
+		for i := 0; i < 20; i++ {
+			time.Sleep(500 * time.Millisecond)
+			checkCmd := exec.Command("bash", "-c", "lsof -ti :"+port+" 2>/dev/null")
+			out, _ := checkCmd.Output()
+			if len(strings.TrimSpace(string(out))) == 0 {
+				slog.Info("restart: port released")
+				break
+			}
+			if i == 19 {
+				slog.Error("restart: port still in use after 10s", "port", port)
+			}
+		}
 
 		// Build environment for the new process
 		env := os.Environ()
@@ -344,25 +358,33 @@ func (h *UpdateHandler) RestartAPI(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Start the new process (no shell interpolation)
-		cmd := exec.Command(binPath)
-		cmd.Dir = h.installDir
-		cmd.Env = env
+		// Start the new process (no shell interpolation) with retry
+		var started bool
+		for attempt := 0; attempt < 3; attempt++ {
+			cmd := exec.Command(binPath)
+			cmd.Dir = h.installDir
+			cmd.Env = env
 
-		// Redirect output to log file
-		logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err == nil {
-			cmd.Stdout = logFile
-			cmd.Stderr = logFile
+			// Redirect output to log file
+			logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+			if err == nil {
+				cmd.Stdout = logFile
+				cmd.Stderr = logFile
+			}
+
+			if err := cmd.Start(); err != nil {
+				slog.Error("restart attempt failed", "attempt", attempt+1, "error", err)
+				time.Sleep(2 * time.Second)
+				continue
+			}
+			slog.Info("restart: process started", "bin", binPath, "pid", cmd.Process.Pid, "attempt", attempt+1)
+			cmd.Process.Release()
+			started = true
+			break
 		}
 
-		if err := cmd.Start(); err != nil {
-			slog.Error("restart failed", "error", err)
-			return
+		if !started {
+			slog.Error("restart: all attempts failed")
 		}
-		slog.Info("restart initiated", "bin", binPath, "pid", cmd.Process.Pid)
-
-		// Detach from parent
-		cmd.Process.Release()
 	}()
 }
