@@ -374,11 +374,50 @@ class MindBankProvider(MemoryProvider):
         if len(content) > max_chars:
             content = content[:max_chars] + "\n... [truncated]"
 
-        return (
+        block = (
             f"## MindBank Memory ({tokens} tokens)\n"
             f"{content}\n\n"
             f"Use mindbank_search or mindbank_ask to recall more details."
         )
+
+        # Add gaps analysis (what's missing)
+        try:
+            gaps = _api_call(self._api_url, "GET", f"/analyze/gaps?namespace={ns}", timeout=5)
+            if gaps and isinstance(gaps, dict) and gaps.get("count", 0) > 0:
+                summary = gaps.get("summary", {})
+                gap_parts = []
+                if summary.get("unsolved_problem"):
+                    gap_parts.append(f"{summary['unsolved_problem']} unsolved problems")
+                if summary.get("unanswered_question"):
+                    gap_parts.append(f"{summary['unanswered_question']} unanswered questions")
+                if summary.get("orphan"):
+                    gap_parts.append(f"{summary['orphan']} orphan memories")
+                if summary.get("stale"):
+                    gap_parts.append(f"{summary['stale']} stale memories")
+                if gap_parts:
+                    block += f"\n\n## Knowledge Gaps: {', '.join(gap_parts)}. Consider addressing these."
+        except Exception:
+            pass
+
+        # Add diff (what changed since last session)
+        try:
+            diff = _api_call(self._api_url, "GET", f"/analyze/diff?since=last-session", timeout=5)
+            if diff and isinstance(diff, dict):
+                s = diff.get("summary", {})
+                if any(v > 0 for v in s.values()):
+                    changes = []
+                    if s.get("new_nodes"):
+                        changes.append(f"{s['new_nodes']} new memories")
+                    if s.get("updated_nodes"):
+                        changes.append(f"{s['updated_nodes']} updated")
+                    if s.get("deleted_nodes"):
+                        changes.append(f"{s['deleted_nodes']} deleted")
+                    if changes:
+                        block += f"\n\n## Recent Changes: {', '.join(changes)} since last session."
+        except Exception:
+            pass
+
+        return block
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         """Fetch relevant memories before each API call."""
@@ -550,6 +589,25 @@ class MindBankProvider(MemoryProvider):
         label = args.get("label", "")
         content = args.get("content", "")
 
+        # Check for contradictions before storing decisions
+        contradiction_warning = ""
+        if node_type in ("decision", "advice") and label:
+            try:
+                conflicts = _api_call(self._api_url, "GET", f"/analyze/contradictions?namespace={ns}", timeout=5)
+                if conflicts and isinstance(conflicts, dict) and conflicts.get("contradictions"):
+                    for c in conflicts["contradictions"][:5]:
+                        if (label.lower() in c.get("source_label", "").lower() or
+                            label.lower() in c.get("target_label", "").lower() or
+                            c.get("source_label", "").lower() in label.lower() or
+                            c.get("target_label", "").lower() in label.lower()):
+                            contradiction_warning = (
+                                f"\nWARNING: This may contradict existing memory: "
+                                f"\"{c.get('source_label', '')}\" vs \"{c.get('target_label', '')}\""
+                            )
+                            break
+            except Exception:
+                pass
+
         # Store the node
         result = _api_call(self._api_url, "POST", "/nodes", {
             "label": label,
@@ -571,7 +629,10 @@ class MindBankProvider(MemoryProvider):
             except Exception:
                 pass  # edges are best-effort
 
-        return f"Stored: [{result.get('node_type')}] {result.get('label')} (id: {node_id[:8]})"
+        response = f"Stored: [{result.get('node_type')}] {result.get('label')} (id: {node_id[:8]})"
+        if contradiction_warning:
+            response += contradiction_warning
+        return response
 
     def _create_semantic_edges(self, node_id: str, node_type: str, label: str, content: str, ns: str) -> None:
         """Create semantic edges between the new node and related existing nodes."""
@@ -629,8 +690,22 @@ class MindBankProvider(MemoryProvider):
             label = r.get("label", "")
             ntype = r.get("node_type", "")
             content = r.get("content", "")
+            node_id = r.get("node_id", "")
             content = content[:120] + "..." if len(content) > 120 else content
-            lines.append(f"- [{ntype}] {label}: {content}")
+
+            # Get confidence for this node
+            confidence_tag = ""
+            if node_id:
+                try:
+                    conf = _api_call(self._api_url, "GET", f"/analyze/confidence?node_id={node_id}", timeout=3)
+                    if conf and isinstance(conf, dict) and "trust_level" in conf:
+                        level = conf["trust_level"]
+                        score = conf.get("confidence", 0)
+                        confidence_tag = f" [{level}:{score:.2f}]"
+                except Exception:
+                    pass
+
+            lines.append(f"- [{ntype}]{confidence_tag} {label}: {content}")
 
         return "\n".join(lines)
 

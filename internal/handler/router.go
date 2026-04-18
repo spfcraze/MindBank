@@ -177,6 +177,18 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 		// Ask + Snapshot
 		RegisterAskRoutes(r, askH)
 
+		// Analyze
+		ah := NewAnalyzeHandler(pool)
+		r.Route("/analyze", func(r chi.Router) {
+			r.Get("/contradictions", ah.Contradictions)
+			r.Get("/gaps", ah.Gaps)
+			r.Get("/diff", ah.Diff)
+			r.Get("/patterns", ah.Patterns)
+			r.Get("/confidence", ah.Confidence)
+			r.Post("/link-orphans", ah.LinkOrphans)
+			r.Post("/merge-duplicates", ah.MergeDuplicates)
+		})
+
 		// Batch + Export/Import + Purge
 		RegisterBatchRoutes(r, bh)
 
