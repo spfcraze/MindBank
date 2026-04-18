@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -156,17 +157,38 @@ func (c *Client) GetStats() Stats {
 	}
 }
 
-// EmbedBatch generates embeddings for multiple texts sequentially.
+// EmbedBatch generates embeddings for multiple texts in parallel.
+// Concurrency is bounded by the client semaphore (4 max).
+// Returns results in the same order as input texts.
 func (c *Client) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return [][]float32{}, nil
+	}
+
 	results := make([][]float32, len(texts))
+	errs := make([]error, len(texts))
+	var wg sync.WaitGroup
+
 	for i, text := range texts {
-		emb, err := c.Embed(ctx, text)
+		wg.Add(1)
+		go func(i int, text string) {
+			defer wg.Done()
+			emb, err := c.Embed(ctx, text)
+			results[i] = emb
+			errs[i] = err
+		}(i, text)
+	}
+
+	wg.Wait()
+
+	// Return first error if any
+	for i, err := range errs {
 		if err != nil {
-			slog.Warn("embedding failed", "index", i, "error", err)
+			slog.Warn("embedding failed in batch", "index", i, "error", err)
 			return nil, fmt.Errorf("embed[%d]: %w", i, err)
 		}
-		results[i] = emb
 	}
+
 	return results, nil
 }
 

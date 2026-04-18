@@ -74,9 +74,110 @@ func (w *Worker) processBatch(ctx context.Context) {
 		items = append(items, item)
 	}
 
-	for _, item := range items {
-		w.processItem(ctx, item)
+	if len(items) == 0 {
+		return
 	}
+
+	// Batch: fetch content, embed in parallel, store in transaction
+	w.processBatchItems(ctx, items)
+}
+
+func (w *Worker) processBatchItems(ctx context.Context, items []queueItem) {
+	// Step 1: Fetch content for all items
+	type itemWithContent struct {
+		queueItem
+		content string
+	}
+
+	var batch []itemWithContent
+	for _, item := range items {
+		var content string
+		var err error
+		switch item.SourceType {
+		case "node":
+			err = w.pool.QueryRow(ctx,
+				`SELECT coalesce(label || ' ' || content || ' ' || summary, '') FROM nodes WHERE id = $1`,
+				item.SourceID,
+			).Scan(&content)
+		case "message":
+			err = w.pool.QueryRow(ctx,
+				`SELECT content FROM messages WHERE id = $1`,
+				item.SourceID,
+			).Scan(&content)
+		default:
+			w.markFailed(ctx, item.ID, fmt.Sprintf("unknown source_type: %s", item.SourceType))
+			continue
+		}
+		if err != nil {
+			w.markFailed(ctx, item.ID, fmt.Sprintf("fetch content: %v", err))
+			continue
+		}
+		batch = append(batch, itemWithContent{queueItem: item, content: content})
+	}
+
+	if len(batch) == 0 {
+		return
+	}
+
+	// Step 2: Batch embed in parallel
+	texts := make([]string, len(batch))
+	for i, b := range batch {
+		texts[i] = b.content
+	}
+
+	embeddings, err := w.client.EmbedBatch(ctx, texts)
+	if err != nil {
+		// If batch fails, fall back to individual processing
+		slog.Warn("batch embed failed, falling back to sequential", "error", err)
+		for _, item := range items {
+			w.processItem(ctx, item)
+		}
+		return
+	}
+
+	// Step 3: Store all embeddings in a single transaction
+	tx, err := w.pool.Begin(ctx)
+	if err != nil {
+		slog.Error("begin transaction", "error", err)
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	for i, b := range batch {
+		emb := embeddings[i]
+		switch b.SourceType {
+		case "node":
+			_, err = tx.Exec(ctx, `
+				INSERT INTO node_embeddings (node_id, content, embedding, sync_state)
+				VALUES ($1, $2, $3::vector, 'synced')
+				ON CONFLICT (node_id) DO UPDATE
+				SET content = $2, embedding = $3::vector, sync_state = 'synced', created_at = now()
+			`, b.SourceID, b.content, vectorToString(emb))
+		case "message":
+			_, err = tx.Exec(ctx, `
+				INSERT INTO message_embeddings (message_id, content, embedding, sync_state)
+				VALUES ($1, $2, $3::vector, 'synced')
+				ON CONFLICT (message_id) DO UPDATE
+				SET content = $2, embedding = $3::vector, sync_state = 'synced', created_at = now()
+			`, b.SourceID, b.content, vectorToString(emb))
+		}
+		if err != nil {
+			slog.Error("store embedding", "id", b.ID, "error", err)
+			w.markFailed(ctx, b.ID, fmt.Sprintf("store: %v", err))
+			continue
+		}
+		// Mark done
+		_, _ = tx.Exec(ctx, `
+			UPDATE embedding_queue SET status = 'done', processed_at = now() WHERE id = $1
+		`, b.ID)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		slog.Error("commit batch", "error", err)
+		return
+	}
+
+	slog.Debug("batch embedded", "count", len(batch))
 }
 
 type queueItem struct {

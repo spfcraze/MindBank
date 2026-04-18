@@ -41,8 +41,8 @@ func (r *NodeRepo) Create(ctx context.Context, req models.NodeCreate) (*models.N
 
 	n := &models.Node{}
 	err := r.pool.QueryRow(ctx, `
-		INSERT INTO nodes (workspace_name, namespace, label, node_type, content, summary, metadata, importance)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO nodes (workspace_name, namespace, label, node_type, content, summary, metadata, importance, materialized_path)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '/' || gen_random_uuid()::text)
 		RETURNING id, workspace_name, namespace, label, node_type, content, summary, metadata,
 		          importance, access_count, last_accessed, valid_from, valid_to, version,
 		          predecessor_id, created_at, updated_at
@@ -54,7 +54,98 @@ func (r *NodeRepo) Create(ctx context.Context, req models.NodeCreate) (*models.N
 	if err != nil {
 		return nil, fmt.Errorf("insert node: %w", err)
 	}
+
+	// Set materialized path to /{id}
+	_, _ = r.pool.Exec(ctx, `UPDATE nodes SET materialized_path = '/' || $1 WHERE id = $1`, n.ID)
+
 	return n, nil
+}
+
+// UpdatePath sets a node's materialized path based on its parent's path.
+func (r *NodeRepo) UpdatePath(ctx context.Context, childID, parentPath string) error {
+	newPath := parentPath + "/" + childID
+	_, err := r.pool.Exec(ctx, `
+		UPDATE nodes SET materialized_path = $1 WHERE id = $2 AND valid_to IS NULL
+	`, newPath, childID)
+	return err
+}
+
+// GetPath returns a node's materialized path.
+func (r *NodeRepo) GetPath(ctx context.Context, nodeID string) (string, error) {
+	var path string
+	err := r.pool.QueryRow(ctx, `SELECT materialized_path FROM nodes WHERE id = $1 AND valid_to IS NULL`, nodeID).Scan(&path)
+	return path, err
+}
+
+// GetAncestors returns all ancestor nodes using materialized path (O(1)).
+func (r *NodeRepo) GetAncestors(ctx context.Context, nodeID string) ([]models.Node, error) {
+	path, err := r.GetPath(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, workspace_name, namespace, label, node_type::text, content, summary, metadata,
+		       importance, access_count, last_accessed, valid_from, valid_to, version,
+		       predecessor_id, created_at, updated_at
+		FROM nodes
+		WHERE valid_to IS NULL
+		  AND $1 LIKE materialized_path || '/%'
+		  AND id != $2
+		ORDER BY length(materialized_path) DESC
+	`, path, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var nodes []models.Node
+	for rows.Next() {
+		var n models.Node
+		if err := rows.Scan(&n.ID, &n.WorkspaceName, &n.Namespace, &n.Label, &n.NodeType,
+			&n.Content, &n.Summary, &n.Metadata, &n.Importance, &n.AccessCount,
+			&n.LastAccessed, &n.ValidFrom, &n.ValidTo, &n.Version,
+			&n.PredecessorID, &n.CreatedAt, &n.UpdatedAt); err != nil {
+			continue
+		}
+		nodes = append(nodes, n)
+	}
+	return nodes, nil
+}
+
+// GetDescendants returns all descendant nodes using materialized path (O(1)).
+func (r *NodeRepo) GetDescendants(ctx context.Context, nodeID string) ([]models.Node, error) {
+	path, err := r.GetPath(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, workspace_name, namespace, label, node_type::text, content, summary, metadata,
+		       importance, access_count, last_accessed, valid_from, valid_to, version,
+		       predecessor_id, created_at, updated_at
+		FROM nodes
+		WHERE valid_to IS NULL
+		  AND materialized_path LIKE $1 || '/%'
+		ORDER BY materialized_path
+	`, path)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var nodes []models.Node
+	for rows.Next() {
+		var n models.Node
+		if err := rows.Scan(&n.ID, &n.WorkspaceName, &n.Namespace, &n.Label, &n.NodeType,
+			&n.Content, &n.Summary, &n.Metadata, &n.Importance, &n.AccessCount,
+			&n.LastAccessed, &n.ValidFrom, &n.ValidTo, &n.Version,
+			&n.PredecessorID, &n.CreatedAt, &n.UpdatedAt); err != nil {
+			continue
+		}
+		nodes = append(nodes, n)
+	}
+	return nodes, nil
 }
 
 // Get retrieves a current node by ID and bumps access count.
