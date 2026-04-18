@@ -113,13 +113,25 @@ func (h *NodeHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	respondJSON(w, 200, map[string]string{"status": "deleted"})
 }
-
+// List handles GET /api/v1/nodes — list current nodes with optional filters.
 func (h *NodeHandler) List(w http.ResponseWriter, r *http.Request) {
 	workspace := r.URL.Query().Get("workspace")
 	namespace := r.URL.Query().Get("namespace")
 	nodeType := models.NodeType(r.URL.Query().Get("type"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+
+	// If requesting count only (limit=0), return just the count
+	if r.URL.Query().Get("count") == "true" {
+		var count int
+		err := h.pool.QueryRow(r.Context(), `SELECT COUNT(*) FROM nodes WHERE valid_to IS NULL`).Scan(&count)
+		if err != nil {
+			respondError(w, 500, "count failed")
+			return
+		}
+		respondJSON(w, 200, map[string]int{"count": count})
+		return
+	}
 
 	nodes, err := h.repo.List(r.Context(), workspace, namespace, nodeType, limit, offset)
 	if err != nil {

@@ -584,12 +584,16 @@ loadNodes();loadSnapshot();
 setInterval(loadHealth,30000);
 setInterval(loadOllamaStats,10000);
 setInterval(async()=>{
-  const nodes=await api('/nodes?limit=1000');
-  if(Array.isArray(nodes)){
-    const currentCount=nodes.length;
+  const data=await api('/nodes?count=true');
+  if(data&&typeof data.count==='number'){
+    const currentCount=data.count;
     if(lastDashNodeCount>0&&currentCount!==lastDashNodeCount){
       const delta=currentCount-lastDashNodeCount;
-      if(Math.abs(delta)<50){addFeed('create',`${delta>0?'+':''}${delta} node(s)`);document.getElementById('statNodes').textContent=currentCount}
+      if(Math.abs(delta)<50){
+        addFeed('create',`${delta>0?'+':''}${delta} node(s)`);
+        document.getElementById('statNodes').textContent=currentCount;
+        loadNodes();
+      }
     }
     lastDashNodeCount=currentCount;
   }
