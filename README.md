@@ -2,6 +2,14 @@
 
 Permanent, searchable, relationship-aware memory for Claude, Hermes, and any AI agent.
 
+## Quick Install
+
+```bash
+curl -sSL https://raw.githubusercontent.com/spfcraze/MindBank/main/install.sh | bash
+```
+
+Done. Dashboard: http://localhost:8095
+
 ## What It Does
 
 - **Hybrid search**: Full-text (PostgreSQL tsvector) + semantic (pgvector) with Reciprocal Rank Fusion
@@ -17,12 +25,6 @@ Permanent, searchable, relationship-aware memory for Claude, Hermes, and any AI 
 - **Go 1.23+**
 - **Ollama** (for local embeddings)
 - **Docker** (for Postgres — recommended)
-##
-Quick install script 
-Run for quick install 
-```bash
-curl -sSL https://raw.githubusercontent.com/spfcraze/MindBank/main/install.sh | bash
-```
 
 ## Install
 
