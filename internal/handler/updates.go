@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -300,6 +301,7 @@ func (h *UpdateHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 
 // RestartAPI handles POST /api/v1/updates/restart.
 // Returns immediately, then restarts the API process after a delay.
+// Uses a detached relauncher process that survives the parent death.
 func (h *UpdateHandler) RestartAPI(w http.ResponseWriter, r *http.Request) {
 	// Respond first, then restart in background
 	respondJSON(w, 200, map[string]string{
@@ -307,9 +309,9 @@ func (h *UpdateHandler) RestartAPI(w http.ResponseWriter, r *http.Request) {
 		"msg":    "API will restart in 3 seconds. Refresh the page.",
 	})
 
-	// Start a background process that waits, kills old, starts new
+	// Spawn a detached relauncher process that survives our death
 	go func() {
-		time.Sleep(3 * time.Second)
+		time.Sleep(2 * time.Second) // Give response time to flush
 
 		binPath := filepath.Join(h.installDir, "mindbank-api")
 		logPath := "/tmp/mindbank.log"
@@ -317,74 +319,46 @@ func (h *UpdateHandler) RestartAPI(w http.ResponseWriter, r *http.Request) {
 		if port == "" {
 			port = "8095"
 		}
-
-		// Kill process on port
-		slog.Info("restart: killing old process", "port", port)
-		killCmd := exec.Command("bash", "-c", "kill $(lsof -ti :"+port+") 2>/dev/null || true")
-		killCmd.Run()
-
-		// Wait for port to be released (up to 10 seconds)
-		slog.Info("restart: waiting for port release")
-		for i := 0; i < 20; i++ {
-			time.Sleep(500 * time.Millisecond)
-			checkCmd := exec.Command("bash", "-c", "lsof -ti :"+port+" 2>/dev/null")
-			out, _ := checkCmd.Output()
-			if len(strings.TrimSpace(string(out))) == 0 {
-				slog.Info("restart: port released")
-				break
-			}
-			if i == 19 {
-				slog.Error("restart: port still in use after 10s", "port", port)
-			}
-		}
-
-		// Build environment for the new process
-		env := os.Environ()
-		// Read .env file if present (Go-native, no shell source)
 		envFile := filepath.Join(h.installDir, ".env")
-		if data, err := os.ReadFile(envFile); err == nil {
-			for _, line := range strings.Split(string(data), "\n") {
-				line = strings.TrimSpace(line)
-				if line == "" || strings.HasPrefix(line, "#") {
-					continue
-				}
-				if idx := strings.IndexByte(line, '='); idx > 0 {
-					key := line[:idx]
-					val := line[idx+1:]
-					// Strip surrounding quotes
-					val = strings.Trim(val, `"'`)
-					env = append(env, key+"="+val)
-				}
-			}
+
+		// Create a bash relauncher script that does the restart
+		// This runs as a DETACHED process — survives parent death
+		relaunchScript := fmt.Sprintf(`#!/bin/bash
+sleep 2
+# Kill old process
+kill $(lsof -ti :%s) 2>/dev/null || true
+sleep 2
+# Wait for port release (up to 10s)
+for i in $(seq 1 20); do
+  if ! lsof -ti :%s >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.5
+done
+# Start new process
+cd %s
+if [ -f "%s" ]; then
+  source "%s" 2>/dev/null || true
+fi
+nohup %s >> %s 2>&1 &
+`, port, port, h.installDir, envFile, envFile, binPath, logPath)
+
+		// Write temp script
+		scriptPath := filepath.Join(os.TempDir(), "mindbank-restart.sh")
+		if err := os.WriteFile(scriptPath, []byte(relaunchScript), 0755); err != nil {
+			slog.Error("restart: failed to write script", "error", err)
+			return
 		}
 
-		// Start the new process (no shell interpolation) with retry
-		var started bool
-		for attempt := 0; attempt < 3; attempt++ {
-			cmd := exec.Command(binPath)
-			cmd.Dir = h.installDir
-			cmd.Env = env
-
-			// Redirect output to log file
-			logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-			if err == nil {
-				cmd.Stdout = logFile
-				cmd.Stderr = logFile
-			}
-
-			if err := cmd.Start(); err != nil {
-				slog.Error("restart attempt failed", "attempt", attempt+1, "error", err)
-				time.Sleep(2 * time.Second)
-				continue
-			}
-			slog.Info("restart: process started", "bin", binPath, "pid", cmd.Process.Pid, "attempt", attempt+1)
-			cmd.Process.Release()
-			started = true
-			break
+		// Execute script in a NEW process group so it survives parent death
+		cmd := exec.Command("bash", scriptPath)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := cmd.Start(); err != nil {
+			slog.Error("restart: failed to spawn relauncher", "error", err)
+			return
 		}
-
-		if !started {
-			slog.Error("restart: all attempts failed")
-		}
+		// Detach completely — don't wait
+		cmd.Process.Release()
+		slog.Info("restart: relauncher spawned", "script", scriptPath, "pid", cmd.Process.Pid)
 	}()
 }
