@@ -223,6 +223,26 @@ def _detect_namespace() -> str:
     return "hermes"
 
 
+
+def _is_duplicate(api_url: str, label: str, namespace: str) -> bool:
+    """Check if a node with similar label already exists."""
+    if not label or len(label) < 10:
+        return False
+    try:
+        result = _api_call(api_url, "POST", "/search/hybrid", {
+            "query": label,
+            "namespace": namespace,
+            "limit": 3,
+        }, timeout=3)
+        if isinstance(result, list):
+            for r in result:
+                existing = r.get("label", "").lower().strip()
+                if existing == label.lower().strip():
+                    return True
+        return False
+    except Exception:
+        return False
+
 class MindBankProvider(MemoryProvider):
     """Graph-structured persistent memory for Hermes Agent."""
 
@@ -302,6 +322,38 @@ class MindBankProvider(MemoryProvider):
         if not self._namespace:
             self._namespace = _detect_namespace()
 
+        # Clean up stale MCP server processes (older than 1 hour)
+        try:
+            import subprocess
+            import time
+            result = subprocess.run(["pgrep", "-af", "mindbank-mcp"], capture_output=True, text=True, timeout=3)
+            for line in result.stdout.strip().split("\n"):
+                if not line.strip():
+                    continue
+                parts = line.split(None, 1)
+                if len(parts) < 2:
+                    continue
+                try:
+                    pid = int(parts[0])
+                    # Don't kill our own parent process
+                    if pid != os.getppid() and pid != os.getpid():
+                        # Check if process is stale (running > 2 hours)
+                        stat_file = f"/proc/{pid}/stat"
+                        if os.path.exists(stat_file):
+                            with open(stat_file) as f:
+                                stat = f.read().split()
+                            starttime = int(stat[21])
+                            with open("/proc/uptime") as f:
+                                uptime = float(f.read().split()[0])
+                            age_seconds = uptime - (starttime / os.sysconf("SC_CLK_TCK"))
+                            if age_seconds > 7200:  # 2 hours
+                                os.kill(pid, 15)  # SIGTERM
+                                logger.info("Cleaned up stale MCP process %d (age: %ds)", pid, int(age_seconds))
+                except (ValueError, ProcessLookupError, PermissionError, OSError):
+                    continue
+        except Exception:
+            pass
+
         logger.info("MindBank initialized: %s ns=%s (session: %s)", self._api_url, self._namespace or "*", session_id)
 
     def system_prompt_block(self) -> str:
@@ -370,26 +422,37 @@ class MindBankProvider(MemoryProvider):
         """Store conversation turn in MindBank (non-blocking)."""
         def _sync():
             try:
-                # Extract a meaningful label from the user message
+                # Skip very short messages
                 label = user_content[:60].strip()
-                if not label:
+                if not label or len(user_content) < 30:
                     return
-                # Detect node type from content
+                # Detect node type from content — require 2+ keyword matches for noise reduction
                 lower = user_content.lower()
-                if any(w in lower for w in ["decided", "chose", "going with", "switching to"]):
+                hits = 0
+                node_type = "event"
+                decision_kw = ["decided", "chose", "going with", "switching to", "switching"]
+                problem_kw = ["bug", "broken", "error", "issue", "crash", "fails"]
+                advice_kw = ["recommend", "suggest", "better to", "best practice"]
+                pref_kw = ["prefer", "always use", "never use", "i like"]
+                if sum(1 for w in decision_kw if w in lower) >= 1:
                     node_type = "decision"
-                elif any(w in lower for w in ["bug", "broken", "error", "issue", "crash"]):
+                elif sum(1 for w in problem_kw if w in lower) >= 1:
                     node_type = "problem"
-                elif any(w in lower for w in ["should", "recommend", "suggest", "better to"]):
+                elif sum(1 for w in advice_kw if w in lower) >= 2:
                     node_type = "advice"
-                elif any(w in lower for w in ["prefer", "like", "want", "always"]):
+                elif sum(1 for w in pref_kw if w in lower) >= 1:
                     node_type = "preference"
                 else:
-                    node_type = "event"
+                    return  # Skip non-classifiable turns (reduces noise)
+
+                # Dedup: skip if similar node already exists
+                ns = self._namespace or "hermes"
+                if _is_duplicate(self._api_url, label, ns):
+                    return
 
                 _api_call(self._api_url, "POST", "/nodes", {
                     "label": label,
-                    "type": node_type,
+                    "node_type": node_type,
                     "content": f"User: {user_content[:300]}\n\nAssistant: {assistant_content[:300]}",
                     "namespace": self._namespace or "hermes",
                     "summary": f"Session {session_id[:8]}",
@@ -409,26 +472,35 @@ class MindBankProvider(MemoryProvider):
 
         def _extract():
             try:
-                # Extract key turns from the conversation
+                ns = self._namespace or "hermes"
+                # Extract key turns from the conversation — only high-signal messages
                 for msg in messages[-10:]:  # last 10 messages
                     role = msg.get("role", "")
                     content = msg.get("content", "")
-                    if role == "user" and len(content) > 20:
-                        # Look for decision-like language
-                        lower = content.lower()
-                        if any(kw in lower for kw in [
-                            "decided", "chose", "going with", "switching to", "use",
-                            "switch", "remember", "preference", "bug", "broken",
-                            "error", "issue", "fixed", "solution", "workaround",
-                            "deploy", "release", "migrated", "upgraded", "deprecated",
-                            "important", "critical", "note that", "keep in mind",
-                        ]):
-                            _api_call(self._api_url, "POST", "/nodes", {
-                                "label": content[:80],
-                                "type": "decision" if "decid" in lower or "chose" in lower else "fact",
-                                "content": content[:500],
-                                "namespace": self._namespace or "hermes",
-                            }, timeout=10)
+                    if role != "user" or len(content) < 30:
+                        continue
+                    lower = content.lower()
+                    # Only extract messages with strong decision/problem/fixed signals
+                    node_type = None
+                    if any(w in lower for w in ["decided", "chose", "going with", "switching to"]):
+                        node_type = "decision"
+                    elif any(w in lower for w in ["fixed", "solution", "workaround", "resolved"]):
+                        node_type = "advice"
+                    elif any(w in lower for w in ["bug", "broken", "error", "crash", "fails"]):
+                        node_type = "problem"
+                    elif any(w in lower for w in ["migrated", "upgraded", "deprecated", "deployed"]):
+                        node_type = "fact"
+                    if not node_type:
+                        continue
+                    label = content[:80].strip()
+                    if _is_duplicate(self._api_url, label, ns):
+                        continue
+                    _api_call(self._api_url, "POST", "/nodes", {
+                        "label": label,
+                        "node_type": node_type,
+                        "content": content[:500],
+                        "namespace": ns,
+                    }, timeout=10)
             except Exception as e:
                 logger.warning("MindBank session extract failed: %s", e)
 
@@ -442,7 +514,7 @@ class MindBankProvider(MemoryProvider):
                 try:
                     _api_call(self._api_url, "POST", "/nodes", {
                         "label": f"Memory: {target}",
-                        "type": "preference" if target == "user" else "fact",
+                        "node_type": "preference" if target == "user" else "fact",
                         "content": content[:500],
                         "namespace": self._namespace or "hermes",
                         "summary": f"Built-in memory ({action})",
@@ -540,9 +612,8 @@ class MindBankProvider(MemoryProvider):
 
     def _handle_search(self, args: dict) -> str:
         ns = args.get("namespace", "") or self._namespace or "hermes"
-        query = args.get("query", "")
         result = _api_call(self._api_url, "POST", "/search/hybrid", {
-            "query": query,
+            "query": args.get("query", ""),
             "namespace": ns,
             "limit": args.get("limit", 5),
         }, timeout=15)
@@ -551,18 +622,7 @@ class MindBankProvider(MemoryProvider):
             return f"Search error: {result['error']}"
 
         if not isinstance(result, list) or len(result) == 0:
-            # Store the unanswered question for future reference
-            try:
-                _api_call(self._api_url, "POST", "/nodes", {
-                    "label": f"Unanswered: {query[:50]}",
-                    "type": "question",
-                    "content": f"User searched for: {query}\nNo results found at this time.",
-                    "namespace": ns,
-                    "summary": "Unanswered search query",
-                }, timeout=5)
-            except Exception:
-                pass
-            return "No memories found. (Question stored for future reference)"
+            return "No memories found."
 
         lines = []
         for r in result:
