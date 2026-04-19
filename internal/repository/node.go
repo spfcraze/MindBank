@@ -41,8 +41,8 @@ func (r *NodeRepo) Create(ctx context.Context, req models.NodeCreate) (*models.N
 
 	n := &models.Node{}
 	err := r.pool.QueryRow(ctx, `
-		INSERT INTO nodes (workspace_name, namespace, label, node_type, content, summary, metadata, importance)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO nodes (workspace_name, namespace, label, node_type, content, summary, metadata, importance, materialized_path)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '/' || gen_random_uuid()::text)
 		RETURNING id, workspace_name, namespace, label, node_type, content, summary, metadata,
 		          importance, access_count, last_accessed, valid_from, valid_to, version,
 		          predecessor_id, created_at, updated_at
@@ -54,7 +54,98 @@ func (r *NodeRepo) Create(ctx context.Context, req models.NodeCreate) (*models.N
 	if err != nil {
 		return nil, fmt.Errorf("insert node: %w", err)
 	}
+
+	// Set materialized path to /{id}
+	_, _ = r.pool.Exec(ctx, `UPDATE nodes SET materialized_path = '/' || $1 WHERE id = $1`, n.ID)
+
 	return n, nil
+}
+
+// UpdatePath sets a node's materialized path based on its parent's path.
+func (r *NodeRepo) UpdatePath(ctx context.Context, childID, parentPath string) error {
+	newPath := parentPath + "/" + childID
+	_, err := r.pool.Exec(ctx, `
+		UPDATE nodes SET materialized_path = $1 WHERE id = $2 AND valid_to IS NULL
+	`, newPath, childID)
+	return err
+}
+
+// GetPath returns a node's materialized path.
+func (r *NodeRepo) GetPath(ctx context.Context, nodeID string) (string, error) {
+	var path string
+	err := r.pool.QueryRow(ctx, `SELECT materialized_path FROM nodes WHERE id = $1 AND valid_to IS NULL`, nodeID).Scan(&path)
+	return path, err
+}
+
+// GetAncestors returns all ancestor nodes using materialized path (O(1)).
+func (r *NodeRepo) GetAncestors(ctx context.Context, nodeID string) ([]models.Node, error) {
+	path, err := r.GetPath(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, workspace_name, namespace, label, node_type::text, content, summary, metadata,
+		       importance, access_count, last_accessed, valid_from, valid_to, version,
+		       predecessor_id, created_at, updated_at
+		FROM nodes
+		WHERE valid_to IS NULL
+		  AND $1 LIKE materialized_path || '/%'
+		  AND id != $2
+		ORDER BY length(materialized_path) DESC
+	`, path, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var nodes []models.Node
+	for rows.Next() {
+		var n models.Node
+		if err := rows.Scan(&n.ID, &n.WorkspaceName, &n.Namespace, &n.Label, &n.NodeType,
+			&n.Content, &n.Summary, &n.Metadata, &n.Importance, &n.AccessCount,
+			&n.LastAccessed, &n.ValidFrom, &n.ValidTo, &n.Version,
+			&n.PredecessorID, &n.CreatedAt, &n.UpdatedAt); err != nil {
+			continue
+		}
+		nodes = append(nodes, n)
+	}
+	return nodes, nil
+}
+
+// GetDescendants returns all descendant nodes using materialized path (O(1)).
+func (r *NodeRepo) GetDescendants(ctx context.Context, nodeID string) ([]models.Node, error) {
+	path, err := r.GetPath(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, workspace_name, namespace, label, node_type::text, content, summary, metadata,
+		       importance, access_count, last_accessed, valid_from, valid_to, version,
+		       predecessor_id, created_at, updated_at
+		FROM nodes
+		WHERE valid_to IS NULL
+		  AND materialized_path LIKE $1 || '/%'
+		ORDER BY materialized_path
+	`, path)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var nodes []models.Node
+	for rows.Next() {
+		var n models.Node
+		if err := rows.Scan(&n.ID, &n.WorkspaceName, &n.Namespace, &n.Label, &n.NodeType,
+			&n.Content, &n.Summary, &n.Metadata, &n.Importance, &n.AccessCount,
+			&n.LastAccessed, &n.ValidFrom, &n.ValidTo, &n.Version,
+			&n.PredecessorID, &n.CreatedAt, &n.UpdatedAt); err != nil {
+			continue
+		}
+		nodes = append(nodes, n)
+	}
+	return nodes, nil
 }
 
 // Get retrieves a current node by ID and bumps access count.
@@ -301,4 +392,41 @@ func (r *NodeRepo) GetHistory(ctx context.Context, id string) ([]models.NodeHist
 		history = append(history, e)
 	}
 	return history, nil
+}
+
+// RecalculateImportance updates the importance column for all current nodes
+// using the same scoring formula as the snapshot: recency, frequency, connectivity, type weight.
+func (r *NodeRepo) RecalculateImportance(ctx context.Context) (int64, error) {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE nodes SET importance = sub.score
+		FROM (
+			SELECT n.id,
+				(
+					0.30 * COALESCE(1.0 - EXTRACT(EPOCH FROM (now() - n.last_accessed)) / 2592000.0, 0.5)::real
+					+ 0.25 * LEAST(n.access_count::real / 100.0, 1.0)::real
+					+ 0.20 * LEAST((SELECT COUNT(*)::real / 20.0 FROM edges WHERE source_id = n.id OR target_id = n.id), 1.0)::real
+					+ 0.15 * n.importance
+					+ 0.10 * CASE n.node_type
+						WHEN 'decision' THEN 1.0
+						WHEN 'preference' THEN 0.9
+						WHEN 'problem' THEN 0.9
+						WHEN 'advice' THEN 0.8
+						WHEN 'fact' THEN 0.7
+						WHEN 'person' THEN 0.7
+						WHEN 'project' THEN 0.7
+						WHEN 'event' THEN 0.5
+						WHEN 'topic' THEN 0.4
+						WHEN 'concept' THEN 0.3
+						ELSE 0.5
+					END::real
+				) AS score
+			FROM nodes n
+			WHERE n.valid_to IS NULL
+		) sub
+		WHERE nodes.id = sub.id AND nodes.valid_to IS NULL
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("recalculate importance: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }

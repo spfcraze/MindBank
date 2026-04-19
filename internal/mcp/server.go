@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 
 	"mindbank/internal/embedder"
 	"mindbank/internal/models"
@@ -26,6 +27,7 @@ type Server struct {
 	snapRepo    *repository.SnapshotRepo
 	sessionRepo *repository.SessionRepo
 	embedder    *embedder.Client
+	writeMu     sync.Mutex // protects stdout writes
 }
 
 // NewServer creates an MCP server.
@@ -247,7 +249,7 @@ func (s *Server) toolSearch(ctx context.Context, args json.RawMessage) (any, err
 
 	embedding, err := s.embedder.Embed(ctx, req.Query)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("embedding failed: %w (try a different query or retry)", err)
 	}
 
 	results, err := s.searchRepo.HybridSearch(ctx, req.Query, embedding, req.Workspace, req.Namespace, req.Limit, s.edgeRepo)
@@ -282,7 +284,7 @@ func (s *Server) toolAsk(ctx context.Context, args json.RawMessage) (any, error)
 
 	embedding, err := s.embedder.Embed(ctx, req.Query)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("embedding failed: %w (try a different query or retry)", err)
 	}
 
 	results, err := s.searchRepo.HybridSearch(ctx, req.Query, embedding, req.Workspace, req.Namespace, 5, s.edgeRepo)

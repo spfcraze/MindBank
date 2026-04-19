@@ -76,6 +76,12 @@ textarea{resize:vertical;min-height:50px}
     <button class="tab" onclick="switchTab('tools')">Tools</button>
     <button class="tab" onclick="switchTab('graph')">Graph 2D</button>
     <button class="tab" onclick="switchTab('brain')">Brain 3D</button>
+    <a href="/updates" class="tab" style="text-decoration:none">Updates ↗</a>
+  </div>
+  <div class="ollama-stats" id="ollamaStats" style="display:flex;gap:10px;font-size:10px;color:#555;align-items:center">
+    <span id="ollamaQueue" title="Embedding queue">q:—</span>
+    <span id="ollamaActive" title="Active embeddings">act:—</span>
+    <span id="ollamaLatency" title="Avg latency">lat:—ms</span>
   </div>
   <div class="status" id="healthStatus">checking...</div>
 </div>
@@ -163,7 +169,12 @@ textarea{resize:vertical;min-height:50px}
       <div id="importResult" style="margin-top:8px;font-size:11px;color:#888"></div>
     </div></div>
   </div>
-  <div class="section"><div class="section-hdr"><h2>System Health</h2></div><div id="healthDetail" style="padding:14px;font-size:11px;color:#888"></div></div>
+  <div class="section"><div class="section-hdr"><h2>Importance Scores</h2></div><div style="padding:14px">
+      <p style="font-size:11px;color:#888;margin-bottom:10px">Recalculate importance using recency (30%), frequency (25%), connectivity (20%), type weight (10%), and explicit score (15%).</p>
+      <button class="btn" onclick="recalcImportance()">Recalculate Now</button>
+      <div id="recalcResult" style="margin-top:8px;font-size:11px;color:#888"></div>
+    </div></div>
+    <div class="section"><div class="section-hdr"><h2>System Health</h2></div><div id="healthDetail" style="padding:14px;font-size:11px;color:#888"></div></div>
 </div>
 
 <!-- GRAPH TAB -->
@@ -202,7 +213,7 @@ let visLoaded=false,lastDashNodeCount=0;
 const TC={project:{bg:'#00ff88',bd:'#00cc66'},decision:{bg:'#0088ff',bd:'#0066cc'},fact:{bg:'#ffaa00',bd:'#cc8800'},preference:{bg:'#ff00ff',bd:'#cc00cc'},problem:{bg:'#ff4444',bd:'#cc2222'},advice:{bg:'#88ff00',bd:'#66cc00'},topic:{bg:'#8888ff',bd:'#6666cc'},person:{bg:'#ff8800',bd:'#cc6600'},event:{bg:'#00ffff',bd:'#00cccc'},concept:{bg:'#aaaaaa',bd:'#888888'},agent:{bg:'#ff88cc',bd:'#cc66aa'},question:{bg:'#ffaa44',bd:'#cc8800'}};
 const NS_COLORS=['#00ff88','#0088ff','#ffaa00','#ff00ff','#ff4444','#88ff00','#00ffff','#ff8800'];
 
-async function api(path,opts={}){try{const r=await fetch(API+path,{headers:{'Content-Type':'application/json',...opts.headers},...opts});return await r.json()}catch(e){return null}}
+async function api(path,opts={}){try{const r=await fetch(API+path,{headers:{'Content-Type':'application/json',...opts.headers},...opts});if(!r.ok){console.error('API',r.status,path);return null}return await r.json()}catch(e){console.error('API error:',path,e.message);return null}}
 function toast(msg,err=false){const t=document.getElementById('toast');t.textContent=msg;t.className=err?'toast err':'toast';t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2500)}
 function tagCls(t){return'tag tag-'+(t in TC?t:'default')}
 function esc(s){return s?s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'):''}
@@ -227,17 +238,40 @@ async function loadHealth(){
   document.getElementById('healthDetail').innerHTML=`Postgres: <span class="${h.postgres==='connected'?'ok':'err'}">${h.postgres}</span><br>Ollama: <span class="${h.ollama==='connected'?'ok':'err'}">${h.ollama}</span> (${h.embedding_model})<br>Version: ${h.version}`;
 }
 
+// === Ollama Stats ===
+async function loadOllamaStats(){
+  try{
+    const s=await api('/embeddings/stats');
+    if(!s)return;
+    const q=document.getElementById('ollamaQueue');
+    const a=document.getElementById('ollamaActive');
+    const l=document.getElementById('ollamaLatency');
+    q.textContent=`q:${s.queued}`;
+    a.textContent=`act:${s.active}`;
+    l.textContent=`lat:${Math.round(s.avg_latency_ms)}ms`;
+    // Color code: green if healthy, yellow if queued, red if errors
+    const color = s.queued > 3 ? '#ff8800' : s.active > 0 ? '#00ff88' : '#555';
+    q.style.color=color; a.style.color=color; l.style.color=s.avg_latency_ms > 500 ? '#ff4444' : '#555';
+  }catch(e){}
+}
+
 // === Stats ===
 async function loadStats(){
   const t0=performance.now();
-  const nodes=await api('/nodes?limit=1000');
+  // Accurate count via dedicated endpoint (not capped at 50)
+  const countData=await api('/nodes?count=true');
+  const totalNodes=countData&&typeof countData.count==='number'?countData.count:0;
+  // Namespace distribution from graph (top 200 nodes by importance)
+  const g=await api('/graph');
   const lat=Math.round(performance.now()-t0);
-  if(!nodes)return;
-  document.getElementById('statNodes').textContent=nodes.length;
   document.getElementById('statLat').textContent=lat;
-  const nsMap={};nodes.forEach(n=>{nsMap[n.namespace]=(nsMap[n.namespace]||0)+1});
-  const maxN=Math.max(...Object.values(nsMap),1);
+  if(!g)return;
+  const nsMap={};(g.nodes||[]).forEach(n=>{nsMap[n.namespace]=(nsMap[n.namespace]||0)+1});
+  document.getElementById('statNodes').textContent=totalNodes;
+  document.getElementById('statNodesSub').textContent=totalNodes>g.nodes.length?`top ${g.nodes.length} shown`:'';
+  document.getElementById('statEdges').textContent=g.edges.length;
   document.getElementById('statNS').textContent=Object.keys(nsMap).length;
+  const maxN=Math.max(...Object.values(nsMap),1);
   const nsColors={};Object.keys(nsMap).forEach((ns,i)=>{nsColors[ns]=NS_COLORS[i%NS_COLORS.length]});
   document.getElementById('nsBars').innerHTML=Object.entries(nsMap).sort((a,b)=>b[1]-a[1]).map(([ns,cnt])=>{
     const c=nsColors[ns];const pct=(cnt/maxN*100).toFixed(0);
@@ -248,8 +282,6 @@ async function loadStats(){
     el.innerHTML='<option value="">All</option>';
     Object.keys(nsMap).forEach(ns=>{el.innerHTML+=`<option value="${ns}"${ns===cur?' selected':''}>${ns}</option>`})
   });
-  const g=await api('/graph');
-  document.getElementById('statEdges').textContent=g?g.edges.length:0;
 }
 
 // === Activity Feed ===
@@ -404,7 +436,7 @@ async function loadEdges(reset=true){
   document.getElementById('edgeLoadMore').style.display=edges.length>edgesOffset+100?'inline-block':'none';
 }
 function loadMoreEdges(){edgesOffset+=100;loadEdges(false)}
-async function deleteEdge(id){await api('/edges/'+id,{method:'DELETE'});toast('Edge deleted');loadEdges()}
+async function deleteEdge(id){if(!confirm('Delete this edge?'))return;await api('/edges/'+id,{method:'DELETE'});toast('Edge deleted');loadEdges()}
 
 // === Tools Tab ===
 async function autoConnect(){
@@ -555,17 +587,34 @@ async function loadGraph(){
 }
 function graphFit(){if(graphNetwork)graphNetwork.fit({animation:true})}
 
+async function recalcImportance(){
+  document.getElementById('recalcResult').innerHTML='<span style="color:#ffaa00">Recalculating...</span>';
+  const r=await api('/nodes/recalculate',{method:'POST'});
+  if(r){
+    document.getElementById('recalcResult').innerHTML=`<span style="color:#00ff88">Updated ${r.rows_updated} node scores</span>`;
+    addFeed('recalc',`${r.rows_updated} nodes rescored`);
+    loadStats();loadNodes();
+  }else{document.getElementById('recalcResult').innerHTML='<span style="color:#ff4444">Failed</span>'}
+}
+
 // === Init ===
-loadHealth();loadStats().then(()=>{lastDashNodeCount=parseInt(document.getElementById('statNodes').textContent)||0});
+loadHealth();loadOllamaStats();loadStats().then(()=>{lastDashNodeCount=parseInt(document.getElementById('statNodes').textContent)||0});
 loadNodes();loadSnapshot();
+// Recalculate importance scores on first load (one-time)
+if(!sessionStorage.getItem('mb_recalc_done')){api('/nodes/recalculate',{method:'POST'}).then(r=>{if(r&&r.rows_updated){sessionStorage.setItem('mb_recalc_done','1');addFeed('recalc',r.rows_updated+' nodes scored');loadStats();loadNodes()}})}
 setInterval(loadHealth,30000);
+setInterval(loadOllamaStats,10000);
 setInterval(async()=>{
-  const nodes=await api('/nodes?limit=1000');
-  if(Array.isArray(nodes)){
-    const currentCount=nodes.length;
+  const data=await api('/nodes?count=true');
+  if(data&&typeof data.count==='number'){
+    const currentCount=data.count;
     if(lastDashNodeCount>0&&currentCount!==lastDashNodeCount){
       const delta=currentCount-lastDashNodeCount;
-      if(Math.abs(delta)<50){addFeed('create',`${delta>0?'+':''}${delta} node(s)`);document.getElementById('statNodes').textContent=currentCount}
+      if(Math.abs(delta)<50){
+        addFeed('create',`${delta>0?'+':''}${delta} node(s)`);
+        document.getElementById('statNodes').textContent=currentCount;
+        loadNodes();
+      }
     }
     lastDashNodeCount=currentCount;
   }

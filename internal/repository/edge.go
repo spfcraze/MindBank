@@ -13,14 +13,15 @@ import (
 )
 
 type EdgeRepo struct {
-	pool *pgxpool.Pool
+	pool     *pgxpool.Pool
+	nodeRepo *NodeRepo
 }
 
 func NewEdgeRepo(pool *pgxpool.Pool) *EdgeRepo {
-	return &EdgeRepo{pool: pool}
+	return &EdgeRepo{pool: pool, nodeRepo: NewNodeRepo(pool)}
 }
 
-// Create inserts a new edge.
+// Create inserts a new edge and updates the target's materialized path.
 func (r *EdgeRepo) Create(ctx context.Context, req models.EdgeCreate) (*models.Edge, error) {
 	ws := req.WorkspaceName
 	if ws == "" {
@@ -51,6 +52,12 @@ func (r *EdgeRepo) Create(ctx context.Context, req models.EdgeCreate) (*models.E
 		}
 		return nil, fmt.Errorf("insert edge: %w", err)
 	}
+
+	// Update target's materialized path: target.path = source.path / target.id
+	if parentPath, err := r.nodeRepo.GetPath(ctx, req.SourceID); err == nil {
+		_ = r.nodeRepo.UpdatePath(ctx, req.TargetID, parentPath)
+	}
+
 	return e, nil
 }
 

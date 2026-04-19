@@ -1,16 +1,20 @@
 [Unit]
 Description=MindBank API Server
-After=docker.service
-Wants=docker.service
+After=network.target docker.service
+Requires=docker.service
 
 [Service]
 Type=simple
-WorkingDirectory=/home/%u/mindbank
-ExecStartPre=/usr/bin/docker compose up -d
-ExecStart=/home/%u/mindbank/mindbank
+User=rat
+WorkingDirectory=/home/rat/mindbank
+ExecStart=/home/rat/mindbank/mindbank-api
 Restart=on-failure
 RestartSec=5
-EnvironmentFile=/home/%u/mindbank/.env
+Environment=MB_DB_DSN=postgres://mindbank:mindbank_secret@localhost:5434/mindbank?sslmode=disable
+Environment=MB_PORT=8095
+Environment=MB_LOG_LEVEL=info
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=default.target

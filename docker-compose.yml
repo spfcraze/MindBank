@@ -1,8 +1,7 @@
 services:
   # PostgreSQL with pgvector extension
-  postgres:
+  mindbank-postgres:
     image: pgvector/pgvector:pg16
-    container_name: mindbank-postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: mindbank
@@ -10,7 +9,6 @@ services:
       POSTGRES_PASSWORD: ${MB_POSTGRES_PASSWORD:-mindbank_secret}
     volumes:
       - mindbank-pgdata:/var/lib/postgresql/data
-      - ./internal/db/migrations:/docker-entrypoint-initdb.d
     ports:
       - "${MB_PG_PORT:-5434}:5432"
     healthcheck:
@@ -18,34 +16,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-    networks:
-      - mindbank-net
-
-  # MindBank API
-  mindbank:
-    build: .
-    container_name: mindbank-api
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      MB_PORT: 8095
-      MB_DB_DSN: postgres://mindbank:${MB_POSTGRES_PASSWORD:-mindbank_secret}@postgres:5432/mindbank?sslmode=disable
-      MB_OLLAMA_URL: http://host.docker.internal:11434
-      MB_EMBED_MODEL: nomic-embed-text
-      MB_LOG_LEVEL: info
-      MB_API_KEY: ${MB_API_KEY:-}
-    ports:
-      - "${MB_PORT:-8095}:8095"
-    networks:
-      - mindbank-net
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-
-networks:
-  mindbank-net:
-    driver: bridge
 
 volumes:
   mindbank-pgdata:

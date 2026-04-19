@@ -48,8 +48,7 @@ func (h *AskHandler) Ask(w http.ResponseWriter, r *http.Request) {
 	// Generate embedding for the query
 	embedding, err := h.embedder.Embed(r.Context(), req.Query)
 	if err != nil {
-		slog.Error("embed query for ask", "error", err)
-		respondError(w, 500, "failed to generate embedding")
+		respondEmbedError(w, err, "embed query for ask")
 		return
 	}
 

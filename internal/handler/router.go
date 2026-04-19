@@ -8,6 +8,8 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"mindbank/internal/config"
@@ -65,6 +67,7 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 	sessH := NewSessionHandler(sessionRepo, nodeRepo, ruleBased)
 	askH := NewAskHandler(searchRepo, snapshotRepo, edgeRepo, embClient)
 	bh := NewBatchHandler(nodeRepo, edgeRepo)
+	uh := NewUpdateHandler()
 
 	// Web UI — serve index.html at root, graph.html at /graph
 	r.Get("/graph-view", func(w http.ResponseWriter, r *http.Request) {
@@ -75,6 +78,11 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 	r.Get("/about", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		data, _ := staticFS.ReadFile("static/about.html")
+		w.Write(data)
+	})
+	r.Get("/updates", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		data, _ := staticFS.ReadFile("static/updates.html")
 		w.Write(data)
 	})
 	staticSub, _ := fs.Sub(staticFS, "static")
@@ -103,7 +111,7 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 				"postgres":        "connected",
 				"ollama":          ollamaStatus,
 				"embedding_model": cfg.EmbedModel,
-				"version":         "0.1.0",
+				"version":         getLocalVersion(),
 			})
 		})
 
@@ -144,6 +152,7 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 			r.Post("/", nh.Create)
 			r.Get("/", nh.List)
 			r.Post("/dedup", nh.Dedup)
+			r.Post("/recalculate", nh.Recalculate)
 			r.Get("/{id}", nh.Get)
 			r.Put("/{id}", nh.Update)
 			r.Delete("/{id}", nh.Delete)
@@ -168,8 +177,23 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 		// Ask + Snapshot
 		RegisterAskRoutes(r, askH)
 
+		// Analyze
+		ah := NewAnalyzeHandler(pool)
+		r.Route("/analyze", func(r chi.Router) {
+			r.Get("/contradictions", ah.Contradictions)
+			r.Get("/gaps", ah.Gaps)
+			r.Get("/diff", ah.Diff)
+			r.Get("/patterns", ah.Patterns)
+			r.Get("/confidence", ah.Confidence)
+			r.Post("/link-orphans", ah.LinkOrphans)
+			r.Post("/merge-duplicates", ah.MergeDuplicates)
+		})
+
 		// Batch + Export/Import + Purge
 		RegisterBatchRoutes(r, bh)
+
+		// Updates
+		RegisterUpdateRoutes(r, uh)
 	})
 
 	return r
@@ -184,9 +208,55 @@ func respondJSON(w http.ResponseWriter, status int, data any) {
 	}
 }
 
+// getLocalVersion reads the VERSION file.
+func getLocalVersion() string {
+	data, err := os.ReadFile("VERSION")
+	if err != nil {
+		return "0.0.0"
+	}
+	return strings.TrimSpace(string(data))
+}
+
 // respondError writes an error response.
 func respondError(w http.ResponseWriter, status int, msg string) {
 	respondJSON(w, status, map[string]string{"error": msg})
+}
+
+// respondEmbedError maps embedder error types to proper HTTP status codes.
+//   - BUSY → 503 Service Unavailable (retry with backoff)
+//   - UNAVAILABLE → 503 Service Unavailable (retry after delay)
+//   - BAD_QUERY → 422 Unprocessable Entity (don't retry)
+//   - other → 500 Internal Server Error
+func respondEmbedError(w http.ResponseWriter, err error, context string) {
+	if embedder.IsBusy(err) {
+		slog.Warn(context, "error", err)
+		w.Header().Set("Retry-After", "2")
+		respondJSON(w, 503, map[string]string{
+			"error": "embedding service busy, retry",
+			"type":  "BUSY",
+		})
+		return
+	}
+	if embedder.IsBadQuery(err) {
+		slog.Warn(context, "error", err)
+		respondJSON(w, 422, map[string]string{
+			"error": "query cannot be embedded",
+			"type":  "BAD_QUERY",
+		})
+		return
+	}
+	if embedder.IsUnavailable(err) {
+		slog.Error(context, "error", err)
+		w.Header().Set("Retry-After", "5")
+		respondJSON(w, 503, map[string]string{
+			"error": "embedding service unavailable",
+			"type":  "UNAVAILABLE",
+		})
+		return
+	}
+	// Unknown error type
+	slog.Error(context, "error", err)
+	respondError(w, 500, "embedding failed")
 }
 
 // bindJSON decodes JSON from request body.

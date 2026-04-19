@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"mindbank/internal/models"
@@ -60,8 +61,10 @@ func (r *SearchRepo) FullTextSearch(ctx context.Context, query string, workspace
 			LIMIT $4
 		`, expandedQuery, workspace, namespace, limit)
 		if err != nil {
-			// Last resort: trigram similarity search with expanded terms
-			return r.trigramSearch(ctx, expandedQuery, workspace, namespace, limit)
+			// FTS can't parse this query (special chars, pure unicode, etc.)
+			// Skip straight to trigram — don't error out
+			slog.Debug("fts query unparseable, falling back to trigram", "query", query)
+			return r.trigramSearch(ctx, query, workspace, namespace, limit)
 		}
 	}
 	defer rows.Close()
@@ -97,6 +100,13 @@ func (r *SearchRepo) FullTextSearch(ctx context.Context, query string, workspace
 
 // trigramSearch uses pg_trgm similarity as fallback for FTS misses.
 func (r *SearchRepo) trigramSearch(ctx context.Context, query string, workspace, namespace string, limit int) ([]models.SearchResult, error) {
+	// Strip non-alphanumeric chars for trigram matching (pg_trgm chokes on %, _, etc.)
+	cleanQuery := sanitizeForTrigram(query)
+	if cleanQuery == "" {
+		// Nothing usable — return empty, not error
+		return []models.SearchResult{}, nil
+	}
+
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, label, node_type::text, content, namespace,
 		       GREATEST(
@@ -117,7 +127,7 @@ func (r *SearchRepo) trigramSearch(ctx context.Context, query string, workspace,
 		  )
 		ORDER BY sim DESC
 		LIMIT $4
-	`, query, workspace, namespace, limit)
+	`, cleanQuery, workspace, namespace, limit)
 	if err != nil {
 		return nil, fmt.Errorf("trigram search: %w", err)
 	}
@@ -220,7 +230,8 @@ func (r *SearchRepo) HybridSearch(ctx context.Context, query string, embedding [
 		if err == nil && len(trigramResults) > 0 {
 			return trigramResults, nil
 		}
-		return nil, fmt.Errorf("all search methods failed")
+		// No results from any method — return empty, not error
+		return []models.SearchResult{}, nil
 	}
 
 	// RRF fusion: score = sum(1 / (k + rank_i)) where k=60
@@ -509,4 +520,17 @@ func vectorToLiteral(v []float32) string {
 	}
 	s += "]"
 	return s
+}
+
+// sanitizeForTrigram strips characters that break pg_trgm queries.
+// Keeps alphanumeric, spaces, and common punctuation. Removes %, _, etc.
+func sanitizeForTrigram(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+			r == ' ' || r == '-' || r == '.' || r == ',' || r == '\'' || r > 127 {
+			b.WriteRune(r)
+		}
+	}
+	return strings.TrimSpace(b.String())
 }

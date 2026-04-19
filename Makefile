@@ -1,20 +1,19 @@
-.PHONY: build run stop db-up db-down db-status logs tidy vet clean help setup migrate
+.PHONY: build run stop db-up db-down db-status logs tidy vet clean setup install-mcp update version
 
-# === MindBank ===
+# === MindBank Commands ===
 
-help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+# Run setup wizard
+setup:
+	bash scripts/setup.sh
 
-setup: ## Complete setup (one command)
-	@bash scripts/setup.sh
-
-build: ## Build the binary
+# Build the binary
+build:
 	go build -o mindbank ./cmd/mindbank
-	go build -o mindbank-mcp ./cmd/mindbank-mcp
 
-run: db-up ## Start everything (Postgres + API)
+# Start everything (Postgres + API)
+run: build db-up
 	@echo "Starting MindBank API..."
-	@pkill -f "./mindbank" 2>/dev/null || true
+	@pkill -x "./mindbank" 2>/dev/null || true
 	@sleep 1
 	@MB_DB_DSN="postgres://mindbank:$${MB_POSTGRES_PASSWORD:-mindbank_secret}@localhost:$${MB_PG_PORT:-5434}/mindbank?sslmode=disable" \
 		MB_OLLAMA_URL="http://localhost:$${MB_OLLAMA_PORT:-11434}" \
@@ -25,64 +24,62 @@ run: db-up ## Start everything (Postgres + API)
 	@echo ""
 	@echo "Dashboard: http://localhost:$${MB_PORT:-8095}"
 
-stop: ## Stop everything
-	@pkill -f "./mindbank" 2>/dev/null && echo "API stopped" || echo "API not running"
+# Stop everything
+stop:
+	@pkill -x "./mindbank" 2>/dev/null && echo "API stopped" || echo "API not running"
 	@$(MAKE) db-down
 
-# === Database ===
+# === Database (Docker) ===
 
-db-up: ## Start Postgres
-	docker compose up -d postgres
-	@echo "Waiting for Postgres..."
-	@sleep 3
+db-up:
+	@echo "Starting Postgres..."
+	docker compose up -d --wait
+	@echo "Postgres ready."
 	docker compose ps
 
-db-down: ## Stop Postgres
+db-down:
 	docker compose down
 
-db-status: ## Show Postgres status
+db-status:
 	docker compose ps
 
-db-logs: ## Show Postgres logs
+db-logs:
 	docker compose logs --tail=50 -f
-
-migrate: ## Run database migrations
-	@echo "Running migrations..."
-	@for f in internal/db/migrations/*.sql; do \
-		echo "  $$f"; \
-		docker exec -i mindbank-postgres psql -U mindbank -d mindbank < $$f; \
-	done
-	@echo "Migrations complete"
 
 # === Development ===
 
-tidy: ## Tidy Go modules
+tidy:
 	go mod tidy
 
-vet: ## Run go vet
+vet:
 	go vet ./...
 
-test: ## Run tests
+test:
 	go test ./... -v
 
-logs: ## Show API logs
+logs:
 	tail -f /tmp/mindbank.log
 
-clean: ## Remove binary and volumes
+clean:
 	rm -f mindbank mindbank-mcp
 	docker compose down -v
 
 health: ## Health check
 	@curl -s http://localhost:$${MB_PORT:-8095}/api/v1/health | python3 -m json.tool 2>/dev/null || curl -s http://localhost:$${MB_PORT:-8095}/api/v1/health
 
-# === Docker ===
+build-mcp:
+	go build -o mindbank-mcp ./cmd/mindbank-mcp
 
-docker-build: ## Build Docker image
-	docker build -t mindbank .
+# === Version + Updates ===
 
 docker-run: ## Run with Docker Compose
 	docker compose up -d
 	@echo "Dashboard: http://localhost:$${MB_PORT:-8095}"
 
-docker-stop: ## Stop Docker Compose
-	docker compose down
+update:
+	bash scripts/update.sh
+
+# === Quick health check ===
+
+health:
+	@curl -s http://localhost:8095/api/v1/health | python3 -m json.tool 2>/dev/null || curl -s http://localhost:8095/api/v1/health

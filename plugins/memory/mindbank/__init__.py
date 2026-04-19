@@ -223,6 +223,26 @@ def _detect_namespace() -> str:
     return "hermes"
 
 
+
+def _is_duplicate(api_url: str, label: str, namespace: str) -> bool:
+    """Check if a node with similar label already exists."""
+    if not label or len(label) < 10:
+        return False
+    try:
+        result = _api_call(api_url, "POST", "/search/hybrid", {
+            "query": label,
+            "namespace": namespace,
+            "limit": 3,
+        }, timeout=3)
+        if isinstance(result, list):
+            for r in result:
+                existing = r.get("label", "").lower().strip()
+                if existing == label.lower().strip():
+                    return True
+        return False
+    except Exception:
+        return False
+
 class MindBankProvider(MemoryProvider):
     """Graph-structured persistent memory for Hermes Agent."""
 
@@ -302,6 +322,38 @@ class MindBankProvider(MemoryProvider):
         if not self._namespace:
             self._namespace = _detect_namespace()
 
+        # Clean up stale MCP server processes (older than 1 hour)
+        try:
+            import subprocess
+            import time
+            result = subprocess.run(["pgrep", "-af", "mindbank-mcp"], capture_output=True, text=True, timeout=3)
+            for line in result.stdout.strip().split("\n"):
+                if not line.strip():
+                    continue
+                parts = line.split(None, 1)
+                if len(parts) < 2:
+                    continue
+                try:
+                    pid = int(parts[0])
+                    # Don't kill our own parent process
+                    if pid != os.getppid() and pid != os.getpid():
+                        # Check if process is stale (running > 2 hours)
+                        stat_file = f"/proc/{pid}/stat"
+                        if os.path.exists(stat_file):
+                            with open(stat_file) as f:
+                                stat = f.read().split()
+                            starttime = int(stat[21])
+                            with open("/proc/uptime") as f:
+                                uptime = float(f.read().split()[0])
+                            age_seconds = uptime - (starttime / os.sysconf("SC_CLK_TCK"))
+                            if age_seconds > 7200:  # 2 hours
+                                os.kill(pid, 15)  # SIGTERM
+                                logger.info("Cleaned up stale MCP process %d (age: %ds)", pid, int(age_seconds))
+                except (ValueError, ProcessLookupError, PermissionError, OSError):
+                    continue
+        except Exception:
+            pass
+
         logger.info("MindBank initialized: %s ns=%s (session: %s)", self._api_url, self._namespace or "*", session_id)
 
     def system_prompt_block(self) -> str:
@@ -322,11 +374,50 @@ class MindBankProvider(MemoryProvider):
         if len(content) > max_chars:
             content = content[:max_chars] + "\n... [truncated]"
 
-        return (
+        block = (
             f"## MindBank Memory ({tokens} tokens)\n"
             f"{content}\n\n"
             f"Use mindbank_search or mindbank_ask to recall more details."
         )
+
+        # Add gaps analysis (what's missing)
+        try:
+            gaps = _api_call(self._api_url, "GET", f"/analyze/gaps?namespace={ns}", timeout=5)
+            if gaps and isinstance(gaps, dict) and gaps.get("count", 0) > 0:
+                summary = gaps.get("summary", {})
+                gap_parts = []
+                if summary.get("unsolved_problem"):
+                    gap_parts.append(f"{summary['unsolved_problem']} unsolved problems")
+                if summary.get("unanswered_question"):
+                    gap_parts.append(f"{summary['unanswered_question']} unanswered questions")
+                if summary.get("orphan"):
+                    gap_parts.append(f"{summary['orphan']} orphan memories")
+                if summary.get("stale"):
+                    gap_parts.append(f"{summary['stale']} stale memories")
+                if gap_parts:
+                    block += f"\n\n## Knowledge Gaps: {', '.join(gap_parts)}. Consider addressing these."
+        except Exception:
+            pass
+
+        # Add diff (what changed since last session)
+        try:
+            diff = _api_call(self._api_url, "GET", f"/analyze/diff?since=last-session", timeout=5)
+            if diff and isinstance(diff, dict):
+                s = diff.get("summary", {})
+                if any(v > 0 for v in s.values()):
+                    changes = []
+                    if s.get("new_nodes"):
+                        changes.append(f"{s['new_nodes']} new memories")
+                    if s.get("updated_nodes"):
+                        changes.append(f"{s['updated_nodes']} updated")
+                    if s.get("deleted_nodes"):
+                        changes.append(f"{s['deleted_nodes']} deleted")
+                    if changes:
+                        block += f"\n\n## Recent Changes: {', '.join(changes)} since last session."
+        except Exception:
+            pass
+
+        return block
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         """Fetch relevant memories before each API call."""
@@ -370,26 +461,37 @@ class MindBankProvider(MemoryProvider):
         """Store conversation turn in MindBank (non-blocking)."""
         def _sync():
             try:
-                # Extract a meaningful label from the user message
+                # Skip very short messages
                 label = user_content[:60].strip()
-                if not label:
+                if not label or len(user_content) < 30:
                     return
-                # Detect node type from content
+                # Detect node type from content — require 2+ keyword matches for noise reduction
                 lower = user_content.lower()
-                if any(w in lower for w in ["decided", "chose", "going with", "switching to"]):
+                hits = 0
+                node_type = "event"
+                decision_kw = ["decided", "chose", "going with", "switching to", "switching"]
+                problem_kw = ["bug", "broken", "error", "issue", "crash", "fails"]
+                advice_kw = ["recommend", "suggest", "better to", "best practice"]
+                pref_kw = ["prefer", "always use", "never use", "i like"]
+                if sum(1 for w in decision_kw if w in lower) >= 1:
                     node_type = "decision"
-                elif any(w in lower for w in ["bug", "broken", "error", "issue", "crash"]):
+                elif sum(1 for w in problem_kw if w in lower) >= 1:
                     node_type = "problem"
-                elif any(w in lower for w in ["should", "recommend", "suggest", "better to"]):
+                elif sum(1 for w in advice_kw if w in lower) >= 2:
                     node_type = "advice"
-                elif any(w in lower for w in ["prefer", "like", "want", "always"]):
+                elif sum(1 for w in pref_kw if w in lower) >= 1:
                     node_type = "preference"
                 else:
-                    node_type = "event"
+                    return  # Skip non-classifiable turns (reduces noise)
+
+                # Dedup: skip if similar node already exists
+                ns = self._namespace or "hermes"
+                if _is_duplicate(self._api_url, label, ns):
+                    return
 
                 _api_call(self._api_url, "POST", "/nodes", {
                     "label": label,
-                    "type": node_type,
+                    "node_type": node_type,
                     "content": f"User: {user_content[:300]}\n\nAssistant: {assistant_content[:300]}",
                     "namespace": self._namespace or "hermes",
                     "summary": f"Session {session_id[:8]}",
@@ -409,26 +511,35 @@ class MindBankProvider(MemoryProvider):
 
         def _extract():
             try:
-                # Extract key turns from the conversation
+                ns = self._namespace or "hermes"
+                # Extract key turns from the conversation — only high-signal messages
                 for msg in messages[-10:]:  # last 10 messages
                     role = msg.get("role", "")
                     content = msg.get("content", "")
-                    if role == "user" and len(content) > 20:
-                        # Look for decision-like language
-                        lower = content.lower()
-                        if any(kw in lower for kw in [
-                            "decided", "chose", "going with", "switching to", "use",
-                            "switch", "remember", "preference", "bug", "broken",
-                            "error", "issue", "fixed", "solution", "workaround",
-                            "deploy", "release", "migrated", "upgraded", "deprecated",
-                            "important", "critical", "note that", "keep in mind",
-                        ]):
-                            _api_call(self._api_url, "POST", "/nodes", {
-                                "label": content[:80],
-                                "type": "decision" if "decid" in lower or "chose" in lower else "fact",
-                                "content": content[:500],
-                                "namespace": self._namespace or "hermes",
-                            }, timeout=10)
+                    if role != "user" or len(content) < 30:
+                        continue
+                    lower = content.lower()
+                    # Only extract messages with strong decision/problem/fixed signals
+                    node_type = None
+                    if any(w in lower for w in ["decided", "chose", "going with", "switching to"]):
+                        node_type = "decision"
+                    elif any(w in lower for w in ["fixed", "solution", "workaround", "resolved"]):
+                        node_type = "advice"
+                    elif any(w in lower for w in ["bug", "broken", "error", "crash", "fails"]):
+                        node_type = "problem"
+                    elif any(w in lower for w in ["migrated", "upgraded", "deprecated", "deployed"]):
+                        node_type = "fact"
+                    if not node_type:
+                        continue
+                    label = content[:80].strip()
+                    if _is_duplicate(self._api_url, label, ns):
+                        continue
+                    _api_call(self._api_url, "POST", "/nodes", {
+                        "label": label,
+                        "node_type": node_type,
+                        "content": content[:500],
+                        "namespace": ns,
+                    }, timeout=10)
             except Exception as e:
                 logger.warning("MindBank session extract failed: %s", e)
 
@@ -442,7 +553,7 @@ class MindBankProvider(MemoryProvider):
                 try:
                     _api_call(self._api_url, "POST", "/nodes", {
                         "label": f"Memory: {target}",
-                        "type": "preference" if target == "user" else "fact",
+                        "node_type": "preference" if target == "user" else "fact",
                         "content": content[:500],
                         "namespace": self._namespace or "hermes",
                         "summary": f"Built-in memory ({action})",
@@ -478,6 +589,25 @@ class MindBankProvider(MemoryProvider):
         label = args.get("label", "")
         content = args.get("content", "")
 
+        # Check for contradictions before storing decisions
+        contradiction_warning = ""
+        if node_type in ("decision", "advice") and label:
+            try:
+                conflicts = _api_call(self._api_url, "GET", f"/analyze/contradictions?namespace={ns}", timeout=5)
+                if conflicts and isinstance(conflicts, dict) and conflicts.get("contradictions"):
+                    for c in conflicts["contradictions"][:5]:
+                        if (label.lower() in c.get("source_label", "").lower() or
+                            label.lower() in c.get("target_label", "").lower() or
+                            c.get("source_label", "").lower() in label.lower() or
+                            c.get("target_label", "").lower() in label.lower()):
+                            contradiction_warning = (
+                                f"\nWARNING: This may contradict existing memory: "
+                                f"\"{c.get('source_label', '')}\" vs \"{c.get('target_label', '')}\""
+                            )
+                            break
+            except Exception:
+                pass
+
         # Store the node
         result = _api_call(self._api_url, "POST", "/nodes", {
             "label": label,
@@ -499,7 +629,10 @@ class MindBankProvider(MemoryProvider):
             except Exception:
                 pass  # edges are best-effort
 
-        return f"Stored: [{result.get('node_type')}] {result.get('label')} (id: {node_id[:8]})"
+        response = f"Stored: [{result.get('node_type')}] {result.get('label')} (id: {node_id[:8]})"
+        if contradiction_warning:
+            response += contradiction_warning
+        return response
 
     def _create_semantic_edges(self, node_id: str, node_type: str, label: str, content: str, ns: str) -> None:
         """Create semantic edges between the new node and related existing nodes."""
@@ -557,8 +690,22 @@ class MindBankProvider(MemoryProvider):
             label = r.get("label", "")
             ntype = r.get("node_type", "")
             content = r.get("content", "")
+            node_id = r.get("node_id", "")
             content = content[:120] + "..." if len(content) > 120 else content
-            lines.append(f"- [{ntype}] {label}: {content}")
+
+            # Get confidence for this node
+            confidence_tag = ""
+            if node_id:
+                try:
+                    conf = _api_call(self._api_url, "GET", f"/analyze/confidence?node_id={node_id}", timeout=3)
+                    if conf and isinstance(conf, dict) and "trust_level" in conf:
+                        level = conf["trust_level"]
+                        score = conf.get("confidence", 0)
+                        confidence_tag = f" [{level}:{score:.2f}]"
+                except Exception:
+                    pass
+
+            lines.append(f"- [{ntype}]{confidence_tag} {label}: {content}")
 
         return "\n".join(lines)
 

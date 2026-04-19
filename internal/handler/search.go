@@ -65,8 +65,7 @@ func (h *SearchHandler) Semantic(w http.ResponseWriter, r *http.Request) {
 	// Use cached embedding
 	embedding, err := h.searchRepo.GetCachedEmbedding(r.Context(), req.Query, h.embedder.Embed)
 	if err != nil {
-		slog.Error("embed query", "error", err)
-		respondError(w, 500, "failed to generate embedding")
+		respondEmbedError(w, err, "embed query for semantic search")
 		return
 	}
 
@@ -102,8 +101,7 @@ func (h *SearchHandler) Hybrid(w http.ResponseWriter, r *http.Request) {
 	// Use cached embedding
 	embedding, err := h.searchRepo.GetCachedEmbedding(r.Context(), req.Query, h.embedder.Embed)
 	if err != nil {
-		slog.Error("embed query for hybrid", "error", err)
-		respondError(w, 500, "failed to generate embedding")
+		respondEmbedError(w, err, "embed query for hybrid search")
 		return
 	}
 
@@ -141,10 +139,49 @@ func (sh *SearchHandler) Embed(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// EmbedStats returns embedding client metrics.
+func (sh *SearchHandler) EmbedStats(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, 200, sh.embedder.GetStats())
+}
+
+// EmbedBatch handles POST /api/v1/embeddings/batch — parallel batch embedding.
+func (sh *SearchHandler) EmbedBatch(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Texts []string `json:"texts"`
+	}
+	if err := bindJSON(r, &req); err != nil {
+		respondError(w, 400, "invalid request: "+err.Error())
+		return
+	}
+	if len(req.Texts) == 0 {
+		respondError(w, 400, "texts array is required")
+		return
+	}
+	if len(req.Texts) > 100 {
+		respondError(w, 400, "max 100 texts per batch")
+		return
+	}
+
+	embeddings, err := sh.embedder.EmbedBatch(r.Context(), req.Texts)
+	if err != nil {
+		respondEmbedError(w, err, "batch embed")
+		return
+	}
+
+	respondJSON(w, 200, map[string]any{
+		"embeddings": embeddings,
+		"count":      len(embeddings),
+		"dimensions": len(embeddings[0]),
+		"model":      "nomic-embed-text:v1.5",
+	})
+}
+
 // RegisterSearchRoutes adds search endpoints to the router.
 func RegisterSearchRoutes(r chi.Router, sh *SearchHandler) {
 	r.Get("/search", sh.FTS)
 	r.Post("/search/semantic", sh.Semantic)
 	r.Post("/search/hybrid", sh.Hybrid)
 	r.Post("/embeddings/generate", sh.Embed)
+	r.Post("/embeddings/batch", sh.EmbedBatch)
+	r.Get("/embeddings/stats", sh.EmbedStats)
 }
