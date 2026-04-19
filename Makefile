@@ -15,14 +15,14 @@ run: build db-up
 	@echo "Starting MindBank API..."
 	@pkill -x "./mindbank" 2>/dev/null || true
 	@sleep 1
-	@MB_DB_DSN="postgres://mindbank:$${MB_POSTGRES_PASSWORD:-mindbank_secret}@localhost:$${MB_PG_PORT:-5434}/mindbank?sslmode=disable" \
-		MB_OLLAMA_URL="http://localhost:$${MB_OLLAMA_PORT:-11434}" \
-		MB_PORT=$${MB_PORT:-8095} \
+	@MB_DB_DSN="postgres://mindbank:mindbank_secret@localhost:5434/mindbank?sslmode=disable" \
+		MB_OLLAMA_URL="http://localhost:11434" \
+		MB_PORT=8095 \
 		nohup ./mindbank >> /tmp/mindbank.log 2>&1 &
 	@sleep 2
-	@curl -s http://localhost:$${MB_PORT:-8095}/api/v1/health || echo "Starting..."
+	@curl -s http://localhost:8095/api/v1/health
 	@echo ""
-	@echo "Dashboard: http://localhost:$${MB_PORT:-8095}"
+	@echo "Dashboard: http://localhost:8095"
 
 # Stop everything
 stop:
@@ -64,17 +64,15 @@ clean:
 	rm -f mindbank mindbank-mcp
 	docker compose down -v
 
-health: ## Health check
-	@curl -s http://localhost:$${MB_PORT:-8095}/api/v1/health | python3 -m json.tool 2>/dev/null || curl -s http://localhost:$${MB_PORT:-8095}/api/v1/health
+# === MCP Server ===
 
 build-mcp:
 	go build -o mindbank-mcp ./cmd/mindbank-mcp
 
 # === Version + Updates ===
 
-docker-run: ## Run with Docker Compose
-	docker compose up -d
-	@echo "Dashboard: http://localhost:$${MB_PORT:-8095}"
+version:
+	@cat VERSION
 
 update:
 	bash scripts/update.sh
