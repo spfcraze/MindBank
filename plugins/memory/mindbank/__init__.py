@@ -551,11 +551,16 @@ class MindBankProvider(MemoryProvider):
         if action in ("add", "replace") and content:
             def _write():
                 try:
+                    ns = self._namespace or "hermes"
+                    label = f"Memory: {target}"
+                    # Skip if duplicate exists
+                    if _is_duplicate(self._api_url, label, ns):
+                        return
                     _api_call(self._api_url, "POST", "/nodes", {
-                        "label": f"Memory: {target}",
+                        "label": label,
                         "node_type": "preference" if target == "user" else "fact",
                         "content": content[:500],
-                        "namespace": self._namespace or "hermes",
+                        "namespace": ns,
                         "summary": f"Built-in memory ({action})",
                     }, timeout=10)
                 except Exception as e:

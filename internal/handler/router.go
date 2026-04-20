@@ -194,6 +194,10 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 
 		// Updates
 		RegisterUpdateRoutes(r, uh)
+
+		// Import (Obsidian)
+		ih := NewImportHandler()
+		RegisterImportRoutes(r, ih)
 	})
 
 	return r
