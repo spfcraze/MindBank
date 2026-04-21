@@ -100,6 +100,15 @@ func (r *EdgeRepo) DeleteOrphaned(ctx context.Context) (int64, error) {
 	return tag.RowsAffected(), nil
 }
 
+// DeleteByType removes all edges of a given type.
+func (r *EdgeRepo) DeleteByType(ctx context.Context, edgeType models.EdgeType) (int64, error) {
+	tag, err := r.pool.Exec(ctx, `DELETE FROM edges WHERE edge_type = $1`, edgeType)
+	if err != nil {
+		return 0, fmt.Errorf("delete edges by type: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // GetByNode returns all edges touching a node (as source or target).
 func (r *EdgeRepo) GetByNode(ctx context.Context, nodeID string) ([]models.Edge, error) {
 	rows, err := r.pool.Query(ctx, `

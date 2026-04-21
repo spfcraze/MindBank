@@ -330,12 +330,98 @@ func (h *BatchHandler) Import(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// DeleteEdgesByType handles DELETE /api/v1/edges — delete all edges of a given type.
+func (h *BatchHandler) DeleteEdgesByType(w http.ResponseWriter, r *http.Request) {
+	edgeTypeStr := r.URL.Query().Get("type")
+	if edgeTypeStr == "" {
+		respondError(w, 400, "type parameter is required")
+		return
+	}
+	edgeType := models.EdgeType(edgeTypeStr)
+	if !edgeType.IsValid() {
+		respondError(w, 400, "invalid edge_type: "+edgeTypeStr)
+		return
+	}
+
+	count, err := h.edgeRepo.DeleteByType(r.Context(), edgeType)
+	if err != nil {
+		slog.Error("delete edges by type", "error", err)
+		respondError(w, 500, "delete failed")
+		return
+	}
+	respondJSON(w, 200, map[string]any{"deleted": count, "type": edgeTypeStr})
+}
+
+// ConnectNamespaces handles POST /api/v1/edges/connect-namespaces — create semantic edges between two namespaces.
+func (h *BatchHandler) ConnectNamespaces(w http.ResponseWriter, r *http.Request) {
+	sourceNS := r.URL.Query().Get("source")
+	targetNS := r.URL.Query().Get("target")
+	if sourceNS == "" || targetNS == "" {
+		respondError(w, 400, "source and target namespace parameters are required")
+		return
+	}
+	if sourceNS == targetNS {
+		respondError(w, 400, "source and target namespaces must be different")
+		return
+	}
+
+	limitStr := r.URL.Query().Get("limit")
+	limitPerNode := 3
+	if limitStr != "" {
+		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 && n <= 10 {
+			limitPerNode = n
+		}
+	}
+
+	thresholdStr := r.URL.Query().Get("threshold")
+	threshold := float32(0.70)
+	if thresholdStr != "" {
+		if f, err := strconv.ParseFloat(thresholdStr, 32); err == nil && f > 0 && f <= 1.0 {
+			threshold = float32(f)
+		}
+	}
+
+	pairs, err := h.nodeRepo.FindSimilarAcrossNamespaces(r.Context(), sourceNS, targetNS, limitPerNode, threshold)
+	if err != nil {
+		slog.Error("connect namespaces", "error", err)
+		respondError(w, 500, "similarity search failed")
+		return
+	}
+
+	created := 0
+	skipped := 0
+	wgt := float32(1.0)
+	for _, pair := range pairs {
+		_, err := h.edgeRepo.Create(r.Context(), models.EdgeCreate{
+			SourceID: pair.SourceID,
+			TargetID: pair.TargetID,
+			EdgeType: models.EdgeRelatesTo,
+			Weight:   &wgt,
+		})
+		if err != nil {
+			skipped++
+		} else {
+			created++
+		}
+	}
+
+	respondJSON(w, 200, map[string]any{
+		"edges_created": created,
+		"edges_skipped": skipped,
+		"pairs_found":   len(pairs),
+		"source_ns":     sourceNS,
+		"target_ns":     targetNS,
+	})
+}
+
 // RegisterBatchRoutes adds batch endpoints to the router.
 func RegisterBatchRoutes(r chi.Router, bh *BatchHandler) {
 	r.Post("/nodes/batch", bh.BatchCreateNodes)
 	r.Post("/edges/batch", bh.BatchCreateEdges)
 	r.Post("/nodes/auto-connect", bh.AutoConnect)
 	r.Post("/edges/cleanup", bh.CleanupOrphanEdges)
+	r.Delete("/edges", bh.DeleteEdgesByType)
+	r.Post("/edges/connect-namespaces", bh.ConnectNamespaces)
 	r.Delete("/nodes/purge", bh.PurgeSoftDeleted)
 	r.Get("/export", bh.Export)
 	r.Post("/import", bh.Import)

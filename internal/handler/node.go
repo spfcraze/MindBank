@@ -185,6 +185,64 @@ func (h *NodeHandler) GetHistory(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, 200, history)
 }
 
+func (h *NodeHandler) Suggestions(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 || limit > 50 {
+		limit = 10
+	}
+	threshold := float32(0.70)
+	if t := r.URL.Query().Get("threshold"); t != "" {
+		if f, err := strconv.ParseFloat(t, 32); err == nil && f > 0 && f <= 1.0 {
+			threshold = float32(f)
+		}
+	}
+
+	results, err := h.repo.FindSimilarNodes(r.Context(), id, threshold, limit)
+	if err != nil {
+		slog.Error("find similar nodes", "error", err)
+		respondJSON(w, 200, []any{}) // return empty on error, don't break UI
+		return
+	}
+	respondJSON(w, 200, results)
+}
+
+func (h *NodeHandler) SaveDQASnapshot(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Score       int `json:"score"`
+		TotalNodes  int `json:"total_nodes"`
+		IssuesCount int `json:"issues_count"`
+	}
+	if err := bindJSON(r, &req); err != nil {
+		respondError(w, 400, "invalid request: "+err.Error())
+		return
+	}
+	if req.Score < 0 || req.Score > 100 {
+		respondError(w, 400, "score must be 0-100")
+		return
+	}
+	if err := h.repo.SaveDQASnapshot(r.Context(), req.Score, req.TotalNodes, req.IssuesCount); err != nil {
+		slog.Error("save dqa snapshot", "error", err)
+		respondError(w, 500, "failed to save snapshot")
+		return
+	}
+	respondJSON(w, 200, map[string]string{"status": "saved"})
+}
+
+func (h *NodeHandler) GetDQATrend(w http.ResponseWriter, r *http.Request) {
+	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
+	if days <= 0 {
+		days = 30
+	}
+	results, err := h.repo.GetDQATrend(r.Context(), days)
+	if err != nil {
+		slog.Error("get dqa trend", "error", err)
+		respondJSON(w, 200, []any{})
+		return
+	}
+	respondJSON(w, 200, results)
+}
+
 func (h *NodeHandler) Compact(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	count, err := h.repo.CompactNodeVersions(r.Context(), id)

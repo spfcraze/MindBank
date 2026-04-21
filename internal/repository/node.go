@@ -20,6 +20,60 @@ func NewNodeRepo(pool *pgxpool.Pool) *NodeRepo {
 	return &NodeRepo{pool: pool}
 }
 
+// SaveDQASnapshot stores a DQA score for trend tracking.
+func (r *NodeRepo) SaveDQASnapshot(ctx context.Context, score, totalNodes, issuesCount int) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO dqa_snapshots (score, total_nodes, issues_count)
+		VALUES ($1, $2, $3)
+	`, score, totalNodes, issuesCount)
+	if err != nil {
+		return fmt.Errorf("save dqa snapshot: %w", err)
+	}
+	return nil
+}
+
+// GetDQATrend returns recent DQA snapshots.
+func (r *NodeRepo) GetDQATrend(ctx context.Context, days int) ([]struct {
+	Score       int       `json:"score"`
+	TotalNodes  int       `json:"total_nodes"`
+	IssuesCount int       `json:"issues_count"`
+	CreatedAt   time.Time `json:"created_at"`
+}, error) {
+	if days <= 0 {
+		days = 30
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT score, total_nodes, issues_count, created_at
+		FROM dqa_snapshots
+		WHERE created_at > now() - make_interval(days => $1)
+		ORDER BY created_at ASC
+	`, days)
+	if err != nil {
+		return nil, fmt.Errorf("get dqa trend: %w", err)
+	}
+	defer rows.Close()
+
+	var results []struct {
+		Score       int       `json:"score"`
+		TotalNodes  int       `json:"total_nodes"`
+		IssuesCount int       `json:"issues_count"`
+		CreatedAt   time.Time `json:"created_at"`
+	}
+	for rows.Next() {
+		var r struct {
+			Score       int       `json:"score"`
+			TotalNodes  int       `json:"total_nodes"`
+			IssuesCount int       `json:"issues_count"`
+			CreatedAt   time.Time `json:"created_at"`
+		}
+		if err := rows.Scan(&r.Score, &r.TotalNodes, &r.IssuesCount, &r.CreatedAt); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	return results, nil
+}
+
 // Create inserts a new node and returns it.
 func (r *NodeRepo) Create(ctx context.Context, req models.NodeCreate) (*models.Node, error) {
 	ws := req.WorkspaceName
@@ -68,6 +122,66 @@ func (r *NodeRepo) UpdatePath(ctx context.Context, childID, parentPath string) e
 		UPDATE nodes SET materialized_path = $1 WHERE id = $2 AND valid_to IS NULL
 	`, newPath, childID)
 	return err
+}
+
+// FindSimilarNodes finds nodes with embedding similarity > threshold, excluding the given node and its connected neighbors.
+func (r *NodeRepo) FindSimilarNodes(ctx context.Context, nodeID string, threshold float32, limit int) ([]struct {
+	ID         string  `json:"id"`
+	Label      string  `json:"label"`
+	NodeType   string  `json:"node_type"`
+	Namespace  string  `json:"namespace"`
+	Similarity float32 `json:"similarity"`
+}, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	if threshold <= 0 {
+		threshold = 0.70
+	}
+
+	rows, err := r.pool.Query(ctx, `
+		SELECT n.id, n.label, n.node_type::text, n.namespace, 1 - (ne.embedding <=> target.embedding) AS similarity
+		FROM node_embeddings ne
+		JOIN nodes n ON n.id = ne.node_id AND n.valid_to IS NULL
+		CROSS JOIN LATERAL (
+			SELECT embedding FROM node_embeddings WHERE node_id = $1 LIMIT 1
+		) target
+		WHERE ne.node_id != $1
+		  AND 1 - (ne.embedding <=> target.embedding) >= $2
+		  AND ne.node_id NOT IN (
+			  SELECT source_id FROM edges WHERE target_id = $1
+			  UNION
+			  SELECT target_id FROM edges WHERE source_id = $1
+		  )
+		ORDER BY ne.embedding <=> target.embedding
+		LIMIT $3
+	`, nodeID, threshold, limit)
+	if err != nil {
+		return nil, fmt.Errorf("find similar nodes: %w", err)
+	}
+	defer rows.Close()
+
+	var results []struct {
+		ID         string  `json:"id"`
+		Label      string  `json:"label"`
+		NodeType   string  `json:"node_type"`
+		Namespace  string  `json:"namespace"`
+		Similarity float32 `json:"similarity"`
+	}
+	for rows.Next() {
+		var r struct {
+			ID         string  `json:"id"`
+			Label      string  `json:"label"`
+			NodeType   string  `json:"node_type"`
+			Namespace  string  `json:"namespace"`
+			Similarity float32 `json:"similarity"`
+		}
+		if err := rows.Scan(&r.ID, &r.Label, &r.NodeType, &r.Namespace, &r.Similarity); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	return results, nil
 }
 
 // GetPath returns a node's materialized path.
@@ -302,6 +416,71 @@ func (r *NodeRepo) CompactNodeVersions(ctx context.Context, currentID string) (i
 		return 0, fmt.Errorf("compact node versions: %w", err)
 	}
 	return tag.RowsAffected(), nil
+}
+
+// FindSimilarAcrossNamespaces finds nodes in targetNS that are semantically similar to nodes in sourceNS.
+// Uses pgvector cosine similarity on embeddings. Returns pairs with similarity > threshold.
+func (r *NodeRepo) FindSimilarAcrossNamespaces(ctx context.Context, sourceNS, targetNS string, limitPerNode int, threshold float32) ([]struct {
+	SourceID   string  `json:"source_id"`
+	SourceLabel string `json:"source_label"`
+	TargetID   string  `json:"target_id"`
+	TargetLabel string `json:"target_label"`
+	Similarity float32 `json:"similarity"`
+}, error) {
+	if limitPerNode <= 0 {
+		limitPerNode = 3
+	}
+	if threshold <= 0 {
+		threshold = 0.70
+	}
+
+	rows, err := r.pool.Query(ctx, `
+		SELECT 
+			s.node_id AS source_id,
+			sn.label AS source_label,
+			t.node_id AS target_id,
+			tn.label AS target_label,
+			1 - (s.embedding <=> t.embedding) AS similarity
+		FROM node_embeddings s
+		JOIN nodes sn ON sn.id = s.node_id AND sn.valid_to IS NULL AND sn.namespace = $1
+		CROSS JOIN LATERAL (
+			SELECT ne.node_id, ne.embedding
+			FROM node_embeddings ne
+			JOIN nodes n ON n.id = ne.node_id AND n.valid_to IS NULL AND n.namespace = $2
+			WHERE ne.node_id != s.node_id
+			ORDER BY s.embedding <=> ne.embedding
+			LIMIT $3
+		) t
+		JOIN nodes tn ON tn.id = t.node_id AND tn.valid_to IS NULL
+		WHERE 1 - (s.embedding <=> t.embedding) >= $4
+		ORDER BY s.node_id, similarity DESC
+	`, sourceNS, targetNS, limitPerNode, threshold)
+	if err != nil {
+		return nil, fmt.Errorf("find similar across namespaces: %w", err)
+	}
+	defer rows.Close()
+
+	var results []struct {
+		SourceID    string  `json:"source_id"`
+		SourceLabel string `json:"source_label"`
+		TargetID    string  `json:"target_id"`
+		TargetLabel string `json:"target_label"`
+		Similarity  float32 `json:"similarity"`
+	}
+	for rows.Next() {
+		var r struct {
+			SourceID    string  `json:"source_id"`
+			SourceLabel string `json:"source_label"`
+			TargetID    string  `json:"target_id"`
+			TargetLabel string `json:"target_label"`
+			Similarity  float32 `json:"similarity"`
+		}
+		if err := rows.Scan(&r.SourceID, &r.SourceLabel, &r.TargetID, &r.TargetLabel, &r.Similarity); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	return results, nil
 }
 
 // List returns current nodes with optional filters.
