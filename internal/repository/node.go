@@ -285,6 +285,25 @@ func (r *NodeRepo) PurgeOldVersions(ctx context.Context, olderThanDays int) (int
 	return tag.RowsAffected(), nil
 }
 
+// CompactNodeVersions hard-deletes all old temporal versions of a node chain except the current one.
+func (r *NodeRepo) CompactNodeVersions(ctx context.Context, currentID string) (int64, error) {
+	tag, err := r.pool.Exec(ctx, `
+		WITH RECURSIVE chain AS (
+			SELECT id, predecessor_id, valid_to FROM nodes WHERE id = $1
+			UNION ALL
+			SELECT n.id, n.predecessor_id, n.valid_to
+			FROM nodes n
+			JOIN chain c ON n.id = c.predecessor_id
+		)
+		DELETE FROM nodes
+		WHERE id IN (SELECT id FROM chain WHERE valid_to IS NOT NULL)
+	`, currentID)
+	if err != nil {
+		return 0, fmt.Errorf("compact node versions: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // List returns current nodes with optional filters.
 func (r *NodeRepo) List(ctx context.Context, workspace, namespace string, nodeType models.NodeType, limit, offset int) ([]models.Node, error) {
 	if limit <= 0 || limit > 100 {
