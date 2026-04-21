@@ -185,6 +185,20 @@ func (h *NodeHandler) GetHistory(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, 200, history)
 }
 
+func (h *NodeHandler) Compact(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	count, err := h.repo.CompactNodeVersions(r.Context(), id)
+	if err != nil {
+		slog.Error("compact node versions", "error", err)
+		respondError(w, 500, "compact failed")
+		return
+	}
+	respondJSON(w, 200, map[string]any{
+		"compacted": count,
+		"id":        id,
+	})
+}
+
 func (h *NodeHandler) Dedup(w http.ResponseWriter, r *http.Request) {
 	namespace := r.URL.Query().Get("namespace")
 	dryRun := r.URL.Query().Get("dry_run") == "true"

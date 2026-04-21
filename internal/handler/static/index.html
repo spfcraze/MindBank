@@ -323,6 +323,7 @@ textarea{resize:vertical;min-height:50px}
       <div style="margin-bottom:12px;">
         <button onclick="runQualityAnalysis()" style="background:var(--accent);color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;" id="dqa-run-btn">Run Analysis</button>
         <button onclick="fixSelected()" style="background:var(--red);color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;margin-left:8px;display:none;" id="dqa-fix-btn">Fix Selected (0)</button>
+        <button onclick="dqaSelectAll()" style="background:var(--surface);color:var(--text);border:1px solid var(--border);padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;margin-left:8px;display:none;" id="dqa-selectall-btn">Select All</button>
       </div>
 
       <!-- Progress -->
@@ -767,7 +768,7 @@ async function exportGraph(){
   if(r){
     const blob=new Blob([JSON.stringify(r,null,2)],{type:'application/json'});
     const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');a.href=url;a.download='mindbank-export.json';a.click();
+    const a=document.createElement('a');a.href=url;a.download='mindbank-export.json';document.body.appendChild(a);a.click();document.body.removeChild(a);
     URL.revokeObjectURL(url);
     addFeed('export',`${r.nodes.length} nodes, ${r.edges.length} edges`);
     toast('Exported!');
@@ -782,13 +783,15 @@ async function importGraph(){
     if(r){
       document.getElementById('importResult').innerHTML=`<span style="color:#00ff88">Imported ${r.nodes_imported} nodes, ${r.edges_imported} edges</span>`;
       addFeed('import',`${r.nodes_imported} nodes, ${r.edges_imported} edges`);
-      loadStats();
+      loadStats();loadGraph();
     }
   }catch(e){toast('Invalid JSON: '+e.message,true)}
 }
 
 // === Obsidian Import ===
 let obsidianPollTimer=null;
+let obsidianPollCount=0;
+const OBSIDIAN_MAX_POLLS=120; // 3 minutes at 1.5s interval
 
 async function runObsidianImport(){
   const vault=document.getElementById('obsidianVault').value.trim();
@@ -801,6 +804,7 @@ async function runObsidianImport(){
   statusEl.innerHTML='<span style="color:#ffaa00">Starting import...</span>';
   outputEl.style.display='block';
   outputEl.textContent='';
+  obsidianPollCount=0;
 
   try{
     const r=await api('/import/obsidian',{
@@ -817,6 +821,13 @@ async function runObsidianImport(){
 }
 
 async function pollObsidianStatus(){
+  obsidianPollCount++;
+  if(obsidianPollCount>OBSIDIAN_MAX_POLLS){
+    clearInterval(obsidianPollTimer);obsidianPollTimer=null;
+    const statusEl=document.getElementById('obsidianStatus');
+    statusEl.innerHTML='<span style="color:#ff4444">Timed out after 3 minutes</span>';
+    return;
+  }
   try{
     const r=await api('/import/obsidian/status');
     if(!r||r.status==='idle'){
@@ -1154,7 +1165,7 @@ let edgeNodesCache = [];
 
 async function loadEdgeNodesCache() {
   try {
-    const r = await fetch(API + '/nodes?limit=100');
+    const r = await fetch(API + '/nodes?limit=5000');
     edgeNodesCache = await r.json();
   } catch(e) {
     console.error('Failed to load nodes cache:', e);
@@ -1238,56 +1249,37 @@ async function createEdge() {
   }
 }
 
-async function bulkDeleteEdgePreview() {
-  const edgeType = document.getElementById('bulk-edge-type').value;
-  try {
-    let url = API + '/edges';
-    const params = [];
-    if (edgeType) params.push('type=' + encodeURIComponent(edgeType));
-    if (params.length) url += '?' + params.join('&');
-    const r = await fetch(url);
-    let edges = await r.json();
-    if (!Array.isArray(edges)) edges = [];
-
-    document.getElementById('bulk-preview').textContent = edges.length + ' edge(s) match current filters.';
-    addActivity('Edge preview: ' + edges.length + ' matching edges');
-  } catch(e) {
-    toast('Preview failed: ' + e.message, 'error');
-    addActivity('Edge preview failed: ' + e.message);
+async function bulkDeleteAll() {
+  if (_batchDeleteNodes.length === 0) {
+    toast('Run Preview first to find nodes to delete', 'error');
+    return;
   }
-}
+  if (!confirm('DELETE ' + _batchDeleteNodes.length + ' nodes? This cannot be undone!')) return;
 
-async function bulkDeleteEdges() {
-  const edgeType = document.getElementById('bulk-edge-type').value;
-  try {
-    let url = API + '/edges';
-    const params = [];
-    if (edgeType) params.push('type=' + encodeURIComponent(edgeType));
-    if (params.length) url += '?' + params.join('&');
-    const r = await fetch(url);
-    let edges = await r.json();
-    if (!Array.isArray(edges)) edges = [];
+  const progressEl = document.getElementById('batch-del-progress');
+  const barEl = document.getElementById('batch-del-bar');
+  const textEl = document.getElementById('batch-del-progress-text');
+  const statusEl = document.getElementById('batch-del-status');
+  progressEl.style.display = 'block';
+  barEl.style.width = '0%';
+  let deleted = 0;
+  let failed = 0;
 
-    if (edges.length === 0) { toast('No edges match filters', 'warn'); return; }
-    if (!confirm('DELETE ' + edges.length + ' edges? This cannot be undone!')) return;
-
-    let deleted = 0;
-    let failed = 0;
-    for (const e of edges) {
-      try {
-        const dr = await fetch(API + '/edges/' + e.id, { method: 'DELETE' });
-        if (dr.ok) deleted++; else failed++;
-      } catch(ex) { failed++; }
-    }
-
-    toast('Deleted ' + deleted + ' edge(s)' + (failed ? ', ' + failed + ' failed' : ''), failed > 0 ? 'warn' : 'success');
-    addActivity('Bulk deleted ' + deleted + ' edges' + (failed ? ', ' + failed + ' failed' : ''));
-    document.getElementById('bulk-preview').textContent = '';
-    loadGraph();
-  } catch(e) {
-    toast('Bulk delete failed: ' + e.message, 'error');
-    addActivity('Bulk delete failed: ' + e.message);
+  for (let i = 0; i < _batchDeleteNodes.length; i++) {
+    const n = _batchDeleteNodes[i];
+    textEl.textContent = 'Deleted ' + i + '/' + _batchDeleteNodes.length + ' nodes...';
+    try {
+      const resp = await fetch(API + '/nodes/' + n.id, { method: 'DELETE' });
+      if (resp.ok) deleted++; else failed++;
+    } catch(e) { failed++; }
+    barEl.style.width = (((i + 1) / _batchDeleteNodes.length) * 100) + '%';
   }
+  textEl.textContent = 'Deleted ' + deleted + '/' + _batchDeleteNodes.length + ' nodes' + (failed ? ' (' + failed + ' failed)' : '');
+  statusEl.textContent = 'Done: ' + deleted + ' deleted, ' + failed + ' failed';
+  toast('Batch delete complete: ' + deleted + '/' + _batchDeleteNodes.length + ' nodes', failed > 0 ? 'warn' : 'success');
+  addActivity('Batch deleted ' + deleted + ' nodes');
+  _batchDeleteNodes = [];
+  loadGraph();
 }
 
 function addActivity(msg) { addFeed('create', msg); }
@@ -1501,28 +1493,116 @@ function dqaToggleCheck(id) {
 
 function updateFixBtn() {
   const btn = document.getElementById('dqa-fix-btn');
+  const selAll = document.getElementById('dqa-selectall-btn');
+  const hasIssues = Object.values(dqaResults).some(arr => arr && arr.length > 0);
   btn.textContent = 'Fix Selected (' + dqaChecked.size + ')';
   btn.style.display = dqaChecked.size > 0 ? 'inline-block' : 'none';
+  selAll.style.display = hasIssues ? 'inline-block' : 'none';
+}
+
+function dqaSelectAll() {
+  // Toggle: if any are unchecked, check all; else uncheck all
+  const allIds = new Set();
+  for (const cat of ['orphan','disconnected','duplicate','empty','lowImportance']) {
+    const items = dqaResults[cat];
+    if (items) items.forEach(n => { if(n&&n.id) allIds.add(n.id); });
+  }
+  const allChecked = allIds.size > 0 && Array.from(allIds).every(id => dqaChecked.has(id));
+  if (allChecked) {
+    dqaChecked = new Set();
+  } else {
+    dqaChecked = new Set(allIds);
+  }
+  // Re-render to update checkboxes
+  renderDqaResults();
+  updateFixBtn();
 }
 
 async function fixSelected() {
   if (dqaChecked.size === 0) return;
-  if (!confirm('Delete ' + dqaChecked.size + ' selected node(s)? This cannot be undone.')) return;
 
-  const ids = Array.from(dqaChecked);
-  const btn = document.getElementById('dqa-fix-btn');
-  btn.disabled = true;
-  btn.textContent = 'Deleting...';
-
-  let deleted = 0;
-  for (const id of ids) {
-    try {
-      await fetch(API + '/nodes/' + id, { method: 'DELETE' });
-      deleted++;
-    } catch(e) { console.error('Failed to delete', id, e); }
+  // Group checked IDs by their category
+  const byCategory = { orphan:[], disconnected:[], duplicate:[], empty:[], lowImportance:[] };
+  for (const id of dqaChecked) {
+    for (const cat of Object.keys(byCategory)) {
+      if (dqaResults[cat] && dqaResults[cat].some(n => n.id === id)) {
+        byCategory[cat].push(id);
+        break;
+      }
+    }
   }
 
-  alert('Deleted ' + deleted + '/' + ids.length + ' nodes.');
+  const summary = [];
+  const btn = document.getElementById('dqa-fix-btn');
+  btn.disabled = true;
+  btn.textContent = 'Fixing...';
+
+  // 1. Fix orphans: try link-orphans per namespace
+  if (byCategory.orphan.length > 0) {
+    const nsSet = new Set();
+    byCategory.orphan.forEach(id => {
+      const n = dqaResults.orphan.find(x => x.id === id);
+      if (n && n.namespace) nsSet.add(n.namespace);
+    });
+    let linked = 0;
+    for (const ns of nsSet) {
+      try {
+        const r = await fetch(API + '/analyze/link-orphans?dry_run=false&limit=50&namespace=' + encodeURIComponent(ns), { method: 'POST' });
+        const data = await r.json();
+        if (data && data.linked_count) linked += data.linked_count;
+      } catch(e) { console.error('link-orphans failed', ns, e); }
+    }
+    summary.push('Orphans: linked ' + linked + ' nodes');
+  }
+
+  // 2. Fix disconnected: try auto-connect per namespace
+  if (byCategory.disconnected.length > 0) {
+    const nsSet = new Set();
+    byCategory.disconnected.forEach(id => {
+      const n = dqaResults.disconnected.find(x => x.id === id);
+      if (n && n.namespace) nsSet.add(n.namespace);
+    });
+    let connected = 0;
+    for (const ns of nsSet) {
+      try {
+        const r = await fetch(API + '/nodes/auto-connect?namespace=' + encodeURIComponent(ns), { method: 'POST' });
+        const data = await r.json();
+        if (data && data.edges_created) connected += data.edges_created;
+      } catch(e) { console.error('auto-connect failed', ns, e); }
+    }
+    summary.push('Disconnected: created ' + connected + ' edges');
+  }
+
+  // 3. Fix duplicates: delete extras
+  if (byCategory.duplicate.length > 0) {
+    let deleted = 0;
+    for (const id of byCategory.duplicate) {
+      try {
+        await fetch(API + '/nodes/' + id, { method: 'DELETE' });
+        deleted++;
+      } catch(e) { console.error('Failed to delete duplicate', id, e); }
+    }
+    summary.push('Duplicates: deleted ' + deleted + ' nodes');
+  }
+
+  // 4. Fix empty: delete
+  if (byCategory.empty.length > 0) {
+    let deleted = 0;
+    for (const id of byCategory.empty) {
+      try {
+        await fetch(API + '/nodes/' + id, { method: 'DELETE' });
+        deleted++;
+      } catch(e) { console.error('Failed to delete empty', id, e); }
+    }
+    summary.push('Empty content: deleted ' + deleted + ' nodes');
+  }
+
+  // 5. Low importance: skip (can't auto-fix meaningfully)
+  if (byCategory.lowImportance.length > 0) {
+    summary.push('Low importance: skipped ' + byCategory.lowImportance.length + ' nodes (manual review needed)');
+  }
+
+  alert(summary.join('\n'));
   btn.disabled = false;
   dqaChecked = new Set();
   runQualityAnalysis();
@@ -1893,7 +1973,7 @@ async function findStaleNodes() {
   actionsEl.style.display = 'none';
 
   try {
-    const r = await fetch(API + '/nodes?limit=200');
+    const r = await fetch(API + '/nodes?limit=5000');
     const nodes = await r.json();
     vmStaleNodes = nodes.filter(n => (n.version || 1) > 5);
 
@@ -1942,14 +2022,21 @@ async function compactSelectedStale() {
   if (!confirm('Compact ' + selected.length + ' node(s)? This will remove old superseded versions.')) return;
 
   let success = 0;
+  let totalCompacted = 0;
   let failed = 0;
   for (const n of selected) {
     try {
       const r = await fetch(API + '/nodes/' + n.id + '/compact', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' });
-      if (r.ok) success++; else failed++;
+      if (r.ok) {
+        const data = await r.json();
+        totalCompacted += (data.compacted || 0);
+        success++;
+      } else {
+        failed++;
+      }
     } catch(e) { failed++; }
   }
-  toast('Compacted ' + success + ' node(s)' + (failed ? ', ' + failed + ' failed' : ''));
+  toast('Compacted ' + totalCompacted + ' version(s) from ' + success + ' node(s)' + (failed ? ', ' + failed + ' failed' : ''));
   findStaleNodes();
 }
 

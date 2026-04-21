@@ -236,7 +236,8 @@ if(new URLSearchParams(location.search).get('embed'))document.body.classList.add
 // === Data Loading ===
 async function load(){
   toast('Loading graph...');
-  const d=await(await fetch('/api/v1/graph')).json();
+  // Fetch up to 5000 nodes for accurate sidebar counts (was 200 default)
+  const d=await(await fetch('/api/v1/graph?limit=5000')).json();
   document.getElementById('sn').textContent=d.nodes.length;
   document.getElementById('se').textContent=d.edges.length;
   // Get actual total count from count API for poll comparison
@@ -988,8 +989,9 @@ function showRecallPopup(nodeId,text,type){
 
 // === Data Sidebar (like video's file-type list) ===
 function renderDataSidebar(data){
+  if(!data||!data.nodes||!Array.isArray(data.nodes))return;
   const typeCounts={};
-  data.nodes.forEach(n=>{typeCounts[n.node_type]=(typeCounts[n.node_type]||0)+1;});
+  data.nodes.forEach(n=>{if(n&&n.node_type)typeCounts[n.node_type]=(typeCounts[n.node_type]||0)+1;});
   const maxCount=Math.max(...Object.values(typeCounts),1);
   const el=document.getElementById('dataRows');
   el.innerHTML=Object.entries(typeCounts).sort((a,b)=>b[1]-a[1]).map(([type,count])=>{
@@ -1095,10 +1097,11 @@ async function pollHermesRecalls(){
       if(typeof remoteCount==='number'&&remoteCount!==lastNodeCount){
         const delta=Math.abs(remoteCount-lastNodeCount);
         if(delta>=5){
-          // Big change — full rebuild
-          const fullGraph=await(await fetch('/api/v1/graph')).json();
+          // Big change — full rebuild (fetch up to 5000 for accurate sidebar)
+          const fullGraph=await(await fetch('/api/v1/graph?limit=5000')).json();
           buildGraph(fullGraph);
           renderDataSidebar(fullGraph);
+          renderNamespaceChips(fullGraph);
           document.getElementById('sn').textContent=fullGraph.nodes.length;
           document.getElementById('se').textContent=fullGraph.edges.length;
           toast(`${delta>0?'+':''}${delta} nodes, graph refreshed`);
@@ -1159,7 +1162,8 @@ function simulateRecall(){
 
 // === Namespace & Filter ===
 function renderNamespaceChips(data){
-  const nsMap={};data.nodes.forEach(n=>{nsMap[n.namespace]=(nsMap[n.namespace]||0)+1;});
+  if(!data||!data.nodes||!Array.isArray(data.nodes))return;
+  const nsMap={};data.nodes.forEach(n=>{if(n&&n.namespace)nsMap[n.namespace]=(nsMap[n.namespace]||0)+1;});
   const colors=['#00ff88','#0088ff','#ffaa00','#ff00ff','#ff4444','#88ff00','#00ffff'];
   const el=document.getElementById('nschips');
   el.innerHTML=Object.entries(nsMap).map(([ns,count],i)=>{

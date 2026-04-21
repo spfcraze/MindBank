@@ -165,6 +165,7 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 			r.Get("/{id}/neighbors", eh.GetNeighbors)
 			r.Get("/{id}/path/{targetID}", eh.FindPath)
 			r.Get("/{id}/history", nh.GetHistory)
+			r.Post("/{id}/compact", nh.Compact)
 		})
 
 		// Edges
