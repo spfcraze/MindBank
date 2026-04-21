@@ -75,7 +75,7 @@ get_local_version() {
 
 # ---- Check if git-based install ----
 is_git_install() {
-    false  # Always use tarball for public distribution
+    [ -d "$MINDBANK_DIR/.git" ]
 }
 
 # ---- Get latest release from GitHub ----
