@@ -15,7 +15,7 @@ MindBank replaces the flat text block in your AI agent's memory with a searchabl
 - **Graph-structured memory** — nodes (decisions, facts, problems) connected by typed edges
 - **Semantic search** — hybrid FTS + vector search with 98% recall
 - **Temporal versioning** — never lose data, full version history
-- **Neural graph visualization** — 2D and 3D brain-like mindmap
+- **Neural graph visualization** — 2D Canvas brain-like mindmap with physics
 - **MCP integration** — works with Hermes Agent and any MCP-compatible AI
 - **Per-project namespaces** — isolate or connect projects
 - **Local-first** — no API keys, no cloud, everything on your machine
@@ -141,7 +141,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | \
 
 - **Dashboard**: http://localhost:8095 — nodes, search, create, snapshot
 - **Graph 2D**: tab on dashboard — vis-network force-directed graph
-- **Brain 3D**: http://localhost:8095/graph-view — Canvas neural visualization
+- **Brain Graph**: http://localhost:8095/graph-view — Canvas 2D neural visualization with force-directed physics
 
 ## API Reference
 

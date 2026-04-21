@@ -15,7 +15,16 @@ type Worker struct {
 	client    *Client
 	batchSize int
 	interval  time.Duration
+
+	// Circuit breaker
+	consecutiveFailures int
+	circuitOpenUntil    time.Time
 }
+
+const (
+	maxConsecutiveFailures = 5
+	circuitBreakDuration   = 30 * time.Second
+)
 
 // NewWorker creates an embedding queue worker.
 func NewWorker(pool *pgxpool.Pool, client *Client) *Worker {
@@ -39,6 +48,13 @@ func (w *Worker) Run(ctx context.Context) {
 			slog.Info("embedding worker stopped")
 			return
 		case <-ticker.C:
+			// Circuit breaker: skip if open
+			if time.Now().Before(w.circuitOpenUntil) {
+				slog.Debug("embedding circuit open, skipping",
+					"failures", w.consecutiveFailures,
+					"retry_at", w.circuitOpenUntil.Format(time.RFC3339))
+				continue
+			}
 			w.processBatch(ctx)
 		}
 	}
@@ -133,13 +149,25 @@ func (w *Worker) processBatchItems(ctx context.Context, items []queueItem) {
 
 	embeddings, err := w.client.EmbedBatch(ctx, texts)
 	if err != nil {
-		// If batch fails, fall back to individual processing
-		slog.Warn("batch embed failed, falling back to sequential", "error", err)
+		// Track consecutive failures for circuit breaker
+		w.consecutiveFailures++
+		slog.Warn("batch embed failed, falling back to sequential", "error", err, "consecutive_failures", w.consecutiveFailures)
+		if w.consecutiveFailures >= maxConsecutiveFailures {
+			w.circuitOpenUntil = time.Now().Add(circuitBreakDuration)
+			slog.Warn("embedding circuit opened", "failures", w.consecutiveFailures, "retry_after", circuitBreakDuration)
+		}
 		for _, item := range items {
 			w.processItem(ctx, item)
 		}
 		return
 	}
+
+	// Success: reset circuit breaker
+	if w.consecutiveFailures > 0 {
+		slog.Info("embedding circuit closed after success", "was_failures", w.consecutiveFailures)
+	}
+	w.consecutiveFailures = 0
+	w.circuitOpenUntil = time.Time{}
 
 	// Step 3: Store all embeddings in a single transaction
 	tx, err := w.pool.Begin(ctx)

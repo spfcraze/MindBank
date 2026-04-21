@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -130,7 +131,20 @@ func (h *NodeHandler) List(w http.ResponseWriter, r *http.Request) {
 	// If requesting count only (limit=0), return just the count
 	if r.URL.Query().Get("count") == "true" {
 		var count int
-		err := h.pool.QueryRow(r.Context(), `SELECT COUNT(*) FROM nodes WHERE valid_to IS NULL`).Scan(&count)
+		query := `SELECT COUNT(*) FROM nodes WHERE valid_to IS NULL`
+		args := []any{}
+		argN := 1
+		if workspace != "" {
+			query += fmt.Sprintf(" AND workspace_name = $%d", argN)
+			args = append(args, workspace)
+			argN++
+		}
+		if namespace != "" {
+			query += fmt.Sprintf(" AND namespace = $%d", argN)
+			args = append(args, namespace)
+			argN++
+		}
+		err := h.pool.QueryRow(r.Context(), query, args...).Scan(&count)
 		if err != nil {
 			respondError(w, 500, "count failed")
 			return
@@ -155,8 +169,14 @@ func (h *NodeHandler) GetHistory(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	history, err := h.repo.GetHistory(r.Context(), id)
 	if err != nil {
-		slog.Error("get node history", "error", err)
-		respondError(w, 500, "failed to get history")
+		// Check if node exists first to distinguish not-found from DB error
+		node, nodeErr := h.repo.Get(r.Context(), id)
+		if nodeErr == nil && node == nil {
+			respondError(w, 404, "node not found")
+			return
+		}
+		// Node exists but history query failed — return empty, not 500
+		respondJSON(w, 200, []models.NodeHistoryEntry{})
 		return
 	}
 	if history == nil {

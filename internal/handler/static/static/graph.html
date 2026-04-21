@@ -490,37 +490,21 @@ function physics(){
 }
 
 // === Render ===
-let frameCount=0,lastFps=performance.now(),renderRunning=true,simTimer=null;
-let renderIdle=false; // pause render loop when fully settled
+let frameCount=0,lastFps=performance.now(),renderRunning=true;
 
 function render(){
   if(!renderRunning)return;
-  // Skip rendering when physics settled, no bursts, no rotation, no hover
-  if(physicsSettled&&bursts.length===0&&!autoR&&!hovered&&!drag){
-    if(!renderIdle){renderIdle=true;drawMinimap();} // one last minimap draw
-    requestAnimationFrame(render);
-    return;
-  }
-  renderIdle=false;
   try{
     physics();
     ctx.fillStyle='#08080d';ctx.fillRect(0,0,W,H);
     if(autoR)cam.x+=0.3;
     const cx=W/2,cy=H/2;
-    // Subtle radial background gradient
-    const bgGrad=ctx.createRadialGradient(cx,cy,0,cx,cy,Math.max(W,H)*0.7);
-    bgGrad.addColorStop(0,'#0a0a14');bgGrad.addColorStop(1,'#050508');
-    ctx.fillStyle=bgGrad;ctx.fillRect(0,0,W,H);
-    drawGrid(cx,cy);
     drawParticles(cx,cy);
     drawEdges(cx,cy);
     drawNodes(cx,cy);
     drawBursts();
+    drawRecallPopups();
     if(frameCount%2===0)drawMinimap(); // every other frame
-    // Vignette overlay — cinematic dark edges
-    const vigGrad=ctx.createRadialGradient(cx,cy,Math.min(W,H)*0.3,cx,cy,Math.max(W,H)*0.75);
-    vigGrad.addColorStop(0,'rgba(0,0,0,0)');vigGrad.addColorStop(1,'rgba(0,0,0,0.4)');
-    ctx.fillStyle=vigGrad;ctx.fillRect(0,0,W,H);
     frameCount++;
     if(performance.now()-lastFps>=1000){document.getElementById('sf').textContent=frameCount;frameCount=0;lastFps=performance.now();}
   }catch(e){console.error('Render error:',e);}
@@ -572,21 +556,13 @@ function drawEdges(cx,cy){
       cmx=mx+nx*curve;cmy=my+ny*curve;
     }
 
-    // Ambient glow (highlighted/selected edges get stronger glow)
+    // Ambient glow (only on highlighted/selected edges, skip on normal)
     if((a.highlighted||b.highlighted||e.glow>0.1)&&lod!=='low'){
       ctx.beginPath();ctx.moveTo(ax,ay);
       if(useCurve)ctx.quadraticCurveTo(cmx,cmy,bx,by);else ctx.lineTo(bx,by);
-      const glowAlpha=e.glow>0.1?0.1+e.glow*0.3:0.08;
-      ctx.globalAlpha=glowAlpha;
+      ctx.globalAlpha=0.06+e.glow*0.2;
       ctx.strokeStyle=ecFull;
-      ctx.lineWidth=(5+e.glow*5)*cam.z;ctx.stroke();
-      // Second layer — tighter, brighter
-      if(e.glow>0.3){
-        ctx.beginPath();ctx.moveTo(ax,ay);
-        if(useCurve)ctx.quadraticCurveTo(cmx,cmy,bx,by);else ctx.lineTo(bx,by);
-        ctx.globalAlpha=e.glow*0.2;
-        ctx.lineWidth=(2+e.glow*2)*cam.z;ctx.stroke();
-      }
+      ctx.lineWidth=(4+e.glow*4)*cam.z;ctx.stroke();
     }
 
     // Core line
@@ -637,8 +613,7 @@ function drawEdges(cx,cy){
 function drawNodes(cx,cy){
   const time=performance.now()*0.001;
   const lod=cam.z>0.5?'high':cam.z>0.25?'medium':'low';
-  // Use visNodesCache (already filtered to visible nodes)
-  for(const n of visNodesCache){
+  for(const n of nodes){
     if(!n.visible)continue;
     // Guard against NaN positions from physics
     if(!isFinite(n.x)||!isFinite(n.y)){n.x=0;n.y=0;n.vx=0;n.vy=0;}
@@ -666,13 +641,11 @@ function drawNodes(cx,cy){
 
     // Glow (high LOD only, skip when too many nodes or zoomed in)
     if((lod==='high'&&cam.z<2.5&&nodes.length<80)||isHov||isHL){
-      const glowSz=Math.min(sz*2.5,60); // cap max glow radius
-      const grad=ctx.createRadialGradient(sx,sy,0,sx,sy,glowSz);
-      grad.addColorStop(0,n.rgba+(glowAlphaBase*0.8).toFixed(2)+')');
-      grad.addColorStop(0.5,n.rgba+(glowAlphaBase*0.3).toFixed(2)+')');
-      grad.addColorStop(1,n.rgba+'0)');
+      const glowSz=Math.min(sz*2,60); // cap max glow radius
       ctx.beginPath();ctx.arc(sx,sy,glowSz,0,Math.PI*2);
-      ctx.fillStyle=grad;ctx.fill();
+      ctx.globalAlpha=glowAlphaBase*0.5;
+      ctx.fillStyle=n.rgbaFull;
+      ctx.fill();
       ctx.globalAlpha=nodeAlpha;
     }
 
@@ -700,14 +673,10 @@ function drawNodes(cx,cy){
     }
     ctx.globalAlpha=1;
 
-    // Inner specular highlight (3D sphere look, high LOD only)
+    // Inner highlight (high LOD only)
     if(lod==='high'){
-      const grad=ctx.createRadialGradient(sx-sz*0.25,sy-sz*0.25,0,sx,sy,sz);
-      grad.addColorStop(0,'rgba(255,255,255,0.18)');
-      grad.addColorStop(0.4,'rgba(255,255,255,0.06)');
-      grad.addColorStop(1,'rgba(0,0,0,0)');
-      ctx.beginPath();ctx.arc(sx,sy,sz,0,Math.PI*2);
-      ctx.fillStyle=grad;ctx.fill();
+      ctx.beginPath();ctx.arc(sx-sz*0.2,sy-sz*0.2,sz*0.35,0,Math.PI*2);
+      ctx.fillStyle='rgba(255,255,255,0.12)';ctx.fill();
     }
 
     // Avatar/emoji for person/agent/project nodes
@@ -730,14 +699,8 @@ function drawNodes(cx,cy){
       ctx.setLineDash([4,4]);ctx.stroke();ctx.setLineDash([]);
     }
     if(isHov){
-      // Animated hover ring
-      const hoverPulse=0.6+0.4*Math.sin(time*4);
-      ctx.beginPath();ctx.arc(sx,sy,sz+8+Math.sin(time*3)*2,0,Math.PI*2);
-      ctx.strokeStyle=`rgba(255,255,255,${(0.15+hoverPulse*0.15).toFixed(2)})`;
-      ctx.lineWidth=1.5*cam.z;ctx.stroke();
-      // Outer glow ring
-      ctx.beginPath();ctx.arc(sx,sy,sz+14,0,Math.PI*2);
-      ctx.strokeStyle=`rgba(255,255,255,0.06)`;ctx.lineWidth=1*cam.z;ctx.stroke();
+      ctx.beginPath();ctx.arc(sx,sy,sz+8,0,Math.PI*2);
+      ctx.strokeStyle='rgba(255,255,255,0.3)';ctx.lineWidth=1*cam.z;ctx.stroke();
     }
 
     // Label (skip in low LOD)
@@ -809,23 +772,13 @@ function drawHex(c,x,y,r,color){
 }
 
 // === Ambient Particles ===
-const MAX_PARTICLES=80;
+const MAX_PARTICLES=60;
 function initParticles(){
   for(let i=0;i<MAX_PARTICLES;i++){
-    // Color variety: 20% node type colors, 80% ambient grey/blue
-    let color;
-    const r=Math.random();
-    if(r<0.06)color=[0,255,136];      // green
-    else if(r<0.10)color=[0,136,255];  // blue
-    else if(r<0.13)color=[255,170,0];  // amber
-    else if(r<0.15)color=[255,0,255];  // magenta
-    else if(r<0.17)color=[255,68,68];  // red
-    else if(r<0.20)color=[0,255,255];  // cyan
-    else color=[40+Math.random()*30,40+Math.random()*30,60+Math.random()*30]; // ambient
-    particles.push({x:(Math.random()-0.5)*3000,y:(Math.random()-0.5)*3000,
-      vx:(Math.random()-0.5)*0.08,vy:(Math.random()-0.5)*0.08,
-      alpha:0.02+Math.random()*0.06,size:0.3+Math.random()*1.2,
-      color:color});
+    particles.push({x:(Math.random()-0.5)*2000,y:(Math.random()-0.5)*2000,
+      vx:(Math.random()-0.5)*0.1,vy:(Math.random()-0.5)*0.1,
+      alpha:0.03+Math.random()*0.08,size:0.2+Math.random()*0.8,
+      color:Math.random()>0.8?[0,255,136]:[60,60,80]});
   }
 }
 function drawParticles(cx,cy){
@@ -861,28 +814,23 @@ function triggerBurst(nodeId,color){
 function drawBursts(){
   bctx.clearRect(0,0,W,H);
   for(let i=bursts.length-1;i>=0;i--){
-    const b=bursts[i];b.t+=0.015;
+    const b=bursts[i];b.t+=0.02;
     if(b.t>1){bursts.splice(i,1);continue;}
-    const r=b.size*(1+b.t*4);const alpha=(1-b.t)*0.5;
-    // Outer ring
+    const r=b.size*(1+b.t*3);const alpha=(1-b.t)*0.6;
+    // Expanding ring
     bctx.beginPath();bctx.arc(b.x,b.y,r,0,Math.PI*2);
-    bctx.strokeStyle=`${b.color}${(alpha*0.6).toFixed(2)})`;
-    bctx.lineWidth=2.5*(1-b.t);bctx.stroke();
-    // Inner ring (faster, smaller)
-    const r2=b.size*(1+b.t*2.5);
-    bctx.beginPath();bctx.arc(b.x,b.y,r2,0,Math.PI*2);
-    bctx.strokeStyle=`${b.color}${(alpha*0.3).toFixed(2)})`;
-    bctx.lineWidth=1.5*(1-b.t);bctx.stroke();
-    // Radial gradient flash
-    const grad=bctx.createRadialGradient(b.x,b.y,0,b.x,b.y,r*0.4);
-    grad.addColorStop(0,`${b.color}${(alpha*0.25).toFixed(2)})`);
+    bctx.strokeStyle=`${b.color}${alpha})`;
+    bctx.lineWidth=2*(1-b.t);bctx.stroke();
+    // Inner flash
+    const grad=bctx.createRadialGradient(b.x,b.y,0,b.x,b.y,r*0.5);
+    grad.addColorStop(0,`${b.color}${(alpha*0.3).toFixed(2)})`);
     grad.addColorStop(1,'rgba(0,0,0,0)');
-    bctx.beginPath();bctx.arc(b.x,b.y,r*0.4,0,Math.PI*2);bctx.fillStyle=grad;bctx.fill();
-    // Radiating particles (8 instead of 6)
-    for(let j=0;j<8;j++){
-      const angle=(j/8)*Math.PI*2+b.t*4;const pr=r*0.85;
+    bctx.beginPath();bctx.arc(b.x,b.y,r*0.5,0,Math.PI*2);bctx.fillStyle=grad;bctx.fill();
+    // Radiating particles
+    for(let j=0;j<6;j++){
+      const angle=(j/6)*Math.PI*2+b.t*3;const pr=r*0.8;
       const px=b.x+Math.cos(angle)*pr,py=b.y+Math.sin(angle)*pr;
-      bctx.beginPath();bctx.arc(px,py,1.8*(1-b.t),0,Math.PI*2);
+      bctx.beginPath();bctx.arc(px,py,1.5*(1-b.t),0,Math.PI*2);
       bctx.fillStyle=`${b.color}${alpha})`;bctx.fill();
     }
   }
@@ -905,13 +853,10 @@ function drawMinimap(){
   const scale=Math.min(mw/rangeX,mh/rangeY);
   const offX=(mw-rangeX*scale)/2,offY=(mh-rangeY*scale)/2;
 
-  // Draw nodes as dots (visible only, NaN-safe)
+  // Draw nodes as dots
   for(const n of nodes){
-    if(!n.visible)continue;
-    if(!isFinite(n.x)||!isFinite(n.y))continue;
     const x=(n.x-minX)*scale+offX;
     const y=(n.y-minY)*scale+offY;
-    if(!isFinite(x)||!isFinite(y))continue;
     const c=healthMode?healthColorPrefix(n.health):n.rgba;
     mctx.fillStyle=`${c}0.6)`;
     mctx.fillRect(x-1,y-1,2,2);
@@ -984,7 +929,9 @@ function showRecallPopup(nodeId,text,type){
   setTimeout(()=>el.remove(),3200);
 }
 
-
+function drawRecallPopups(){
+  // Popups are CSS-based, nothing to draw on canvas
+}
 
 // === Data Sidebar (like video's file-type list) ===
 function renderDataSidebar(data){
@@ -1074,7 +1021,6 @@ async function pollHermesRecalls(){
             `Snapshot: ${snap.token_count} tokens, ${snapNodes.length} memories`,
             snapNodes.map(n=>n.id));
           showRecallPopup(snapNodes[0].id,`Snapshot: ${snap.token_count} tokens`,'snapshot');
-          suppressSimRecall();
         }
       }
     }
@@ -1102,7 +1048,6 @@ async function pollHermesRecalls(){
           document.getElementById('sn').textContent=fullGraph.nodes.length;
           document.getElementById('se').textContent=fullGraph.edges.length;
           toast(`${delta>0?'+':''}${delta} nodes, graph refreshed`);
-          suppressSimRecall();
         }
         lastNodeCount=remoteCount;
       }
@@ -1121,7 +1066,6 @@ async function pollHermesRecalls(){
                 `Recalled: ${local.label.substring(0,35)} (+${delta}x)`,
                 [local.id]);
               showRecallPopup(local.id,`${local.label.substring(0,25)}`,'recall');
-              suppressSimRecall();
             }
           }
         }
@@ -1132,13 +1076,8 @@ async function pollHermesRecalls(){
 }
 
 // === Simulated Recall (fills gaps when no real activity) ===
-let simSuppressedUntil=0; // suppress sims when real activity detected
-function suppressSimRecall(){simSuppressedUntil=Date.now()+60000;} // stop sim for 60s after real activity
-
 function simulateRecall(){
   if(nodes.length===0)return;
-  // Skip simulation when real activity is recent
-  if(Date.now()<simSuppressedUntil)return;
   // Only pick from visible nodes in current namespace filter
   const visNodes=nodes.filter(n=>n.visible);
   if(visNodes.length===0)return;
@@ -1260,7 +1199,6 @@ async function showNodePanel(n){
   document.getElementById('pm').textContent=`${n.ns} · importance: ${n.imp.toFixed(2)} · accessed ${n.acc}x`;
   document.getElementById('pc').textContent=n.content||'—';
   document.getElementById('ps').textContent=n.summary||'—';
-  document.getElementById('pp').innerHTML='<div style="color:#444;font-size:11px;padding:8px 0">Loading...</div>';
   try{
     const nb=await(await fetch('/api/v1/nodes/'+n.id+'/neighbors')).json();
     const pp=document.getElementById('pp');
@@ -1316,17 +1254,15 @@ initParticles();load();render();
 setInterval(pollHermesRecalls,10000);
 
 // Fallback simulation every 10-20s when no real activity
-function scheduleSim(){simTimer=setTimeout(()=>{simulateRecall();scheduleSim();},10000+Math.random()*10000);}
+function scheduleSim(){setTimeout(()=>{simulateRecall();scheduleSim();},10000+Math.random()*10000);}
 setTimeout(scheduleSim,12000);
 
 // Pause rendering when tab is hidden to save resources
 document.addEventListener('visibilitychange',()=>{
   if(document.hidden){
     renderRunning=false;
-    if(simTimer){clearTimeout(simTimer);simTimer=null;}
   }else{
     if(!renderRunning){renderRunning=true;render();}
-    if(!simTimer)scheduleSim();
   }
 });
 

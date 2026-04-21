@@ -174,12 +174,25 @@ func (h *AskHandler) RebuildSnapshot(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Graph handles GET /api/v1/graph — returns all nodes+edges for visualization.
+// Graph handles GET /api/v1/graph — returns nodes+edges for visualization.
+// Supports: ?limit=500&offset=0 (default: 200, max: 2000)
 func (h *AskHandler) Graph(w http.ResponseWriter, r *http.Request) {
 	namespace := r.URL.Query().Get("namespace")
 	workspace := r.URL.Query().Get("workspace")
-	if workspace == "" {
-		workspace = "hermes"
+	// Note: no hardcoded workspace default — consistent with other endpoints
+
+	// Pagination
+	limit := 200
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 2000 {
+			limit = n
+		}
+	}
+	offset := 0
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if n, err := strconv.Atoi(o); err == nil && n >= 0 {
+			offset = n
+		}
 	}
 
 	// Build query for nodes
@@ -198,7 +211,8 @@ func (h *AskHandler) Graph(w http.ResponseWriter, r *http.Request) {
 		args = append(args, namespace)
 		argN++
 	}
-	query += " ORDER BY importance DESC, access_count DESC LIMIT 200"
+	query += fmt.Sprintf(" ORDER BY importance DESC, access_count DESC LIMIT $%d OFFSET $%d", argN, argN+1)
+	args = append(args, limit, offset)
 
 	rows, err := h.snapshotRepo.Pool().Query(r.Context(), query, args...)
 	if err != nil {
@@ -280,8 +294,10 @@ func (h *AskHandler) Graph(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, 200, map[string]any{
-		"nodes": nodes,
-		"edges": edges,
+		"nodes":  nodes,
+		"edges":  edges,
+		"limit":  limit,
+		"offset": offset,
 	})
 }
 

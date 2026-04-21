@@ -22,6 +22,17 @@ const (
 	EdgeLearnedFrom    EdgeType = "learned_from"
 )
 
+// IsValid returns true if the edge type is a known enum value.
+func (et EdgeType) IsValid() bool {
+	switch et {
+	case EdgeContains, EdgeRelatesTo, EdgeDependsOn, EdgeDecidedBy,
+		EdgeParticipatedIn, EdgeProduced, EdgeContradicts, EdgeSupports,
+		EdgeTemporalNext, EdgeMentions, EdgeLearnedFrom:
+		return true
+	}
+	return false
+}
+
 // Edge is a directed connection between two nodes.
 type Edge struct {
 	ID            string          `json:"id"`
