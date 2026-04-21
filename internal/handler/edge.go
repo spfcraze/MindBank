@@ -30,6 +30,10 @@ func (h *EdgeHandler) Create(w http.ResponseWriter, r *http.Request) {
 		respondError(w, 400, "edge_type is required")
 		return
 	}
+	if !req.EdgeType.IsValid() {
+		respondError(w, 400, "invalid edge_type")
+		return
+	}
 
 	edge, err := h.repo.Create(r.Context(), req)
 	if err != nil {

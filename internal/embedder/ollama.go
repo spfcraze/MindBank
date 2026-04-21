@@ -192,7 +192,7 @@ func (c *Client) EmbedBatch(ctx context.Context, texts []string) ([][]float32, e
 	return results, nil
 }
 
-// Health checks if Ollama is reachable and the model is available.
+// Health checks if Ollama is reachable and the configured model is available.
 func (c *Client) Health(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/api/tags", nil)
 	if err != nil {
@@ -206,5 +206,19 @@ func (c *Client) Health(ctx context.Context) error {
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("ollama status %d", resp.StatusCode)
 	}
-	return nil
+	// Check model is available
+	var tags struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&tags); err != nil {
+		return fmt.Errorf("failed to decode tags: %w", err)
+	}
+	for _, m := range tags.Models {
+		if m.Name == c.model {
+			return nil
+		}
+	}
+	return fmt.Errorf("model %q not found in Ollama", c.model)
 }

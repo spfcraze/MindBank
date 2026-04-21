@@ -30,6 +30,9 @@ func (h *SearchHandler) FTS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 || limit > 100 {
+		limit = 10
+	}
 	workspace := r.URL.Query().Get("workspace")
 	namespace := r.URL.Query().Get("namespace")
 
@@ -60,6 +63,9 @@ func (h *SearchHandler) Semantic(w http.ResponseWriter, r *http.Request) {
 	if req.Query == "" {
 		respondError(w, 400, "query is required")
 		return
+	}
+	if req.Limit <= 0 || req.Limit > 100 {
+		req.Limit = 10
 	}
 
 	// Use cached embedding
@@ -96,6 +102,9 @@ func (h *SearchHandler) Hybrid(w http.ResponseWriter, r *http.Request) {
 	if req.Query == "" {
 		respondError(w, 400, "query is required")
 		return
+	}
+	if req.Limit <= 0 || req.Limit > 100 {
+		req.Limit = 10
 	}
 
 	// Use cached embedding
@@ -165,6 +174,10 @@ func (sh *SearchHandler) EmbedBatch(w http.ResponseWriter, r *http.Request) {
 	embeddings, err := sh.embedder.EmbedBatch(r.Context(), req.Texts)
 	if err != nil {
 		respondEmbedError(w, err, "batch embed")
+		return
+	}
+	if len(embeddings) == 0 {
+		respondError(w, 500, "embedding generation returned empty result")
 		return
 	}
 

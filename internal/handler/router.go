@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"mindbank/internal/config"
@@ -33,6 +34,7 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
+	r.Use(middleware.Compress(5, "application/json", "text/html", "text/css", "application/javascript", "image/svg+xml"))
 	r.Use(middleware.Timeout(30 * 1e9)) // 30s
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"http://localhost:*", "http://127.0.0.1:*", "https://*.mindbank.local"},
@@ -86,7 +88,11 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 		w.Write(data)
 	})
 	staticSub, _ := fs.Sub(staticFS, "static")
-	r.Handle("/*", http.FileServer(http.FS(staticSub)))
+	r.Handle("/*", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Cache static files for 1 hour
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		http.FileServer(http.FS(staticSub)).ServeHTTP(w, r)
+	}))
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Auth middleware (disabled if MB_API_KEY not set)
@@ -212,13 +218,20 @@ func respondJSON(w http.ResponseWriter, status int, data any) {
 	}
 }
 
-// getLocalVersion reads the VERSION file.
+var cachedVersion string
+var versionOnce sync.Once
+
+// getLocalVersion reads the VERSION file once and caches it.
 func getLocalVersion() string {
-	data, err := os.ReadFile("VERSION")
-	if err != nil {
-		return "0.0.0"
-	}
-	return strings.TrimSpace(string(data))
+	versionOnce.Do(func() {
+		data, err := os.ReadFile("VERSION")
+		if err != nil {
+			cachedVersion = "0.0.0"
+			return
+		}
+		cachedVersion = strings.TrimSpace(string(data))
+	})
+	return cachedVersion
 }
 
 // respondError writes an error response.

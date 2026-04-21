@@ -85,9 +85,6 @@ textarea{resize:vertical;min-height:50px}
 .dropdown-item{padding:6px 10px;font-size:12px;color:#ccc;cursor:pointer;display:flex;align-items:center;gap:6px}
 .dropdown-item:hover{background:#ffffff0a}
 .dn-type{display:inline-block;font-size:9px;padding:1px 4px;border-radius:2px;font-weight:bold;text-transform:uppercase;flex-shrink:0}
-.tree-node .tree-toggle:hover { background: var(--surface); }
-.tree-children { transition: all 0.2s ease; }
-.tree-arrow { transition: transform 0.15s ease; }
 </style>
 </head>
 <body>
@@ -346,6 +343,17 @@ textarea{resize:vertical;min-height:50px}
       <!-- Results Categories -->
       <div id="dqa-results" style="display:none;"></div>
     </div>
+</div>
+
+<!-- GRAPH TAB -->
+<div class="container tab-content" id="tab-graph">
+  <div class="section" style="margin:0"><div style="padding:10px 14px;border-bottom:1px solid #16162a;display:flex;gap:10px;align-items:center">
+    <label style="font-size:11px;color:#666">NS:</label>
+    <select id="graphNS" onchange="loadGraph()" style="width:auto;padding:3px 6px"><option value="">All</option></select>
+    <button class="btn btn-sm" onclick="loadGraph()">Refresh</button>
+    <button class="btn btn-sm" onclick="graphFit()">Fit</button>
+    <span style="color:#444;font-size:10px;margin-left:auto" id="graphInfo">Loading...</span>
+  </div><div style="position:relative"><div id="graphContainer" style="width:100%;height:calc(100vh - 140px);min-height:400px;background:#08080d"></div>
     <!-- Namespace Manager -->
     <div class="section" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:20px;margin-bottom:16px;">
       <h3 class="section-hdr" style="font-size:16px;margin-bottom:16px;">Namespace Manager</h3>
@@ -406,7 +414,6 @@ textarea{resize:vertical;min-height:50px}
         </div>
         <div id="ns-merge-status" style="margin-top:6px;font-size:12px;color:var(--text-dim);"></div>
       </div>
-    </div>
     <!-- Version Manager Section -->
     <div class="section" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:16px">
       <div class="section-hdr" style="padding:14px 16px;border-bottom:1px solid var(--border);font-weight:600;font-size:15px">Version Manager</div>
@@ -452,7 +459,7 @@ textarea{resize:vertical;min-height:50px}
             <button class="btn btn-red" onclick="expireOldVersions()" style="background:var(--red);color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px">Expire</button>
           </div>
           <div class="form-row" style="margin-bottom:12px">
-            <button class="btn btn-blue" onclick="findStaleNodes()" style="background:var(--accent);color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px">Find Stale Nodes (version > 5)</button>
+            <button class="btn btn-blue" onclick="findStaleNodes()" style="background:var(--accent);color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px">Find Stale Nodes (version &gt; 5)</button>
           </div>
           <div id="vm-stale-results" style="margin-bottom:12px"></div>
           <div id="vm-stale-actions" style="display:none;margin-bottom:12px">
@@ -463,17 +470,8 @@ textarea{resize:vertical;min-height:50px}
 
       </div>
     </div>
+</div></div>
 </div>
-
-<!-- GRAPH TAB -->
-<div class="container tab-content" id="tab-graph">
-  <div class="section" style="margin:0"><div style="padding:10px 14px;border-bottom:1px solid #16162a;display:flex;gap:10px;align-items:center">
-    <label style="font-size:11px;color:#666">NS:</label>
-    <select id="graphNS" onchange="loadGraph()" style="width:auto;padding:3px 6px"><option value="">All</option></select>
-    <button class="btn btn-sm" onclick="loadGraph()">Refresh</button>
-    <button class="btn btn-sm" onclick="graphFit()">Fit</button>
-    <span style="color:#444;font-size:10px;margin-left:auto" id="graphInfo">Loading...</span>
-  </div><div style="position:relative"><div id="graphContainer" style="width:100%;height:calc(100vh - 140px);min-height:400px;background:#08080d"></div></div></div>
 </div>
 
 <!-- BRAIN 3D TAB -->
@@ -497,7 +495,6 @@ textarea{resize:vertical;min-height:50px}
 const API='/api/v1';
 let searchMode='hybrid',graphNetwork=null,graphData={nodes:[],edges:[]},nodesOffset=0,edgesOffset=0,activityLog=[];
 let visLoaded=false,lastDashNodeCount=0;
-let pollHealthId=null,pollOllamaId=null,pollNodeCountId=null;
 
 const TC={project:{bg:'#00ff88',bd:'#00cc66'},decision:{bg:'#0088ff',bd:'#0066cc'},fact:{bg:'#ffaa00',bd:'#cc8800'},preference:{bg:'#ff00ff',bd:'#cc00cc'},problem:{bg:'#ff4444',bd:'#cc2222'},advice:{bg:'#88ff00',bd:'#66cc00'},topic:{bg:'#8888ff',bd:'#6666cc'},person:{bg:'#ff8800',bd:'#cc6600'},event:{bg:'#00ffff',bd:'#00cccc'},concept:{bg:'#aaaaaa',bd:'#888888'},agent:{bg:'#ff88cc',bd:'#cc66aa'},question:{bg:'#ffaa44',bd:'#cc8800'}};
 const NS_COLORS=['#00ff88','#0088ff','#ffaa00','#ff00ff','#ff4444','#88ff00','#00ffff','#ff8800'];
@@ -509,19 +506,14 @@ function tagBg(t){return(TC[t]||TC.concept).bg}
 function hl(text,query){if(!query||!text)return esc(text);const q=query.toLowerCase();const idx=text.toLowerCase().indexOf(q);if(idx<0)return esc(text);return esc(text.substring(0,idx))+'<span class="highlight">'+esc(text.substring(idx,idx+q.length))+'</span>'+esc(text.substring(idx+q.length))}
 
 // === Tabs ===
-let tabLoaded = { dashboard: true, questions: false, edges: false, tools: true, graph: false, brain: false };
 function switchTab(name){
   document.querySelectorAll('.tab').forEach((t,i)=>{t.classList.toggle('active',['dashboard','questions','edges','tools','graph','brain'][i]===name)});
   document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
   document.getElementById('tab-'+name).classList.add('active');
-  // Unified lazy-load: load once on first switch
-  if(!tabLoaded[name]){
-    tabLoaded[name]=true;
-    if(name==='graph')loadGraph();
-    if(name==='brain'){const f=document.getElementById('brainFrame');if(!f.dataset.loaded){f.src='/graph-view?embed=1';f.dataset.loaded='1'}f.style.width='100%';f.style.height=(window.innerHeight-60)+'px';}
-    if(name==='questions')loadQuestions();
-    if(name==='edges')loadEdges();
-  }
+  if(name==='graph')loadGraph();
+  if(name==='brain'){const f=document.getElementById('brainFrame');if(!f.dataset.loaded){f.src='/graph-view?embed=1';f.dataset.loaded='1'}f.style.width='100%';f.style.height=(window.innerHeight-60)+'px';}
+  if(name==='questions')loadQuestions();
+  if(name==='edges')loadEdges();
 }
 
 // === Health ===
@@ -951,9 +943,9 @@ loadHealth();loadOllamaStats();loadStats().then(()=>{lastDashNodeCount=parseInt(
 loadNodes();loadSnapshot();
 // Recalculate importance scores on first load (one-time)
 if(!sessionStorage.getItem('mb_recalc_done')){api('/nodes/recalculate',{method:'POST'}).then(r=>{if(r&&r.rows_updated){sessionStorage.setItem('mb_recalc_done','1');addFeed('recalc',r.rows_updated+' nodes scored');loadStats();loadNodes()}})}
-pollHealthId=setInterval(loadHealth,30000);
-pollOllamaId=setInterval(loadOllamaStats,10000);
-pollNodeCountId=setInterval(async()=>{
+setInterval(loadHealth,30000);
+setInterval(loadOllamaStats,10000);
+setInterval(async()=>{
   const data=await api('/nodes?count=true');
   if(data&&typeof data.count==='number'){
     const currentCount=data.count;
@@ -968,33 +960,6 @@ pollNodeCountId=setInterval(async()=>{
     lastDashNodeCount=currentCount;
   }
 },15000);
-// Pause polling when tab hidden to save resources
-document.addEventListener('visibilitychange',()=>{
-  if(document.hidden){
-    if(pollHealthId)clearInterval(pollHealthId);
-    if(pollOllamaId)clearInterval(pollOllamaId);
-    if(pollNodeCountId)clearInterval(pollNodeCountId);
-  }else{
-    loadHealth();loadOllamaStats();
-    pollHealthId=setInterval(loadHealth,30000);
-    pollOllamaId=setInterval(loadOllamaStats,10000);
-    pollNodeCountId=setInterval(async()=>{
-      const data=await api('/nodes?count=true');
-      if(data&&typeof data.count==='number'){
-        const currentCount=data.count;
-        if(lastDashNodeCount>0&&currentCount!==lastDashNodeCount){
-          const delta=currentCount-lastDashNodeCount;
-          if(Math.abs(delta)<50){
-            addFeed('create',`${delta>0?'+':''}${delta} node(s)`);
-            document.getElementById('statNodes').textContent=currentCount;
-            loadNodes();
-          }
-        }
-        lastDashNodeCount=currentCount;
-      }
-    },15000);
-  }
-});
 
 // === Batch Node Manager ===
 function parseCSVRows(text) {
@@ -1984,6 +1949,6 @@ document.addEventListener('keydown', function(e) {
   if (e.key === '/') { e.preventDefault(); document.getElementById('searchQuery').focus(); }
 });
 
-  </script>
+</script>
 </body>
 </html>

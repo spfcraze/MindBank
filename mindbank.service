@@ -6,28 +6,27 @@ Requires=docker.service
 
 [Service]
 Type=simple
-User=rat
-Group=rat
-WorkingDirectory=/home/rat/mindbank
+User=##USER##
+Group=##USER##
+WorkingDirectory=##INSTALL_DIR##
 
 # Start Postgres container first, then wait for it to be healthy
-ExecStartPre=/bin/bash -c '/usr/bin/docker compose -f /home/rat/mindbank/docker-compose.yml up -d && for i in $(seq 1 30); do /usr/bin/docker compose exec -T mindbank-postgres pg_isready -U mindbank -d mindbank >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
+ExecStartPre=/bin/bash -c '/usr/bin/docker compose -f ##INSTALL_DIR##/docker-compose.yml up -d && for i in $(seq 1 30); do /usr/bin/docker compose exec -T mindbank-postgres pg_isready -U mindbank -d mindbank >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
 
-ExecStart=/home/rat/mindbank/mindbank
+ExecStart=##INSTALL_DIR##/mindbank
 ExecStop=/bin/kill -TERM $MAINPID
 
-# BUGFIX: Stop Postgres container when service stops
-ExecStopPost=/usr/bin/docker compose -f /home/rat/mindbank/docker-compose.yml stop
+# Stop Postgres container when service stops
+ExecStopPost=/usr/bin/docker compose -f ##INSTALL_DIR##/docker-compose.yml stop
 
 Restart=on-failure
 RestartSec=5
 StartLimitIntervalSec=60
 StartLimitBurst=3
 
-# BUGFIX: Real password, not ***
-Environment=MB_DB_DSN=postgres://mindbank:mindbank_secret@localhost:5434/mindbank?sslmode=disable
+Environment=MB_DB_DSN=postgres://mindbank:##DB_PASS##@localhost:##PG_PORT##/mindbank?sslmode=disable
 Environment=MB_OLLAMA_URL=http://localhost:11434
-Environment=MB_PORT=8095
+Environment=MB_PORT=##PORT##
 Environment=MB_LOG_LEVEL=info
 
 StandardOutput=journal

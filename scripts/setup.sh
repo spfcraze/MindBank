@@ -176,9 +176,9 @@ echo ""
 echo "  3. Open the dashboard:"
 echo "     http://localhost:${MINDBANK_PORT}"
 echo ""
-echo "  4. For auto-start on boot:"
-echo "     cp $MINDBANK_DIR/scripts/mindbank.service ~/.config/systemd/user/"
-echo "     systemctl --user enable --now mindbank"
+echo "  4. For auto-start on boot, run:"
+echo "     bash $MINDBANK_DIR/scripts/setup.sh"
+echo "     (or manually copy and edit the service file)"
 echo ""
 echo "  API Key: ${API_KEY}"
 echo "  (Set MB_API_KEY env var to require auth)"
@@ -192,4 +192,21 @@ if [ "$HAS_HERMES" = true ]; then
     echo "  Hermes: cd /your/project && hermes chat"
     echo "  Memories auto-isolated by working directory."
     echo ""
+fi
+
+# ---- Install systemd service (optional) ----
+echo ""
+read -p "Install systemd service for auto-start? (y/N) " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    mkdir -p ~/.config/systemd/user
+    sed -e "s|##INSTALL_DIR##|$MINDBANK_DIR|g" \
+        -e "s|##USER##|$USER|g" \
+        -e "s|##DB_PASS##|$DB_PASS|g" \
+        -e "s|##PG_PORT##|$MINDBANK_PG_PORT|g" \
+        -e "s|##PORT##|$MINDBANK_PORT|g" \
+        "$MINDBANK_DIR/scripts/mindbank.service" > ~/.config/systemd/user/mindbank.service
+    systemctl --user daemon-reload
+    systemctl --user enable mindbank
+    echo "  Service installed: systemctl --user start mindbank"
 fi
