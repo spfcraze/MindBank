@@ -331,13 +331,13 @@ echo "$REMOTE_VERSION" > "$MINDBANK_DIR/VERSION"
 restart_ok=false
 if [ "$NO_RESTART" = false ] && [ "$PLUGIN_ONLY" = false ]; then
     echo ""
-    echo "  Restarting MindBank API..."
+    echo "  Restarting MindBank..."
 
-    # Check if running as systemd service
+    # Check if running as systemd service (user or system)
     if systemctl --user is-active mindbank &>/dev/null; then
         echo "  Detected: systemd user service"
         systemctl --user restart mindbank
-        sleep 2
+        sleep 3
         if systemctl --user is-active mindbank &>/dev/null; then
             echo "  systemd restart ✓"
             restart_ok=true
@@ -347,7 +347,7 @@ if [ "$NO_RESTART" = false ] && [ "$PLUGIN_ONLY" = false ]; then
     elif systemctl is-active mindbank &>/dev/null; then
         echo "  Detected: systemd system service"
         sudo systemctl restart mindbank
-        sleep 2
+        sleep 3
         if systemctl is-active mindbank &>/dev/null; then
             echo "  systemd restart ✓"
             restart_ok=true
@@ -355,46 +355,67 @@ if [ "$NO_RESTART" = false ] && [ "$PLUGIN_ONLY" = false ]; then
             echo "  ERROR: systemd restart failed. Check: journalctl -u mindbank"
         fi
     else
-        # Running as standalone process — find and kill, then restart
-        PID=$(pgrep -f "mindbank-api" 2>/dev/null || pgrep -x "mindbank" 2>/dev/null || pgrep -f "./mindbank" 2>/dev/null)
+        # Running as standalone process — find and kill old binary, then restart
+        # Avoid matching: build processes, the update script itself, grep
+        PID=$(pgrep -af "./mindbank-api" 2>/dev/null | grep -v "go build\|update.sh\|grep" | awk '{print $1}' | head -1)
+        if [ -z "$PID" ]; then
+            PID=$(pgrep -af "mindbank-api serve\|mindbank-api --port\|mindbank-api run" 2>/dev/null | awk '{print $1}' | head -1)
+        fi
+
         if [ -n "$PID" ]; then
-            echo "  Found process PID: $PID"
+            echo "  Stopping old process (PID: $PID)..."
             kill "$PID" 2>/dev/null
             sleep 2
-            # Force kill if still running
             if kill -0 "$PID" 2>/dev/null; then
                 kill -9 "$PID" 2>/dev/null
                 sleep 1
             fi
-            echo "  Stopped old process ✓"
+            echo "  Old process stopped ✓"
         fi
 
         # Start new process
         cd "$MINDBANK_DIR"
-        if [ -f ".env" ]; then
-            source .env
-        fi
-        export MB_DB_DSN="${MB_DB_DSN:-postgres://mindbank:mindbank_secret@localhost:5432/mindbank?sslmode=disable}"
-        export MB_OLLAMA_URL="${MB_OLLAMA_URL:-http://localhost:11434}"
-        export MB_PORT="${MB_PORT:-8095}"
 
+        # Load .env properly (export all vars so child processes inherit them)
+        if [ -f ".env" ]; then
+            set -a
+            source .env
+            set +a
+        fi
+
+        # Determine port for health check
+        HEALTH_PORT="${MB_PORT:-8095}"
+        if [ -n "${PORT:-}" ]; then
+            HEALTH_PORT="$PORT"
+        fi
+
+        # Start in background with proper env
+        echo "  Starting new process..."
         nohup ./mindbank-api >> /tmp/mindbank.log 2>&1 &
         NEW_PID=$!
-        sleep 2
+        sleep 3
 
-        # Verify it started
-        if kill -0 "$NEW_PID" 2>/dev/null; then
-            if curl -sf "http://localhost:${MB_PORT}/api/v1/health" &>/dev/null; then
-                echo "  Started PID: $NEW_PID ✓"
-                echo "  Health check: OK ✓"
-                restart_ok=true
-            else
-                echo "  WARNING: Process started but health check failed."
-                echo "  Check logs: tail /tmp/mindbank.log"
-            fi
+        # Verify process is alive
+        if ! kill -0 "$NEW_PID" 2>/dev/null; then
+            echo "  ERROR: Process exited immediately."
+            echo "  Check logs: tail -n 50 /tmp/mindbank.log"
+            echo "  Start manually: cd $MINDBANK_DIR && ./mindbank-api"
         else
-            echo "  ERROR: Process failed to start."
-            echo "  Check logs: tail /tmp/mindbank.log"
+            # Wait up to 10s for health endpoint
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+                if curl -sf "http://127.0.0.1:${HEALTH_PORT}/api/v1/health" &>/dev/null; then
+                    echo "  Started PID: $NEW_PID ✓"
+                    echo "  Health check: http://127.0.0.1:${HEALTH_PORT}/api/v1/health ✓"
+                    restart_ok=true
+                    break
+                fi
+                sleep 1
+            done
+
+            if [ "$restart_ok" = false ]; then
+                echo "  WARNING: Process started but health check failed after 10s."
+                echo "  Check logs: tail -n 50 /tmp/mindbank.log"
+            fi
         fi
     fi
 else
