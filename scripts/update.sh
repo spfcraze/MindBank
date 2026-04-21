@@ -286,6 +286,13 @@ else
     echo "  Tarball update complete ✓"
 fi
 
+# ---- Post-update cleanup: remove duplicate analyze.go ----
+if [ -f "$MINDBANK_DIR/internal/handler/analyze.go" ] && [ -f "$MINDBANK_DIR/internal/handler/analyze_common.go" ]; then
+    echo "  Cleaning up duplicate analyze.go..."
+    rm -f "$MINDBANK_DIR/internal/handler/analyze.go"
+    echo "  Cleanup complete ✓"
+fi
+
 # ---- Rebuild ----
 if [ "$PLUGIN_ONLY" = false ]; then
     if command -v go &>/dev/null; then
