@@ -72,13 +72,18 @@ if command -v hermes &>/dev/null; then
 fi
 
 # ---- Check MindBank API ----
-if ! curl -sf "http://localhost:${MINDBANK_PORT}/api/v1/health" &>/dev/null; then
+if ! curl -sf --connect-timeout 5 --max-time 10 "http://localhost:${MINDBANK_PORT}/api/v1/health" &>/dev/null; then
     echo "WARNING: MindBank API not running on :${MINDBANK_PORT}"
     echo "Start it first: cd /path/to/mindbank && make run"
-    echo ""
-    read -p "Continue anyway? (y/N) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then exit 1; fi
+    # Only prompt if stdin is a terminal (not when called from updater backend)
+    if [ -t 0 ]; then
+        echo ""
+        read -p "Continue anyway? (y/N) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then exit 1; fi
+    else
+        echo "Non-interactive mode: continuing anyway..."
+    fi
 fi
 
 # ---- Parse args or show menu ----

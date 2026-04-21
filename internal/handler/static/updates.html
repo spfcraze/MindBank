@@ -245,10 +245,14 @@ async function runUpdate() {
 
   // Animate progress bar
   let progressVal = 0;
-  const progressTimer = setInterval(() => {
+  window._progressTimer = setInterval(() => {
     progressVal = Math.min(progressVal + Math.random() * 5, 90);
     document.getElementById('progressBar').style.width = progressVal + '%';
   }, 500);
+
+  // Poll count limit: 300 polls = 5 minutes max
+  window._pollCount = 0;
+  window._maxPolls = 300;
 
   try {
     const resp = await fetch('/api/v1/updates/run', { method: 'POST' });
@@ -272,11 +276,28 @@ async function runUpdate() {
 
 async function pollStatus(jobId) {
   try {
+    window._pollCount++;
+    if (window._pollCount > window._maxPolls) {
+      clearInterval(pollInterval);
+      clearInterval(window._progressTimer);
+      const log = document.getElementById('updateLog');
+      const btnUpdate = document.getElementById('btnUpdate');
+      const btnCheck = document.getElementById('btnCheck');
+      log.innerHTML += '\n<span class="line-err">✗ Update timed out after 5 minutes. Check server logs.</span>\n';
+      btnUpdate.textContent = 'Retry';
+      btnUpdate.disabled = false;
+      btnCheck.disabled = false;
+      document.getElementById('progressContainer').classList.remove('active');
+      return;
+    }
+
     const resp = await fetch('/api/v1/updates/status/' + jobId);
     const data = await resp.json();
 
     const log = document.getElementById('updateLog');
-    log.textContent = data.output || '';
+    // Escape output to prevent HTML injection, then use innerHTML consistently
+    const esc = (s) => (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    log.innerHTML = esc(data.output || '').replace(/\n/g,'<br>');
 
     // Auto-scroll
     log.scrollTop = log.scrollHeight;
@@ -292,21 +313,21 @@ async function pollStatus(jobId) {
       const btnCheck = document.getElementById('btnCheck');
 
       if (data.status === 'success') {
-        log.innerHTML += '\n<span class="line-ok">✓ Update complete!</span>\n';
-        log.innerHTML += '<span class="line-ok">Restart API to apply changes.</span>\n';
+        log.innerHTML += '<br><span class="line-ok">✓ Update complete!</span><br>';
+        log.innerHTML += '<span class="line-ok">Restart API to apply changes.</span><br>';
         btnUpdate.textContent = 'Updated ✓';
         btnUpdate.classList.add('btn-blue');
         // Show restart button
         document.getElementById('restartSection').style.display = 'block';
       } else {
-        log.innerHTML += '\n<span class="line-err">✗ Update failed. Check log above.</span>\n';
+        log.innerHTML += '<br><span class="line-err">✗ Update failed. Check log above.</span><br>';
         btnUpdate.textContent = 'Retry';
         btnUpdate.disabled = false;
       }
       btnCheck.disabled = false;
     }
   } catch (e) {
-    // Keep polling
+    // Keep polling unless we've hit max
   }
 }
 

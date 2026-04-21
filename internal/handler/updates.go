@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -182,19 +183,18 @@ func (h *UpdateHandler) RunUpdate(w http.ResponseWriter, r *http.Request) {
 	// Find update.sh
 	scriptPath := filepath.Join(h.installDir, "scripts", "update.sh")
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
-		// Try downloading it
 		respondError(w, 404, "update script not found")
 		return
 	}
 
-	// Generate job ID
-	jobID := fmt.Sprintf("update-%d", os.Getpid())
+	// Generate job ID with timestamp for uniqueness
+	jobID := fmt.Sprintf("update-%d-%d", os.Getpid(), time.Now().Unix())
 
 	job := &UpdateJob{
 		ID:      jobID,
 		Status:  "running",
 		Output:  "Starting update...\n",
-		Started: fmt.Sprintf("%d", os.Getpid()),
+		Started: time.Now().Format(time.RFC3339),
 	}
 
 	h.mu.Lock()
@@ -203,13 +203,16 @@ func (h *UpdateHandler) RunUpdate(w http.ResponseWriter, r *http.Request) {
 
 	// Run update in background with streaming output
 	go func() {
+		// 10-minute hard timeout — prevents infinite hangs
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+
 		// Use stdbuf to force line-buffered output (bash buffers when piped)
-		// Fallback: use bash -u if stdbuf not available (e.g., macOS)
 		var cmd *exec.Cmd
 		if _, err := exec.LookPath("stdbuf"); err == nil {
-			cmd = exec.Command("stdbuf", "-oL", "bash", scriptPath, "--yes", "--no-restart")
+			cmd = exec.CommandContext(ctx, "stdbuf", "-oL", "bash", scriptPath, "--yes", "--no-restart")
 		} else {
-			cmd = exec.Command("bash", scriptPath, "--yes", "--no-restart")
+			cmd = exec.CommandContext(ctx, "bash", scriptPath, "--yes", "--no-restart")
 		}
 		cmd.Dir = h.installDir
 		cmd.Env = append(os.Environ(),
@@ -262,11 +265,15 @@ func (h *UpdateHandler) RunUpdate(w http.ResponseWriter, r *http.Request) {
 		<-done
 		<-done
 
-		// Wait for process to exit
+		// Wait for process to exit (or context timeout)
 		err = cmd.Wait()
 
 		h.mu.Lock()
-		if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			job.Status = "error"
+			job.Output += "\nError: Update timed out after 10 minutes."
+			slog.Error("update timed out")
+		} else if err != nil {
 			job.Status = "error"
 			job.Output += "\nError: " + err.Error()
 			slog.Error("update failed", "error", err)
