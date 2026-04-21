@@ -165,7 +165,10 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 			r.Get("/{id}/neighbors", eh.GetNeighbors)
 			r.Get("/{id}/path/{targetID}", eh.FindPath)
 			r.Get("/{id}/history", nh.GetHistory)
+			r.Get("/{id}/suggestions", nh.Suggestions)
 			r.Post("/{id}/compact", nh.Compact)
+			r.Post("/dqa/snapshot", nh.SaveDQASnapshot)
+			r.Get("/dqa/trend", nh.GetDQATrend)
 		})
 
 		// Edges
@@ -198,6 +201,10 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 
 		// Batch + Export/Import + Purge
 		RegisterBatchRoutes(r, bh)
+
+		// Graph Analytics
+		gah := NewGraphAnalyticsHandler(pool)
+		r.Get("/analytics/graph", gah.GraphMetrics)
 
 		// Updates
 		RegisterUpdateRoutes(r, uh)

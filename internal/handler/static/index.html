@@ -119,6 +119,17 @@ textarea{resize:vertical;min-height:50px}
     <div class="card"><h3>Latency</h3><div class="val" id="statLat">-</div><div class="sub">avg ms</div></div>
   </div>
   <div class="section"><div class="section-hdr"><h2>Namespaces</h2></div><div class="ns-bars" id="nsBars"></div></div>
+  <div class="section">
+    <div class="section-hdr"><h2>Graph Health Trend</h2><span style="font-size:11px;color:var(--text-dim)" id="dqa-trend-info"></span></div>
+    <div style="padding:14px">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+        <div style="font-size:32px;font-weight:700" id="dqa-trend-current">-</div>
+        <div id="dqa-trend-arrow" style="font-size:16px"></div>
+        <div style="font-size:11px;color:var(--text-dim)" id="dqa-trend-prev">No previous data</div>
+      </div>
+      <div style="display:flex;align-items:flex-end;gap:2px;height:40px" id="dqa-trend-sparkline"></div>
+    </div>
+  </div>
   <div class="section"><div class="section-hdr"><h2>Activity Feed</h2><span style="font-size:10px;color:#444" id="feedCount"></span></div><div class="feed" id="activityFeed"></div></div>
   <div class="section"><div class="section-hdr"><h2>Create Node</h2></div><div style="padding:12px">
     <div class="form-row"><input id="nodeLabel" placeholder="Label"><select id="nodeType"><option value="decision">Decision</option><option value="fact">Fact</option><option value="preference">Preference</option><option value="problem">Problem</option><option value="advice">Advice</option><option value="project">Project</option><option value="question">Question</option><option value="topic">Topic</option><option value="concept">Concept</option></select><input id="nodeNamespace" placeholder="Namespace" value="hermes" style="max-width:120px"></div>
@@ -214,6 +225,45 @@ textarea{resize:vertical;min-height:50px}
       <div id="recalcResult" style="margin-top:8px;font-size:11px;color:#888"></div>
     </div></div>
     <div class="section"><div class="section-hdr"><h2>System Health</h2></div><div id="healthDetail" style="padding:14px;font-size:11px;color:#888"></div></div>
+    <!-- Graph Analytics -->
+    <div class="section">
+      <div class="section-hdr"><h2>Graph Analytics</h2></div>
+      <div style="padding:14px">
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+          <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;min-width:100px;flex:1">
+            <div style="font-size:11px;color:var(--text-dim)">Nodes</div>
+            <div style="font-size:18px;font-weight:600;color:var(--accent)" id="ga-nodes">-</div>
+          </div>
+          <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;min-width:100px;flex:1">
+            <div style="font-size:11px;color:var(--text-dim)">Edges</div>
+            <div style="font-size:18px;font-weight:600;color:var(--accent)" id="ga-edges">-</div>
+          </div>
+          <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;min-width:100px;flex:1">
+            <div style="font-size:11px;color:var(--text-dim)">Density</div>
+            <div style="font-size:18px;font-weight:600;color:var(--green)" id="ga-density">-</div>
+          </div>
+          <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;min-width:100px;flex:1">
+            <div style="font-size:11px;color:var(--text-dim)">Avg Conn</div>
+            <div style="font-size:18px;font-weight:600;color:var(--yellow)" id="ga-avg">-</div>
+          </div>
+          <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;min-width:100px;flex:1">
+            <div style="font-size:11px;color:var(--text-dim)">Clusters</div>
+            <div style="font-size:18px;font-weight:600;color:var(--red)" id="ga-clusters">-</div>
+          </div>
+        </div>
+        <div style="margin-bottom:12px">
+          <div style="font-size:12px;font-weight:500;margin-bottom:6px;color:var(--accent)">Hub Nodes (most connected)</div>
+          <div id="ga-hubs" style="font-size:11px;color:var(--text-dim)">Click Load to see hub nodes</div>
+        </div>
+        <div>
+          <div style="font-size:12px;font-weight:500;margin-bottom:6px;color:var(--accent)">Bridge Nodes (articulation points)</div>
+          <div id="ga-bridges" style="font-size:11px;color:var(--text-dim)">Click Load to see bridge nodes</div>
+        </div>
+        <div style="margin-top:10px">
+          <button class="btn" onclick="loadGraphAnalytics()" style="background:var(--accent);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Load Analytics</button>
+        </div>
+      </div>
+    </div>
     <!-- Batch Node Manager -->
     <div class="section" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px">
       <div class="section-hdr" style="font-size:16px;font-weight:600;margin-bottom:16px;color:var(--accent)">Batch Node Manager</div>
@@ -315,6 +365,55 @@ textarea{resize:vertical;min-height:50px}
         </div>
         <button class="btn" onclick="createEdge()">Create Edge</button>
         <div class="activity-feed" id="ec-activity"></div>
+      </div>
+    </div>
+    <!-- Bulk Edge Manager -->
+    <div class="section">
+      <div class="section-hdr">Bulk Edge Manager</div>
+      <!-- Delete by Type -->
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px">
+        <div style="font-size:14px;font-weight:500;margin-bottom:12px;color:var(--red)">Delete Edges by Type</div>
+        <div class="form-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <select id="bulk-edge-type" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px">
+            <option value="">Select type...</option>
+            <option value="contains">contains</option>
+            <option value="relates_to">relates_to</option>
+            <option value="supports">supports</option>
+            <option value="contradicts">contradicts</option>
+            <option value="decided_by">decided_by</option>
+            <option value="depends_on">depends_on</option>
+            <option value="mentions">mentions</option>
+          </select>
+          <button class="btn" onclick="bulkDeleteEdgePreview()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px">Preview</button>
+          <button class="btn btn-red" onclick="bulkDeleteEdges()" style="background:var(--red);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Delete All</button>
+        </div>
+        <div id="bulk-edge-preview" style="margin-top:8px;font-size:12px;color:var(--text-dim)"></div>
+      </div>
+      <!-- Connect Namespaces -->
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:16px">
+        <div style="font-size:14px;font-weight:500;margin-bottom:12px;color:var(--green)">Connect Namespaces by Similarity</div>
+        <div style="font-size:12px;color:var(--text-dim);margin-bottom:10px">Create semantic edges between nodes in two namespaces using embedding similarity.</div>
+        <div class="form-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+          <select id="bulk-connect-source" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px">
+            <option value="">Source NS...</option>
+          </select>
+          <span style="font-size:13px;color:var(--text-dim)">→</span>
+          <select id="bulk-connect-target" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px">
+            <option value="">Target NS...</option>
+          </select>
+        </div>
+        <div class="form-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+          <label style="font-size:12px;color:var(--text-dim)">Top matches per node:</label>
+          <input type="number" id="bulk-connect-limit" value="3" min="1" max="10" style="width:50px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:6px;font-size:13px">
+          <label style="font-size:12px;color:var(--text-dim)">Threshold:</label>
+          <input type="number" id="bulk-connect-threshold" value="0.70" min="0.1" max="1.0" step="0.05" style="width:60px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:6px;font-size:13px">
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-blue" onclick="connectNamespacesPreview()" style="background:var(--accent);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Preview</button>
+          <button class="btn" onclick="connectNamespacesRun()" style="background:var(--green);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Connect</button>
+          <span id="bulk-connect-status" style="font-size:12px;color:var(--text-dim)"></span>
+        </div>
+        <div id="bulk-connect-preview" style="margin-top:10px;font-size:12px;color:var(--text-dim);display:none"></div>
       </div>
     </div>
     <!-- Data Quality Analyzer -->
@@ -489,6 +588,7 @@ textarea{resize:vertical;min-height:50px}
     <button class="btn btn-red btn-sm" onclick="closeDetail()">Close</button></div>
   <div style="padding:14px"><div id="detailMeta" style="margin-bottom:12px;font-size:12px"></div><div id="detailContent" style="margin-bottom:12px;font-size:12px;line-height:1.5;color:#aaa"></div>
     <h3 style="font-size:10px;color:#555;text-transform:uppercase;margin-bottom:6px">Connections</h3><div id="detailNeighbors"></div>
+    <h3 style="font-size:10px;color:#555;text-transform:uppercase;margin:12px 0 6px">Suggested Edges</h3><div id="detailSuggestions"></div>
     <h3 style="font-size:10px;color:#555;text-transform:uppercase;margin:12px 0 6px">History</h3><div id="detailHistory"></div></div>
 </div></div>
 
@@ -571,7 +671,7 @@ async function loadStats(){
     const c=nsColors[ns];const pct=(cnt/maxN*100).toFixed(0);
     return`<div class="ns-bar"><div class="dot" style="background:${c};box-shadow:0 0 6px ${c}"></div><div class="name">${esc(ns)}</div><div class="bar-bg"><div class="bar-fill" style="width:${pct}%;background:${c}"></div></div><div class="cnt">${cnt}</div></div>`
   }).join('');
-  ['filterNS','graphNS','snapNS','connectNS','exportNS','edgeNSFilter'].forEach(id=>{
+  ['filterNS','graphNS','snapNS','connectNS','exportNS','edgeNSFilter','bulk-connect-source','bulk-connect-target'].forEach(id=>{
     const el=document.getElementById(id);if(!el)return;const cur=el.value;
     el.innerHTML='<option value="">All</option>';
     Object.keys(nsMap).forEach(ns=>{el.innerHTML+=`<option value="${ns}"${ns===cur?' selected':''}>${ns}</option>`})
@@ -664,9 +764,44 @@ async function showDetail(id){
   document.getElementById('detailContent').textContent=n.content||'No content';
   const nb=await api('/nodes/'+id+'/neighbors');
   document.getElementById('detailNeighbors').innerHTML=nb&&nb.length?nb.map(x=>`<div style="padding:4px 0;border-bottom:1px solid #ffffff06;font-size:11px"><span style="color:#555">${x.edge_type}</span> → <a href="#" onclick="showDetail('${x.id}');return false" style="color:#00ff88;text-decoration:none"><span style="background:${tagBg(x.node_type)}18;color:${tagBg(x.node_type)};padding:1px 4px;border-radius:2px;font-size:9px">${x.node_type}</span> ${esc(x.label)}</a></div>`).join(''):'<div style="color:#444;font-size:11px">No connections</div>';
+  // Load suggestions
+  const suggestions = await api('/nodes/' + id + '/suggestions?limit=10');
+  const sugEl = document.getElementById('detailSuggestions');
+  if (suggestions && suggestions.length > 0) {
+    sugEl.innerHTML = suggestions.map(s => `
+      <div style="padding:4px 0;border-bottom:1px solid #ffffff06;font-size:11px;display:flex;align-items:center;gap:8px">
+        <a href="#" onclick="showDetail('${s.id}');return false" style="color:#00ff88;text-decoration:none;flex:1">
+          <span style="background:${tagBg(s.node_type)}18;color:${tagBg(s.node_type)};padding:1px 4px;border-radius:2px;font-size:9px">${s.node_type}</span>
+          ${esc(s.label)} <span style="color:#555;font-size:10px">${esc(s.namespace)}</span>
+        </a>
+        <span style="color:#444;font-size:10px">${(s.similarity * 100).toFixed(0)}%</span>
+        <button class="btn btn-sm" onclick="createSuggestionEdge('${id}', '${s.id}');return false" style="padding:2px 8px;font-size:10px;background:var(--green);color:#fff;border:none;border-radius:4px;cursor:pointer">+Edge</button>
+      </div>
+    `).join('');
+  } else {
+    sugEl.innerHTML = '<div style="color:#444;font-size:11px">No suggestions (embeddings may be pending)</div>';
+  }
   const hist=await api('/nodes/'+id+'/history');
   document.getElementById('detailHistory').innerHTML=hist&&hist.length>1?hist.map(h=>`<div style="padding:3px 0;font-size:11px;border-bottom:1px solid #ffffff06">v${h.version}: ${esc((h.content||'').substring(0,50))} <span style="color:#444">${h.valid_to?'superseded':'current'}</span></div>`).join(''):'<div style="color:#444;font-size:11px">v1 only</div>';
   document.getElementById('nodeDetail').classList.add('show');
+}
+
+async function createSuggestionEdge(sourceId, targetId) {
+  try {
+    const r = await fetch(API + '/edges', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ source_id: sourceId, target_id: targetId, edge_type: 'relates_to', weight: 1.0 })
+    });
+    if (r.ok) {
+      toast('Edge created', 'success');
+      showDetail(sourceId); // refresh to update suggestions
+    } else {
+      toast('Failed to create edge', 'error');
+    }
+  } catch(e) {
+    toast('Error: ' + e.message, 'error');
+  }
 }
 function closeDetail(){document.getElementById('nodeDetail').classList.remove('show')}
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDetail()});
@@ -959,7 +1094,7 @@ async function recalcImportance(){
 
 // === Init ===
 loadHealth();loadOllamaStats();loadStats().then(()=>{lastDashNodeCount=parseInt(document.getElementById('statNodes').textContent)||0});
-loadNodes();loadSnapshot();
+loadNodes();loadSnapshot();loadDQATrend();
 // Recalculate importance scores on first load (one-time)
 if(!sessionStorage.getItem('mb_recalc_done')){api('/nodes/recalculate',{method:'POST'}).then(r=>{if(r&&r.rows_updated){sessionStorage.setItem('mb_recalc_done','1');addFeed('recalc',r.rows_updated+' nodes scored');loadStats();loadNodes()}})}
 pollHealthId=setInterval(loadHealth,30000);
@@ -1284,6 +1419,135 @@ async function bulkDeleteAll() {
 
 function addActivity(msg) { addFeed('create', msg); }
 loadEdgeNodesCache();
+
+// === Bulk Edge Manager ===
+async function bulkDeleteEdgePreview() {
+  const edgeType = document.getElementById('bulk-edge-type').value;
+  const previewEl = document.getElementById('bulk-edge-preview');
+  if (!edgeType) { previewEl.textContent = 'Select an edge type first'; return; }
+  try {
+    const r = await fetch(API + '/edges?type=' + encodeURIComponent(edgeType) + '&limit=1000');
+    let edges = await r.json();
+    if (!Array.isArray(edges)) edges = [];
+    if (edges.length === 0) {
+      previewEl.innerHTML = '<span style="color:var(--text-dim)">No edges of type "' + esc(edgeType) + '" found.</span>';
+      return;
+    }
+    previewEl.innerHTML = '<span style="color:var(--red)">' + edges.length + ' edge(s)</span> of type "' + esc(edgeType) + '" will be deleted.';
+  } catch(e) {
+    previewEl.textContent = 'Preview failed: ' + e.message;
+  }
+}
+
+async function bulkDeleteEdges() {
+  const edgeType = document.getElementById('bulk-edge-type').value;
+  if (!edgeType) { toast('Select an edge type', 'error'); return; }
+  const previewEl = document.getElementById('bulk-edge-preview');
+  try {
+    const r = await fetch(API + '/edges?type=' + encodeURIComponent(edgeType) + '&limit=1000');
+    let edges = await r.json();
+    if (!Array.isArray(edges)) edges = [];
+    if (edges.length === 0) { toast('No edges to delete', 'warn'); return; }
+    if (!confirm('DELETE all ' + edges.length + '+ edges of type "' + edgeType + '"? This cannot be undone!')) return;
+
+    // Use the batch delete endpoint
+    const dr = await fetch(API + '/edges?type=' + encodeURIComponent(edgeType), { method: 'DELETE' });
+    const data = await dr.json();
+    if (dr.ok) {
+      toast('Deleted ' + data.deleted + ' edge(s)', 'success');
+    } else {
+      toast('Delete failed: ' + (data.error || 'unknown'), 'error');
+    }
+    previewEl.textContent = '';
+    loadGraph();
+  } catch(e) {
+    toast('Bulk delete failed: ' + e.message, 'error');
+  }
+}
+
+let _nsConnectPreview = [];
+
+async function connectNamespacesPreview() {
+  const source = document.getElementById('bulk-connect-source').value;
+  const target = document.getElementById('bulk-connect-target').value;
+  const limit = document.getElementById('bulk-connect-limit').value;
+  const threshold = document.getElementById('bulk-connect-threshold').value;
+  const statusEl = document.getElementById('bulk-connect-status');
+  const previewEl = document.getElementById('bulk-connect-preview');
+
+  if (!source || !target) { statusEl.textContent = 'Select both namespaces'; return; }
+  statusEl.textContent = 'Searching...';
+  try {
+    const r = await fetch(API + '/edges/connect-namespaces?source=' + encodeURIComponent(source) + '&target=' + encodeURIComponent(target) + '&limit=' + limit + '&threshold=' + threshold, { method: 'POST' });
+    const data = await r.json();
+    if (data.error) { statusEl.textContent = 'Error: ' + data.error; return; }
+    _nsConnectPreview = data.pairs_found || 0;
+    statusEl.textContent = data.pairs_found + ' similar pairs found, ' + data.edges_created + ' edges created';
+    previewEl.style.display = 'block';
+    previewEl.innerHTML = '<span style="color:var(--green)">Created ' + data.edges_created + ' edges</span> between "' + esc(source) + '" and "' + esc(target) + '"';
+    loadGraph();
+  } catch(e) {
+    statusEl.textContent = 'Failed: ' + e.message;
+  }
+}
+
+async function connectNamespacesRun() {
+  // Same as preview — the endpoint is idempotent (uses ON CONFLICT DO NOTHING)
+  await connectNamespacesPreview();
+}
+
+// === DQA Trend ===
+async function saveDQASnapshot(score, totalNodes, issuesCount) {
+  try {
+    await fetch(API + '/dqa/snapshot', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ score, total_nodes: totalNodes, issues_count: issuesCount })
+    });
+  } catch(e) { console.error('Failed to save DQA snapshot', e); }
+}
+
+async function loadDQATrend() {
+  try {
+    const r = await fetch(API + '/dqa/trend?days=30');
+    const data = await r.json();
+    if (!Array.isArray(data) || data.length === 0) {
+      document.getElementById('dqa-trend-current').textContent = '-';
+      document.getElementById('dqa-trend-info').textContent = 'Run DQA to start tracking';
+      return;
+    }
+    const latest = data[data.length - 1];
+    const prev = data.length > 1 ? data[data.length - 2] : null;
+    document.getElementById('dqa-trend-current').textContent = latest.score + '%';
+    document.getElementById('dqa-trend-current').style.color = latest.score >= 80 ? 'var(--green)' : latest.score >= 50 ? 'var(--yellow)' : 'var(--red)';
+
+    if (prev) {
+      const diff = latest.score - prev.score;
+      const arrow = diff > 0 ? '↑' : diff < 0 ? '↓' : '→';
+      const color = diff > 0 ? 'var(--green)' : diff < 0 ? 'var(--red)' : 'var(--text-dim)';
+      document.getElementById('dqa-trend-arrow').innerHTML = '<span style="color:' + color + '">' + arrow + ' ' + Math.abs(diff) + '%</span>';
+      document.getElementById('dqa-trend-prev').textContent = 'Previous: ' + prev.score + '% (' + new Date(prev.created_at).toLocaleDateString() + ')';
+    } else {
+      document.getElementById('dqa-trend-arrow').textContent = '';
+      document.getElementById('dqa-trend-prev').textContent = 'First snapshot';
+    }
+    document.getElementById('dqa-trend-info').textContent = data.length + ' snapshots · ' + latest.total_nodes + ' nodes · ' + latest.issues_count + ' issues';
+
+    // Render sparkline
+    const maxScore = Math.max(...data.map(d => d.score), 100);
+    const minScore = Math.min(...data.map(d => d.score), 0);
+    const range = maxScore - minScore || 1;
+    const sparklineEl = document.getElementById('dqa-trend-sparkline');
+    sparklineEl.innerHTML = data.map(d => {
+      const h = Math.max(4, ((d.score - minScore) / range) * 36);
+      const c = d.score >= 80 ? 'var(--green)' : d.score >= 50 ? 'var(--yellow)' : 'var(--red)';
+      return '<div style="flex:1;background:' + c + ';border-radius:2px;height:' + h + 'px;opacity:0.7" title="' + d.score + '% (' + new Date(d.created_at).toLocaleDateString() + ')"></div>';
+    }).join('');
+  } catch(e) {
+    console.error('DQA trend load failed', e);
+  }
+}
+
 // === Data Quality Analyzer ===
 let dqaResults = {};
 let dqaChecked = new Set();
@@ -1411,6 +1675,10 @@ async function runQualityAnalysis() {
     const totalIssues = orphans.length + disconnected.length + duplicates.length + emptyContent.length + lowImportance.length;
     scoreDetail.textContent = nodes.length + ' nodes checked · ' + totalIssues + ' issues found';
     scoreEl.style.display = 'block';
+
+    // Save snapshot for trend tracking
+    saveDQASnapshot(score, nodes.length, totalIssues);
+    loadDQATrend(); // refresh dashboard sparkline
 
     // Render categories
     renderDqaResults();
@@ -2038,6 +2306,41 @@ async function compactSelectedStale() {
   }
   toast('Compacted ' + totalCompacted + ' version(s) from ' + success + ' node(s)' + (failed ? ', ' + failed + ' failed' : ''));
   findStaleNodes();
+}
+
+// === Graph Analytics ===
+async function loadGraphAnalytics() {
+  const btn = document.querySelector('[onclick="loadGraphAnalytics()"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Loading...'; }
+  try {
+    const r = await fetch(API + '/analytics/graph');
+    const data = await r.json();
+    if (!data) return;
+    document.getElementById('ga-nodes').textContent = data.node_count || 0;
+    document.getElementById('ga-edges').textContent = data.edge_count || 0;
+    document.getElementById('ga-density').textContent = data.density || '0.000';
+    document.getElementById('ga-avg').textContent = data.avg_connections || '0.000';
+    document.getElementById('ga-clusters').textContent = data.components || 0;
+
+    const hubs = data.hub_nodes || [];
+    document.getElementById('ga-hubs').innerHTML = hubs.length > 0
+      ? hubs.map(h => `<div style="padding:3px 0;border-bottom:1px solid var(--border);display:flex;gap:8px">
+        <span style="flex:1"><a href="#" onclick="showDetail('${h.id}');return false" style="color:var(--green);text-decoration:none">${esc(h.label)}</a> <span style="color:var(--text-dim);font-size:10px">${esc(h.namespace)}</span></span>
+        <span style="color:var(--accent);font-size:10px">${h.degree} conn</span>
+      </div>`).join('')
+      : '<span style="color:var(--text-dim)">No hub nodes found</span>';
+
+    const bridges = data.bridge_nodes || [];
+    document.getElementById('ga-bridges').innerHTML = bridges.length > 0
+      ? bridges.map(b => `<div style="padding:3px 0;border-bottom:1px solid var(--border)">
+        <a href="#" onclick="showDetail('${b.id}');return false" style="color:var(--yellow);text-decoration:none">${esc(b.id.substring(0, 8))}...</a>
+      </div>`).join('')
+      : '<span style="color:var(--text-dim)">No bridge nodes found</span>';
+  } catch(e) {
+    console.error('Graph analytics failed', e);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Load Analytics'; }
+  }
 }
 
 function toast(msg, isError) {
