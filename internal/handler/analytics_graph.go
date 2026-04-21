@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 
@@ -83,7 +84,7 @@ func (h *GraphAnalyticsHandler) GraphMetrics(w http.ResponseWriter, r *http.Requ
 	components := findConnectedComponents(adj, nodeSet)
 
 	// 5. Articulation points (bridge nodes) - Tarjan's algorithm
-	bridges := findArticulationPoints(adj, nodeSet)
+	bridges := h.findArticulationPoints(adj, nodeSet, ctx)
 
 	// 6. Density
 	density := 0.0
@@ -145,7 +146,7 @@ func largestComponentSize(components [][]string) int {
 	return maxSize
 }
 
-func findArticulationPoints(adj map[string][]string, nodeSet map[string]bool) []map[string]any {
+func (h *GraphAnalyticsHandler) findArticulationPoints(adj map[string][]string, nodeSet map[string]bool, ctx context.Context) []map[string]any {
 	// Tarjan's articulation point algorithm
 	if len(nodeSet) == 0 {
 		return nil
@@ -194,25 +195,35 @@ func findArticulationPoints(adj map[string][]string, nodeSet map[string]bool) []
 
 	// Resolve IDs to labels
 	var result []map[string]any
-	for id := range ap {
-		var label string
-		// Try to get label from DB - skip if fails
-		result = append(result, map[string]any{
-			"id":    id,
-			"label": label,
-		})
-	}
-
-	// Fetch labels in batch
 	if len(ap) > 0 {
-		// Build placeholders
 		ids := make([]string, 0, len(ap))
 		for id := range ap {
 			ids = append(ids, id)
 		}
-		// Simple approach: skip label resolution for now, just return IDs
-		// The frontend can fetch labels if needed
-		_ = ids
+		// Fetch labels in batch
+		labelMap := make(map[string]string)
+		nsMap := make(map[string]string)
+		rows, err := h.pool.Query(ctx, `
+			SELECT id, label, namespace FROM nodes
+			WHERE id = ANY($1) AND valid_to IS NULL
+		`, ids)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var id, label, ns string
+				if err := rows.Scan(&id, &label, &ns); err == nil {
+					labelMap[id] = label
+					nsMap[id] = ns
+				}
+			}
+		}
+		for id := range ap {
+			result = append(result, map[string]any{
+				"id":        id,
+				"label":     labelMap[id],
+				"namespace": nsMap[id],
+			})
+		}
 	}
 
 	return result

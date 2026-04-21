@@ -205,15 +205,6 @@ textarea{resize:vertical;min-height:50px}
   <div class="tools-group">
     <div class="tools-group-hdr">Maintenance</div>
     <div class="tool-card">
-      <div class="tool-card-hdr">Auto-Connect</div>
-      <div class="tool-card-desc">Create semantic edges between related nodes within the same namespace. Skips existing edges automatically.</div>
-      <div class="tool-actions">
-        <select id="connectNS" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px;min-width:160px"><option value="">All Namespaces</option></select>
-        <button class="btn btn-blue" onclick="autoConnect()" style="background:var(--accent);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Run Auto-Connect</button>
-        <span id="connectResult" style="font-size:12px;color:var(--text-dim)"></span>
-      </div>
-    </div>
-    <div class="tool-card">
       <div class="tool-card-hdr">Clean Orphan Edges</div>
       <div class="tool-card-desc">Delete edges referencing nodes that no longer exist (from temporal version updates).</div>
       <div class="tool-actions">
@@ -252,22 +243,6 @@ textarea{resize:vertical;min-height:50px}
         <button class="btn" onclick="importGraph()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Import</button>
         <span id="importResult" style="font-size:12px;color:var(--text-dim)"></span>
       </div>
-    </div>
-    <div class="tool-card">
-      <div class="tool-card-hdr">Import from Obsidian</div>
-      <div class="tool-card-desc">Import notes from an Obsidian vault. Creates nodes from notes, edges from wikilinks and tags.</div>
-      <div class="form-row" style="margin-bottom:8px">
-        <input id="obsidianVault" placeholder="/path/to/Obsidian Vault" style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px">
-      </div>
-      <div class="tool-actions" style="margin-bottom:8px">
-        <input id="obsidianNS" placeholder="Namespace (optional)" style="width:160px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px">
-        <label style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:4px">
-          <input type="checkbox" id="obsidianDryRun"> Dry Run
-        </label>
-        <button class="btn btn-blue" onclick="runObsidianImport()" style="background:var(--accent);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Import</button>
-      </div>
-      <div id="obsidianStatus" style="font-size:12px;color:var(--text-dim)"></div>
-      <div id="obsidianOutput" style="margin-top:8px;max-height:200px;overflow-y:auto;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:8px;font-size:10px;font-family:monospace;color:var(--text-dim);display:none"></div>
     </div>
   </div>
 
@@ -308,14 +283,6 @@ textarea{resize:vertical;min-height:50px}
         <div id="ga-bridges" style="font-size:11px;color:var(--text-dim)">Click Load to see bridge nodes</div>
       </div>
       <button class="btn" onclick="loadGraphAnalytics()" style="background:var(--accent);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Load Analytics</button>
-    </div>
-    <div class="tool-card">
-      <div class="tool-card-hdr">Importance Scores</div>
-      <div class="tool-card-desc">Recalculate importance using recency (30%), frequency (25%), connectivity (20%), type weight (10%), and explicit score (15%).</div>
-      <div class="tool-actions">
-        <button class="btn" onclick="recalcImportance()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Recalculate Now</button>
-        <span id="recalcResult" style="font-size:12px;color:var(--text-dim)"></span>
-      </div>
     </div>
   </div>
 
@@ -541,12 +508,6 @@ textarea{resize:vertical;min-height:50px}
       </div>
       <div style="border-top:1px solid var(--border);padding-top:14px">
         <div style="font-size:13px;font-weight:500;margin-bottom:8px;color:var(--accent)">Bulk Version Operations</div>
-        <div class="tool-actions" style="margin-bottom:10px">
-          <label style="font-size:12px;color:var(--text-dim);white-space:nowrap">Expire older than</label>
-          <input type="number" id="vm-purge-days" value="90" min="1" style="width:60px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px">
-          <span style="font-size:11px;color:var(--text-dim)">days</span>
-          <button onclick="expireOldVersions()" style="background:var(--red);color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Expire</button>
-        </div>
         <div class="tool-actions" style="margin-bottom:10px">
           <button onclick="findStaleNodes()" style="background:var(--accent);color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Find Stale Nodes (version > 5)</button>
         </div>
@@ -1486,10 +1447,16 @@ async function connectNamespacesPreview() {
     const data = await r.json();
     if (data.error) { statusEl.textContent = 'Error: ' + data.error; return; }
     _nsConnectPreview = data.pairs_found || 0;
-    statusEl.textContent = data.pairs_found + ' similar pairs found, ' + data.edges_created + ' edges created';
-    previewEl.style.display = 'block';
-    previewEl.innerHTML = '<span style="color:var(--green)">Created ' + data.edges_created + ' edges</span> between "' + esc(source) + '" and "' + esc(target) + '"';
-    loadGraph();
+    if (data.pairs_found === 0) {
+      statusEl.textContent = '0 pairs found';
+      previewEl.style.display = 'block';
+      previewEl.innerHTML = '<span style="color:var(--text-dim)">No similar nodes found. This usually means embeddings are not yet generated for nodes in these namespaces. Wait for the embedding worker to catch up, or check Ollama status.</span>';
+    } else {
+      statusEl.textContent = data.pairs_found + ' similar pairs found, ' + data.edges_created + ' edges created';
+      previewEl.style.display = 'block';
+      previewEl.innerHTML = '<span style="color:var(--green)">Created ' + data.edges_created + ' edges</span> between "' + esc(source) + '" and "' + esc(target) + '"';
+      loadGraph();
+    }
   } catch(e) {
     statusEl.textContent = 'Failed: ' + e.message;
   }
@@ -1904,6 +1871,7 @@ async function fixSelected() {
   btn.disabled = true;
   btn.textContent = 'Fixing...';
 
+  // Safe fixes only: link orphans and auto-connect disconnected
   if (byCategory.orphan.length > 0) {
     const nsSet = new Set();
     byCategory.orphan.forEach(id => {
@@ -1938,27 +1906,18 @@ async function fixSelected() {
     summary.push('Disconnected: created ' + connected + ' edges');
   }
 
+  // Never auto-delete. Warn about items that need manual review.
   if (byCategory.duplicate.length > 0) {
-    let deleted = 0;
-    for (const id of byCategory.duplicate) {
-      try { await fetch(API + '/nodes/' + id, { method: 'DELETE' }); deleted++; } catch(e) {}
-    }
-    summary.push('Duplicates: deleted ' + deleted + ' nodes');
+    summary.push('Duplicates: ' + byCategory.duplicate.length + ' nodes need manual review');
   }
-
   if (byCategory.empty.length > 0) {
-    let deleted = 0;
-    for (const id of byCategory.empty) {
-      try { await fetch(API + '/nodes/' + id, { method: 'DELETE' }); deleted++; } catch(e) {}
-    }
-    summary.push('Empty content: deleted ' + deleted + ' nodes');
+    summary.push('Empty content: ' + byCategory.empty.length + ' nodes need manual review');
   }
-
   if (byCategory.lowImportance.length > 0) {
-    summary.push('Low importance: skipped ' + byCategory.lowImportance.length + ' nodes (manual review needed)');
+    summary.push('Low importance: ' + byCategory.lowImportance.length + ' nodes need manual review');
   }
 
-  toast(summary.join(' · '));
+  toast(summary.join(' \u00b7 '));
   btn.disabled = false;
   btn.textContent = 'Fix Selected (0)';
   dqaChecked = new Set();
@@ -2421,8 +2380,8 @@ async function loadGraphAnalytics() {
 
     const bridges = data.bridge_nodes || [];
     document.getElementById('ga-bridges').innerHTML = bridges.length > 0
-      ? bridges.map(b => `<div style="padding:3px 0;border-bottom:1px solid var(--border)">
-        <a href="#" onclick="showDetail('${b.id}');return false" style="color:var(--yellow);text-decoration:none">${esc(b.id.substring(0, 8))}...</a>
+      ? bridges.map(b => `<div style="padding:3px 0;border-bottom:1px solid var(--border);display:flex;gap:8px">
+        <span style="flex:1"><a href="#" onclick="showDetail('${b.id}');return false" style="color:var(--yellow);text-decoration:none">${esc(b.label || b.id.substring(0,8))}</a> <span style="color:var(--text-dim);font-size:10px">${esc(b.namespace || '')}</span></span>
       </div>`).join('')
       : '<span style="color:var(--text-dim)">No bridge nodes found</span>';
   } catch(e) {
