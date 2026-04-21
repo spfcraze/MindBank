@@ -177,255 +177,265 @@ textarea{resize:vertical;min-height:50px}
 
 <!-- TOOLS TAB -->
 <div class="container tab-content" id="tab-tools">
-  <div class="grid" style="grid-template-columns:1fr 1fr">
-    <div class="section"><div class="section-hdr"><h2>Auto-Connect</h2></div><div style="padding:14px">
-      <p style="font-size:11px;color:#888;margin-bottom:10px">Create semantic edges between related nodes. Groups by namespace, skips existing edges.</p>
-      <div class="form-row"><select id="connectNS" style="flex:1"><option value="">All Namespaces</option></select><button class="btn btn-blue" onclick="autoConnect()">Run Auto-Connect</button></div>
-      <div id="connectResult" style="margin-top:8px;font-size:11px;color:#888"></div>
-    </div></div>
-    <div class="section"><div class="section-hdr"><h2>Clean Orphan Edges</h2></div><div style="padding:14px">
-      <p style="font-size:11px;color:#888;margin-bottom:10px">Delete edges referencing nodes that no longer exist (from temporal version updates).</p>
-      <button class="btn btn-red" onclick="cleanupEdges()">Clean Orphan Edges</button>
-      <div id="cleanupResult" style="margin-top:8px;font-size:11px;color:#888"></div>
-    </div></div>
-    <div class="section"><div class="section-hdr"><h2>Purge Old Versions</h2></div><div style="padding:14px">
-      <p style="font-size:11px;color:#888;margin-bottom:10px">Hard-delete temporal versions older than N days. Reduces query overhead.</p>
-      <div class="form-row"><input id="purgeDays" type="number" value="7" min="1" max="365" style="max-width:80px"><span style="font-size:11px;color:#666;line-height:30px">days</span><button class="btn btn-red" onclick="purgeVersions()">Purge</button></div>
-      <div id="purgeResult" style="margin-top:8px;font-size:11px;color:#888"></div>
-    </div></div>
-    <div class="section"><div class="section-hdr"><h2>Export</h2></div><div style="padding:14px">
-      <p style="font-size:11px;color:#888;margin-bottom:10px">Download graph as JSON for backup or migration.</p>
-      <div class="form-row"><select id="exportNS" style="flex:1"><option value="">All Namespaces</option></select><button class="btn" onclick="exportGraph()">Export JSON</button></div>
-    </div></div>
-    <div class="section"><div class="section-hdr"><h2>Import JSON</h2></div><div style="padding:14px">
-      <p style="font-size:11px;color:#888;margin-bottom:10px">Import nodes and edges from a JSON export file.</p>
-      <textarea id="importJSON" placeholder='{"nodes":[...],"edges":[...]}' style="height:80px;font-size:10px"></textarea>
-      <div style="margin-top:8px"><button class="btn" onclick="importGraph()">Import</button></div>
-      <div id="importResult" style="margin-top:8px;font-size:11px;color:#888"></div>
-    </div></div>
-    <div class="section"><div class="section-hdr"><h2>Import from Obsidian</h2></div><div style="padding:14px">
-      <p style="font-size:11px;color:#888;margin-bottom:10px">Import notes from an Obsidian vault. Creates nodes from notes, edges from wikilinks and tags.</p>
-      <div class="form-row" style="margin-bottom:8px">
-        <input id="obsidianVault" placeholder="/path/to/Obsidian Vault" style="flex:1">
+  <style>
+    .tools-group { margin-bottom: 20px; }
+    .tools-group-hdr { font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--text-dim); margin-bottom: 10px; letter-spacing: 0.5px; }
+    .tool-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+    .tool-card-hdr { font-size: 14px; font-weight: 600; margin-bottom: 6px; color: var(--text); }
+    .tool-card-desc { font-size: 12px; color: var(--text-dim); margin-bottom: 12px; line-height: 1.4; }
+    .dqa-score-big { font-size: 36px; font-weight: 700; line-height: 1; }
+    .dqa-score-ok { color: var(--green); }
+    .dqa-score-warn { color: var(--yellow); }
+    .dqa-score-bad { color: var(--red); }
+    .dqa-bar-bg { height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; margin-top: 8px; }
+    .dqa-bar-fill { height: 100%; border-radius: 4px; transition: width 0.6s ease; }
+    .dqa-cat-ok { border-left: 3px solid var(--green); }
+    .dqa-cat-warn { border-left: 3px solid var(--yellow); }
+    .dqa-cat-bad { border-left: 3px solid var(--red); }
+    .dqa-item-row { padding: 6px 10px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--border); font-size: 12px; }
+    .dqa-item-row:last-child { border-bottom: none; }
+    .dqa-cb { width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent); }
+    .dqa-show-more { padding: 6px 10px; font-size: 11px; color: var(--accent); cursor: pointer; text-align: center; border-top: 1px solid var(--border); }
+    .dqa-show-more:hover { text-decoration: underline; }
+    .tool-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .badge-pill { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500; }
+  </style>
+
+  <!-- MAINTENANCE -->
+  <div class="tools-group">
+    <div class="tools-group-hdr">Maintenance</div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">Auto-Connect</div>
+      <div class="tool-card-desc">Create semantic edges between related nodes within the same namespace. Skips existing edges automatically.</div>
+      <div class="tool-actions">
+        <select id="connectNS" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px;min-width:160px"><option value="">All Namespaces</option></select>
+        <button class="btn btn-blue" onclick="autoConnect()" style="background:var(--accent);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Run Auto-Connect</button>
+        <span id="connectResult" style="font-size:12px;color:var(--text-dim)"></span>
       </div>
+    </div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">Clean Orphan Edges</div>
+      <div class="tool-card-desc">Delete edges referencing nodes that no longer exist (from temporal version updates).</div>
+      <div class="tool-actions">
+        <button class="btn btn-red" onclick="cleanupEdges()" style="background:var(--red);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Clean Orphan Edges</button>
+        <span id="cleanupResult" style="font-size:12px;color:var(--text-dim)"></span>
+      </div>
+    </div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">Purge Old Versions</div>
+      <div class="tool-card-desc">Hard-delete temporal versions older than N days. Reduces database overhead.</div>
+      <div class="tool-actions">
+        <input id="purgeDays" type="number" value="7" min="1" max="365" style="width:70px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px">
+        <span style="font-size:12px;color:var(--text-dim)">days</span>
+        <button class="btn btn-red" onclick="purgeVersions()" style="background:var(--red);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Purge</button>
+        <span id="purgeResult" style="font-size:12px;color:var(--text-dim)"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- IMPORT / EXPORT -->
+  <div class="tools-group">
+    <div class="tools-group-hdr">Import & Export</div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">Export Graph</div>
+      <div class="tool-card-desc">Download graph as JSON for backup or migration.</div>
+      <div class="tool-actions">
+        <select id="exportNS" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px;min-width:160px"><option value="">All Namespaces</option></select>
+        <button class="btn" onclick="exportGraph()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Export JSON</button>
+      </div>
+    </div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">Import JSON</div>
+      <div class="tool-card-desc">Paste a JSON export to import nodes and edges.</div>
+      <textarea id="importJSON" placeholder='{"nodes":[...],"edges":[...]}' style="width:100%;height:80px;font-size:11px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:6px;margin-bottom:8px"></textarea>
+      <div class="tool-actions">
+        <button class="btn" onclick="importGraph()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Import</button>
+        <span id="importResult" style="font-size:12px;color:var(--text-dim)"></span>
+      </div>
+    </div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">Import from Obsidian</div>
+      <div class="tool-card-desc">Import notes from an Obsidian vault. Creates nodes from notes, edges from wikilinks and tags.</div>
       <div class="form-row" style="margin-bottom:8px">
-        <input id="obsidianNS" placeholder="Namespace (optional)" style="flex:1;max-width:200px">
-        <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:4px">
+        <input id="obsidianVault" placeholder="/path/to/Obsidian Vault" style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px">
+      </div>
+      <div class="tool-actions" style="margin-bottom:8px">
+        <input id="obsidianNS" placeholder="Namespace (optional)" style="width:160px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px">
+        <label style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:4px">
           <input type="checkbox" id="obsidianDryRun"> Dry Run
         </label>
-        <button class="btn btn-blue" onclick="runObsidianImport()">Import</button>
+        <button class="btn btn-blue" onclick="runObsidianImport()" style="background:var(--accent);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Import</button>
       </div>
-      <div id="obsidianStatus" style="margin-top:8px;font-size:11px;color:#888"></div>
-      <div id="obsidianOutput" style="margin-top:8px;max-height:200px;overflow-y:auto;background:#0a0a0f;border:1px solid #16162a;border-radius:4px;padding:8px;font-size:10px;font-family:monospace;color:#666;display:none"></div>
-    </div></div>
+      <div id="obsidianStatus" style="font-size:12px;color:var(--text-dim)"></div>
+      <div id="obsidianOutput" style="margin-top:8px;max-height:200px;overflow-y:auto;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:8px;font-size:10px;font-family:monospace;color:var(--text-dim);display:none"></div>
+    </div>
   </div>
-  <div class="section"><div class="section-hdr"><h2>Importance Scores</h2></div><div style="padding:14px">
-      <p style="font-size:11px;color:#888;margin-bottom:10px">Recalculate importance using recency (30%), frequency (25%), connectivity (20%), type weight (10%), and explicit score (15%).</p>
-      <button class="btn" onclick="recalcImportance()">Recalculate Now</button>
-      <div id="recalcResult" style="margin-top:8px;font-size:11px;color:#888"></div>
-    </div></div>
-    <div class="section"><div class="section-hdr"><h2>System Health</h2></div><div id="healthDetail" style="padding:14px;font-size:11px;color:#888"></div></div>
-    <!-- Graph Analytics -->
-    <div class="section">
-      <div class="section-hdr"><h2>Graph Analytics</h2></div>
-      <div style="padding:14px">
-        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">
-          <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;min-width:100px;flex:1">
-            <div style="font-size:11px;color:var(--text-dim)">Nodes</div>
-            <div style="font-size:18px;font-weight:600;color:var(--accent)" id="ga-nodes">-</div>
-          </div>
-          <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;min-width:100px;flex:1">
-            <div style="font-size:11px;color:var(--text-dim)">Edges</div>
-            <div style="font-size:18px;font-weight:600;color:var(--accent)" id="ga-edges">-</div>
-          </div>
-          <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;min-width:100px;flex:1">
-            <div style="font-size:11px;color:var(--text-dim)">Density</div>
-            <div style="font-size:18px;font-weight:600;color:var(--green)" id="ga-density">-</div>
-          </div>
-          <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;min-width:100px;flex:1">
-            <div style="font-size:11px;color:var(--text-dim)">Avg Conn</div>
-            <div style="font-size:18px;font-weight:600;color:var(--yellow)" id="ga-avg">-</div>
-          </div>
-          <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;min-width:100px;flex:1">
-            <div style="font-size:11px;color:var(--text-dim)">Clusters</div>
-            <div style="font-size:18px;font-weight:600;color:var(--red)" id="ga-clusters">-</div>
-          </div>
+
+  <!-- ANALYSIS -->
+  <div class="tools-group">
+    <div class="tools-group-hdr">Analysis</div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">Graph Analytics</div>
+      <div class="tool-card-desc">Topology metrics: hub nodes, bridge nodes, density, and connected components.</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;min-width:90px;flex:1;text-align:center">
+          <div style="font-size:11px;color:var(--text-dim)">Nodes</div>
+          <div style="font-size:18px;font-weight:600;color:var(--accent)" id="ga-nodes">-</div>
         </div>
-        <div style="margin-bottom:12px">
-          <div style="font-size:12px;font-weight:500;margin-bottom:6px;color:var(--accent)">Hub Nodes (most connected)</div>
-          <div id="ga-hubs" style="font-size:11px;color:var(--text-dim)">Click Load to see hub nodes</div>
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;min-width:90px;flex:1;text-align:center">
+          <div style="font-size:11px;color:var(--text-dim)">Edges</div>
+          <div style="font-size:18px;font-weight:600;color:var(--accent)" id="ga-edges">-</div>
         </div>
-        <div>
-          <div style="font-size:12px;font-weight:500;margin-bottom:6px;color:var(--accent)">Bridge Nodes (articulation points)</div>
-          <div id="ga-bridges" style="font-size:11px;color:var(--text-dim)">Click Load to see bridge nodes</div>
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;min-width:90px;flex:1;text-align:center">
+          <div style="font-size:11px;color:var(--text-dim)">Density</div>
+          <div style="font-size:18px;font-weight:600;color:var(--green)" id="ga-density">-</div>
         </div>
-        <div style="margin-top:10px">
-          <button class="btn" onclick="loadGraphAnalytics()" style="background:var(--accent);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Load Analytics</button>
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;min-width:90px;flex:1;text-align:center">
+          <div style="font-size:11px;color:var(--text-dim)">Avg Conn</div>
+          <div style="font-size:18px;font-weight:600;color:var(--yellow)" id="ga-avg">-</div>
         </div>
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;min-width:90px;flex:1;text-align:center">
+          <div style="font-size:11px;color:var(--text-dim)">Clusters</div>
+          <div style="font-size:18px;font-weight:600;color:var(--red)" id="ga-clusters">-</div>
+        </div>
+      </div>
+      <div style="margin-bottom:10px">
+        <div style="font-size:12px;font-weight:500;margin-bottom:4px;color:var(--accent)">Hub Nodes</div>
+        <div id="ga-hubs" style="font-size:11px;color:var(--text-dim)">Click Load to see hub nodes</div>
+      </div>
+      <div style="margin-bottom:10px">
+        <div style="font-size:12px;font-weight:500;margin-bottom:4px;color:var(--accent)">Bridge Nodes</div>
+        <div id="ga-bridges" style="font-size:11px;color:var(--text-dim)">Click Load to see bridge nodes</div>
+      </div>
+      <button class="btn" onclick="loadGraphAnalytics()" style="background:var(--accent);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Load Analytics</button>
+    </div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">Importance Scores</div>
+      <div class="tool-card-desc">Recalculate importance using recency (30%), frequency (25%), connectivity (20%), type weight (10%), and explicit score (15%).</div>
+      <div class="tool-actions">
+        <button class="btn" onclick="recalcImportance()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Recalculate Now</button>
+        <span id="recalcResult" style="font-size:12px;color:var(--text-dim)"></span>
       </div>
     </div>
-    <!-- Batch Node Manager -->
-    <div class="section" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px">
-      <div class="section-hdr" style="font-size:16px;font-weight:600;margin-bottom:16px;color:var(--accent)">Batch Node Manager</div>
+  </div>
 
-      <!-- Bulk Create -->
-      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px">
-        <div style="font-size:14px;font-weight:500;margin-bottom:12px;color:var(--green)">Bulk Create</div>
-        <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">CSV format: label,type,namespace,summary,content — one node per line</div>
-        <div class="form-row" style="margin-bottom:8px">
-          <textarea id="batch-csv" rows="8" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:6px;font-size:13px;font-family:monospace;resize:vertical" placeholder="My Node,fact,global,Short summary,Full content here&#10;Another Node,decision,project-x,Decision summary,Decision details"></textarea>
+  <!-- BATCH OPERATIONS -->
+  <div class="tools-group">
+    <div class="tools-group-hdr">Batch Operations</div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">Batch Node Manager</div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px">
+        <div style="font-size:13px;font-weight:500;margin-bottom:8px;color:var(--green)">Bulk Create</div>
+        <div style="font-size:11px;color:var(--text-dim);margin-bottom:6px">CSV: label,type,namespace,summary,content</div>
+        <textarea id="batch-csv" rows="4" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:12px;font-family:monospace;resize:vertical;margin-bottom:6px" placeholder="My Node,fact,global,Summary,Content&#10;Another Node,decision,project-x,Summary,Details"></textarea>
+        <div class="tool-actions">
+          <input type="text" id="batch-default-ns" value="global" style="width:120px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px">
+          <button onclick="bulkCreatePreview()" style="background:var(--accent);color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Preview</button>
+          <button onclick="bulkCreateAll()" style="background:transparent;border:1px solid var(--green);color:var(--green);padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Create All</button>
+          <span id="batch-create-status" style="font-size:11px;color:var(--text-dim)"></span>
         </div>
-        <div class="form-row" style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
-          <label style="font-size:12px;color:var(--text-dim)">Default namespace:</label>
-          <input type="text" id="batch-default-ns" value="global" style="width:160px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px">
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <button class="btn-primary" onclick="bulkCreatePreview()" style="padding:6px 14px;border-radius:6px;border:none;cursor:pointer;font-size:13px;background:var(--accent);color:#fff">Preview</button>
-          <button onclick="bulkCreateAll()" style="padding:6px 14px;border-radius:6px;border:1px solid var(--green);cursor:pointer;font-size:13px;background:transparent;color:var(--green)">Create All</button>
-          <span id="batch-create-status" style="font-size:12px;color:var(--text-dim)"></span>
-        </div>
-        <div id="batch-create-preview" style="margin-top:10px;font-size:12px;color:var(--text-dim);display:none"></div>
-        <div id="batch-create-progress" style="margin-top:8px;display:none">
-          <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden">
+        <div id="batch-create-preview" style="margin-top:8px;font-size:11px;color:var(--text-dim);display:none"></div>
+        <div id="batch-create-progress" style="margin-top:6px;display:none">
+          <div style="background:var(--border);border-radius:4px;height:5px;overflow:hidden">
             <div id="batch-create-bar" style="background:var(--green);height:100%;width:0%;transition:width 0.2s"></div>
           </div>
-          <div id="batch-create-progress-text" style="font-size:11px;color:var(--text-dim);margin-top:4px"></div>
+          <div id="batch-create-progress-text" style="font-size:10px;color:var(--text-dim);margin-top:3px"></div>
         </div>
       </div>
-
-      <!-- Bulk Delete -->
-      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:16px">
-        <div style="font-size:14px;font-weight:500;margin-bottom:12px;color:var(--red)">Bulk Delete</div>
-        <div class="form-row" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
-          <label style="font-size:12px;color:var(--text-dim)">Namespace:</label>
-          <input type="text" id="batch-del-ns" placeholder="e.g. global" style="width:160px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px">
-          <label style="font-size:12px;color:var(--text-dim)">Type:</label>
-          <select id="batch-del-type" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px">
-            <option value="">All types</option>
-            <option value="project">Project</option>
-            <option value="decision">Decision</option>
-            <option value="fact">Fact</option>
-            <option value="preference">Preference</option>
-            <option value="problem">Problem</option>
-            <option value="advice">Advice</option>
-            <option value="person">Person</option>
-            <option value="topic">Topic</option>
-            <option value="event">Event</option>
-            <option value="concept">Concept</option>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:14px">
+        <div style="font-size:13px;font-weight:500;margin-bottom:8px;color:var(--red)">Bulk Delete</div>
+        <div class="tool-actions" style="margin-bottom:6px">
+          <input type="text" id="batch-del-ns" placeholder="Namespace" style="width:130px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px">
+          <select id="batch-del-type" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px">
+            <option value="">All types</option><option value="project">Project</option><option value="decision">Decision</option><option value="fact">Fact</option><option value="preference">Preference</option><option value="problem">Problem</option><option value="advice">Advice</option><option value="person">Person</option><option value="topic">Topic</option><option value="event">Event</option><option value="concept">Concept</option>
           </select>
         </div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <button class="btn-primary" onclick="bulkDeletePreview()" style="padding:6px 14px;border-radius:6px;border:none;cursor:pointer;font-size:13px;background:var(--accent);color:#fff">Preview</button>
-          <button onclick="bulkDeleteAll()" style="padding:6px 14px;border-radius:6px;border:1px solid var(--red);cursor:pointer;font-size:13px;background:transparent;color:var(--red)">Delete All</button>
-          <span id="batch-del-status" style="font-size:12px;color:var(--text-dim)"></span>
+        <div class="tool-actions">
+          <button onclick="bulkDeletePreview()" style="background:var(--accent);color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Preview</button>
+          <button onclick="bulkDeleteAll()" style="background:transparent;border:1px solid var(--red);color:var(--red);padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Delete All</button>
+          <span id="batch-del-status" style="font-size:11px;color:var(--text-dim)"></span>
         </div>
-        <div id="batch-del-preview" style="margin-top:10px;font-size:12px;color:var(--text-dim);display:none"></div>
-        <div id="batch-del-progress" style="margin-top:8px;display:none">
-          <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden">
+        <div id="batch-del-preview" style="margin-top:8px;font-size:11px;color:var(--text-dim);display:none"></div>
+        <div id="batch-del-progress" style="margin-top:6px;display:none">
+          <div style="background:var(--border);border-radius:4px;height:5px;overflow:hidden">
             <div id="batch-del-bar" style="background:var(--red);height:100%;width:0%;transition:width 0.2s"></div>
           </div>
-          <div id="batch-del-progress-text" style="font-size:11px;color:var(--text-dim);margin-top:4px"></div>
+          <div id="batch-del-progress-text" style="font-size:10px;color:var(--text-dim);margin-top:3px"></div>
         </div>
       </div>
     </div>
-    <!-- Edge Creator -->
-    <div class="section">
-      <div class="section-hdr">Edge Creator</div>
-
-      <!-- Create Edge -->
-      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px">
-        <div style="font-size:14px;font-weight:500;margin-bottom:12px;color:var(--green)">Create Edge</div>
-        <div class="form-row">
-          <label>Source Node</label>
-          <input type="text" id="ec-source-search" placeholder="Type to search source node..." oninput="searchSourceNodes()">
+    <div class="tool-card">
+      <div class="tool-card-hdr">Edge Creator</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <div style="flex:1;min-width:200px">
+          <label style="font-size:11px;color:var(--text-dim)">Source</label>
+          <input type="text" id="ec-source-search" placeholder="Search source..." oninput="searchSourceNodes()" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px">
           <input type="hidden" id="ec-source-id">
           <div class="dropdown-results" id="ec-source-results"></div>
         </div>
-        <div class="form-row">
-          <label>Target Node</label>
-          <input type="text" id="ec-target-search" placeholder="Type to search target node..." oninput="searchTargetNodes()">
+        <div style="flex:1;min-width:200px">
+          <label style="font-size:11px;color:var(--text-dim)">Target</label>
+          <input type="text" id="ec-target-search" placeholder="Search target..." oninput="searchTargetNodes()" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px">
           <input type="hidden" id="ec-target-id">
           <div class="dropdown-results" id="ec-target-results"></div>
         </div>
-        <div class="form-row">
-          <label>Edge Type</label>
-          <select id="ec-edge-type">
-            <option value="contains">contains</option>
-            <option value="relates_to">relates_to</option>
-            <option value="supports">supports</option>
-            <option value="contradicts">contradicts</option>
-            <option value="decided_by">decided_by</option>
-            <option value="depends_on">depends_on</option>
-            <option value="mentions">mentions</option>
-          </select>
+      </div>
+      <div class="tool-actions">
+        <select id="ec-edge-type" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px">
+          <option value="contains">contains</option><option value="relates_to">relates_to</option><option value="supports">supports</option><option value="contradicts">contradicts</option><option value="decided_by">decided_by</option><option value="depends_on">depends_on</option><option value="mentions">mentions</option>
+        </select>
+        <label style="font-size:12px;color:var(--text-dim)">Weight: <span id="ec-weight-val">1.0</span></label>
+        <input type="range" id="ec-weight" min="0" max="10" step="0.5" value="1" oninput="document.getElementById('ec-weight-val').textContent=this.value" style="width:100px">
+        <button class="btn" onclick="createEdge()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Create Edge</button>
+      </div>
+      <div class="activity-feed" id="ec-activity"></div>
+    </div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">Bulk Edge Manager</div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:10px">
+        <div style="font-size:13px;font-weight:500;margin-bottom:6px;color:var(--red)">Delete by Type</div>
+        <div class="tool-actions">
+          <select id="bulk-edge-type" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px"><option value="">Select type...</option><option value="contains">contains</option><option value="relates_to">relates_to</option><option value="supports">supports</option><option value="contradicts">contradicts</option><option value="decided_by">decided_by</option><option value="depends_on">depends_on</option><option value="mentions">mentions</option></select>
+          <button onclick="bulkDeleteEdgePreview()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px">Preview</button>
+          <button onclick="bulkDeleteEdges()" style="background:var(--red);color:#fff;border:none;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px">Delete All</button>
         </div>
-        <div class="form-row">
-          <label>Weight: <span id="ec-weight-val">1.0</span></label>
-          <input type="range" id="ec-weight" min="0" max="10" step="0.5" value="1" oninput="document.getElementById('ec-weight-val').textContent=this.value">
+        <div id="bulk-edge-preview" style="margin-top:6px;font-size:11px;color:var(--text-dim)"></div>
+      </div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:14px">
+        <div style="font-size:13px;font-weight:500;margin-bottom:6px;color:var(--green)">Connect Namespaces</div>
+        <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">Create semantic edges between nodes in two namespaces using embedding similarity.</div>
+        <div class="tool-actions" style="margin-bottom:8px">
+          <select id="bulk-connect-source" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px"><option value="">Source NS...</option></select>
+          <span style="font-size:12px;color:var(--text-dim)">→</span>
+          <select id="bulk-connect-target" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px"><option value="">Target NS...</option></select>
         </div>
-        <button class="btn" onclick="createEdge()">Create Edge</button>
-        <div class="activity-feed" id="ec-activity"></div>
+        <div class="tool-actions" style="margin-bottom:8px">
+          <label style="font-size:11px;color:var(--text-dim)">Top matches:</label>
+          <input type="number" id="bulk-connect-limit" value="3" min="1" max="10" style="width:45px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px 6px;border-radius:6px;font-size:12px">
+          <label style="font-size:11px;color:var(--text-dim)">Threshold:</label>
+          <input type="number" id="bulk-connect-threshold" value="0.70" min="0.1" max="1.0" step="0.05" style="width:55px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px 6px;border-radius:6px;font-size:12px">
+        </div>
+        <div class="tool-actions">
+          <button onclick="connectNamespacesPreview()" style="background:var(--accent);color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Preview</button>
+          <button onclick="connectNamespacesRun()" style="background:var(--green);color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Connect</button>
+          <span id="bulk-connect-status" style="font-size:11px;color:var(--text-dim)"></span>
+        </div>
+        <div id="bulk-connect-preview" style="margin-top:8px;font-size:11px;color:var(--text-dim);display:none"></div>
       </div>
     </div>
-    <!-- Bulk Edge Manager -->
-    <div class="section">
-      <div class="section-hdr">Bulk Edge Manager</div>
-      <!-- Delete by Type -->
-      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px">
-        <div style="font-size:14px;font-weight:500;margin-bottom:12px;color:var(--red)">Delete Edges by Type</div>
-        <div class="form-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <select id="bulk-edge-type" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px">
-            <option value="">Select type...</option>
-            <option value="contains">contains</option>
-            <option value="relates_to">relates_to</option>
-            <option value="supports">supports</option>
-            <option value="contradicts">contradicts</option>
-            <option value="decided_by">decided_by</option>
-            <option value="depends_on">depends_on</option>
-            <option value="mentions">mentions</option>
-          </select>
-          <button class="btn" onclick="bulkDeleteEdgePreview()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px">Preview</button>
-          <button class="btn btn-red" onclick="bulkDeleteEdges()" style="background:var(--red);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Delete All</button>
+  </div>
+
+  <!-- DATA QUALITY -->
+  <div class="tools-group">
+    <div class="tools-group-hdr">Data Quality</div>
+    <div class="tool-card">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">
+        <div class="tool-card-hdr" style="margin-bottom:0">Data Quality Analyzer</div>
+        <div style="margin-left:auto">
+          <button onclick="runQualityAnalysis()" style="background:var(--accent);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px" id="dqa-run-btn">Run Analysis</button>
         </div>
-        <div id="bulk-edge-preview" style="margin-top:8px;font-size:12px;color:var(--text-dim)"></div>
-      </div>
-      <!-- Connect Namespaces -->
-      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:16px">
-        <div style="font-size:14px;font-weight:500;margin-bottom:12px;color:var(--green)">Connect Namespaces by Similarity</div>
-        <div style="font-size:12px;color:var(--text-dim);margin-bottom:10px">Create semantic edges between nodes in two namespaces using embedding similarity.</div>
-        <div class="form-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
-          <select id="bulk-connect-source" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px">
-            <option value="">Source NS...</option>
-          </select>
-          <span style="font-size:13px;color:var(--text-dim)">→</span>
-          <select id="bulk-connect-target" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px">
-            <option value="">Target NS...</option>
-          </select>
-        </div>
-        <div class="form-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
-          <label style="font-size:12px;color:var(--text-dim)">Top matches per node:</label>
-          <input type="number" id="bulk-connect-limit" value="3" min="1" max="10" style="width:50px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:6px;font-size:13px">
-          <label style="font-size:12px;color:var(--text-dim)">Threshold:</label>
-          <input type="number" id="bulk-connect-threshold" value="0.70" min="0.1" max="1.0" step="0.05" style="width:60px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:6px;font-size:13px">
-        </div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <button class="btn btn-blue" onclick="connectNamespacesPreview()" style="background:var(--accent);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Preview</button>
-          <button class="btn" onclick="connectNamespacesRun()" style="background:var(--green);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Connect</button>
-          <span id="bulk-connect-status" style="font-size:12px;color:var(--text-dim)"></span>
-        </div>
-        <div id="bulk-connect-preview" style="margin-top:10px;font-size:12px;color:var(--text-dim);display:none"></div>
-      </div>
-    </div>
-    <!-- Data Quality Analyzer -->
-    <div class="section" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:20px;">
-      <h3 style="font-size:16px;margin-bottom:12px;">Data Quality Analyzer</h3>
-      <div style="margin-bottom:12px;">
-        <button onclick="runQualityAnalysis()" style="background:var(--accent);color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;" id="dqa-run-btn">Run Analysis</button>
-        <button onclick="fixSelected()" style="background:var(--red);color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;margin-left:8px;display:none;" id="dqa-fix-btn">Fix Selected (0)</button>
-        <button onclick="dqaSelectAll()" style="background:var(--surface);color:var(--text);border:1px solid var(--border);padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;margin-left:8px;display:none;" id="dqa-selectall-btn">Select All</button>
       </div>
 
-      <!-- Progress -->
       <div id="dqa-progress" style="display:none;margin-bottom:12px;">
         <div style="display:flex;align-items:center;gap:8px;color:var(--text-dim);font-size:13px;">
           <span style="display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:dqa-spin 0.8s linear infinite;"></span>
@@ -433,136 +443,130 @@ textarea{resize:vertical;min-height:50px}
         </div>
       </div>
 
-      <!-- Quality Score -->
-      <div id="dqa-score" style="display:none;margin-bottom:16px;padding:12px;background:var(--bg);border-radius:6px;">
-        <div style="font-size:13px;color:var(--text-dim);margin-bottom:4px;">Quality Score</div>
-        <div style="font-size:24px;font-weight:600;" id="dqa-score-value">—</div>
-        <div style="height:6px;background:var(--border);border-radius:3px;margin-top:6px;">
-          <div id="dqa-score-bar" style="height:100%;border-radius:3px;transition:width 0.5s;"></div>
+      <div id="dqa-score" style="display:none;margin-bottom:16px;">
+        <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+          <div>
+            <div class="dqa-score-big dqa-score-bad" id="dqa-score-value">24%</div>
+            <div style="font-size:12px;color:var(--text-dim);margin-top:4px" id="dqa-score-label">Quality Score</div>
+          </div>
+          <div style="flex:1;min-width:200px">
+            <div class="dqa-bar-bg"><div class="dqa-bar-fill" id="dqa-score-bar"></div></div>
+            <div style="font-size:12px;color:var(--text-dim);margin-top:6px" id="dqa-score-detail"></div>
+          </div>
+          <div>
+            <button onclick="dqaQuickFix()" style="background:var(--green);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;margin-bottom:6px;display:block;width:100%">Quick Fix All</button>
+            <button onclick="fixSelected()" style="background:var(--red);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;display:none;width:100%" id="dqa-fix-btn">Fix Selected (0)</button>
+            <button onclick="dqaSelectAll()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;margin-top:6px;display:none;width:100%" id="dqa-selectall-btn">Select All</button>
+          </div>
         </div>
-        <div style="font-size:12px;color:var(--text-dim);margin-top:6px;" id="dqa-score-detail"></div>
       </div>
 
-      <!-- Results Categories -->
       <div id="dqa-results" style="display:none;"></div>
     </div>
-    <!-- Namespace Manager -->
-    <div class="section" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:20px;margin-bottom:16px;">
-      <h3 class="section-hdr" style="font-size:16px;margin-bottom:16px;">Namespace Manager</h3>
+  </div>
 
-      <!-- Rename Namespace -->
-      <div style="margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--border);">
-        <div style="font-weight:500;margin-bottom:8px;">Rename Namespace</div>
-        <div class="form-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-          <select id="ns-rename-source" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px;min-width:150px;">
-            <option value="">Select namespace...</option>
-          </select>
-          <input type="text" id="ns-rename-new" placeholder="New name" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px;flex:1;min-width:150px;">
-          <button class="btn btn-blue" onclick="renameNamespace()" style="background:var(--accent);color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:13px;">Rename</button>
+  <!-- NAMESPACE MANAGER -->
+  <div class="tools-group">
+    <div class="tools-group-hdr">Namespace Manager</div>
+    <div class="tool-card">
+      <div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border);">
+        <div style="font-size:13px;font-weight:500;margin-bottom:6px;">Rename Namespace</div>
+        <div class="tool-actions">
+          <select id="ns-rename-source" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px;min-width:140px"><option value="">Select namespace...</option></select>
+          <input type="text" id="ns-rename-new" placeholder="New name" style="flex:1;min-width:120px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px">
+          <button onclick="renameNamespace()" style="background:var(--accent);color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Rename</button>
         </div>
-        <div id="ns-rename-status" style="margin-top:6px;font-size:12px;color:var(--text-dim);"></div>
+        <div id="ns-rename-status" style="margin-top:4px;font-size:11px;color:var(--text-dim)"></div>
       </div>
-
-      <!-- Move Nodes -->
-      <div style="margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--border);">
-        <div style="font-weight:500;margin-bottom:8px;">Move Nodes</div>
-        <div class="form-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-          <select id="ns-move-source" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px;min-width:130px;">
-            <option value="">Namespace...</option>
-          </select>
-          <select id="ns-move-type" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px;min-width:110px;">
-            <option value="">All types</option>
-            <option value="project">Project</option>
-            <option value="decision">Decision</option>
-            <option value="fact">Fact</option>
-            <option value="preference">Preference</option>
-            <option value="problem">Problem</option>
-            <option value="advice">Advice</option>
-            <option value="person">Person</option>
-            <option value="topic">Topic</option>
-            <option value="event">Event</option>
-            <option value="concept">Concept</option>
-          </select>
-          <input type="text" id="ns-move-target" placeholder="Target namespace" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px;flex:1;min-width:130px;">
-          <button class="btn" onclick="moveNodesPreview()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px;">Preview</button>
-          <button class="btn btn-blue" onclick="moveNodesAll()" id="ns-move-btn" disabled style="background:var(--accent);color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:13px;opacity:0.5;">Move All</button>
+      <div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border);">
+        <div style="font-size:13px;font-weight:500;margin-bottom:6px;">Move Nodes</div>
+        <div class="tool-actions" style="margin-bottom:6px">
+          <select id="ns-move-source" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px;min-width:120px"><option value="">Namespace...</option></select>
+          <select id="ns-move-type" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px;min-width:100px"><option value="">All types</option><option value="project">Project</option><option value="decision">Decision</option><option value="fact">Fact</option><option value="preference">Preference</option><option value="problem">Problem</option><option value="advice">Advice</option><option value="person">Person</option><option value="topic">Topic</option><option value="event">Event</option><option value="concept">Concept</option></select>
+          <input type="text" id="ns-move-target" placeholder="Target namespace" style="flex:1;min-width:120px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px">
         </div>
-        <div id="ns-move-status" style="margin-top:6px;font-size:12px;color:var(--text-dim);"></div>
+        <div class="tool-actions">
+          <button onclick="moveNodesPreview()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px">Preview</button>
+          <button onclick="moveNodesAll()" id="ns-move-btn" disabled style="background:var(--accent);color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px;opacity:0.5">Move All</button>
+        </div>
+        <div id="ns-move-status" style="margin-top:4px;font-size:11px;color:var(--text-dim)"></div>
       </div>
-
-      <!-- Merge Namespaces -->
       <div>
-        <div style="font-weight:500;margin-bottom:8px;">Merge Namespaces</div>
-        <div class="form-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-          <select id="ns-merge-a" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px;min-width:130px;">
-            <option value="">Namespace A...</option>
-          </select>
-          <select id="ns-merge-b" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px;min-width:130px;">
-            <option value="">Namespace B...</option>
-          </select>
-          <input type="text" id="ns-merge-target" placeholder="Merged name" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px;flex:1;min-width:130px;">
-          <button class="btn" onclick="mergeNamespacesPreview()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px;">Preview</button>
-          <button class="btn btn-blue" onclick="mergeNamespaces()" id="ns-merge-btn" disabled style="background:var(--accent);color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:13px;opacity:0.5;">Merge</button>
+        <div style="font-size:13px;font-weight:500;margin-bottom:6px;">Merge Namespaces</div>
+        <div class="tool-actions" style="margin-bottom:6px">
+          <select id="ns-merge-a" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px;min-width:120px"><option value="">Namespace A...</option></select>
+          <select id="ns-merge-b" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px;min-width:120px"><option value="">Namespace B...</option></select>
+          <input type="text" id="ns-merge-target" placeholder="Merged name" style="flex:1;min-width:120px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px">
         </div>
-        <div id="ns-merge-status" style="margin-top:6px;font-size:12px;color:var(--text-dim);"></div>
+        <div class="tool-actions">
+          <button onclick="mergeNamespacesPreview()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px">Preview</button>
+          <button onclick="mergeNamespaces()" id="ns-merge-btn" disabled style="background:var(--accent);color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px;opacity:0.5">Merge</button>
+        </div>
+        <div id="ns-merge-status" style="margin-top:4px;font-size:11px;color:var(--text-dim)"></div>
       </div>
     </div>
-    <!-- Version Manager Section -->
-    <div class="section" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:16px">
-      <div class="section-hdr" style="padding:14px 16px;border-bottom:1px solid var(--border);font-weight:600;font-size:15px">Version Manager</div>
-      <div style="padding:16px">
+  </div>
 
-        <!-- Version Browser Sub-panel -->
-        <div style="margin-bottom:20px">
-          <h3 style="font-size:14px;margin-bottom:10px;color:var(--accent)">Version Browser</h3>
-          <div class="form-row" style="display:flex;gap:8px;margin-bottom:12px">
-            <input type="text" id="vm-search-input" placeholder="Search node by label..." style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:6px;font-size:13px" onkeydown="if(event.key==='Enter')searchNodeForVersions()">
-            <button class="btn" onclick="searchNodeForVersions()" style="background:var(--accent);color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px">Search</button>
-          </div>
-          <div id="vm-search-results" style="margin-bottom:12px"></div>
-          <div id="vm-node-info" style="display:none;margin-bottom:12px;padding:12px;background:var(--bg);border-radius:6px;font-size:13px">
-            <strong id="vm-node-label"></strong>
-            <span id="vm-node-type" class="tag" style="margin-left:8px;font-size:11px"></span>
-            <span id="vm-node-ns" style="margin-left:8px;color:var(--text-dim);font-size:12px"></span>
-          </div>
-          <div id="vm-history" style="margin-bottom:12px"></div>
-          <div id="vm-diff-panel" style="display:none;margin-top:12px">
-            <h4 style="font-size:13px;margin-bottom:8px;color:var(--text-dim)">Content Diff</h4>
-            <div style="display:flex;gap:8px">
-              <div style="flex:1">
-                <div style="font-size:11px;color:var(--text-dim);margin-bottom:4px" id="vm-diff-left-label">Previous</div>
-                <pre id="vm-diff-left" style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:12px;white-space:pre-wrap;max-height:300px;overflow-y:auto;min-height:60px"></pre>
-              </div>
-              <div style="flex:1">
-                <div style="font-size:11px;color:var(--text-dim);margin-bottom:4px" id="vm-diff-right-label">Current</div>
-                <pre id="vm-diff-right" style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:12px;white-space:pre-wrap;max-height:300px;overflow-y:auto;min-height:60px"></pre>
-              </div>
+  <!-- VERSION MANAGER -->
+  <div class="tools-group">
+    <div class="tools-group-hdr">Version Manager</div>
+    <div class="tool-card">
+      <div style="margin-bottom:16px">
+        <div style="font-size:13px;font-weight:500;margin-bottom:8px;color:var(--accent)">Version Browser</div>
+        <div class="tool-actions" style="margin-bottom:10px">
+          <input type="text" id="vm-search-input" placeholder="Search node by label..." style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:12px" onkeydown="if(event.key==='Enter')searchNodeForVersions()">
+          <button onclick="searchNodeForVersions()" style="background:var(--accent);color:#fff;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px">Search</button>
+        </div>
+        <div id="vm-search-results" style="margin-bottom:10px"></div>
+        <div id="vm-node-info" style="display:none;margin-bottom:10px;padding:10px;background:var(--bg);border-radius:6px;font-size:12px">
+          <strong id="vm-node-label"></strong>
+          <span id="vm-node-type" class="tag" style="margin-left:6px;font-size:10px"></span>
+          <span id="vm-node-ns" style="margin-left:6px;color:var(--text-dim);font-size:11px"></span>
+        </div>
+        <div id="vm-history" style="margin-bottom:10px"></div>
+        <div id="vm-diff-panel" style="display:none;margin-top:10px">
+          <div style="font-size:12px;font-weight:500;margin-bottom:6px;color:var(--text-dim)">Content Diff</div>
+          <div style="display:flex;gap:6px">
+            <div style="flex:1">
+              <div style="font-size:10px;color:var(--text-dim);margin-bottom:3px" id="vm-diff-left-label">Previous</div>
+              <pre id="vm-diff-left" style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:11px;white-space:pre-wrap;max-height:250px;overflow-y:auto;min-height:50px"></pre>
             </div>
-            <div id="vm-diff-highlighted" style="margin-top:8px"></div>
+            <div style="flex:1">
+              <div style="font-size:10px;color:var(--text-dim);margin-bottom:3px" id="vm-diff-right-label">Current</div>
+              <pre id="vm-diff-right" style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:11px;white-space:pre-wrap;max-height:250px;overflow-y:auto;min-height:50px"></pre>
+            </div>
           </div>
+          <div id="vm-diff-highlighted" style="margin-top:6px"></div>
         </div>
-
-        <!-- Bulk Version Operations Sub-panel -->
-        <div style="border-top:1px solid var(--border);padding-top:16px">
-          <h3 style="font-size:14px;margin-bottom:10px;color:var(--accent)">Bulk Version Operations</h3>
-          <div class="form-row" style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
-            <label style="font-size:13px;color:var(--text-dim);white-space:nowrap">Expire Old Versions:</label>
-            <input type="number" id="vm-purge-days" placeholder="Days" min="1" value="90" style="width:80px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:6px;font-size:13px">
-            <span style="font-size:12px;color:var(--text-dim)">days</span>
-            <button class="btn btn-red" onclick="expireOldVersions()" style="background:var(--red);color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px">Expire</button>
-          </div>
-          <div class="form-row" style="margin-bottom:12px">
-            <button class="btn btn-blue" onclick="findStaleNodes()" style="background:var(--accent);color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px">Find Stale Nodes (version > 5)</button>
-          </div>
-          <div id="vm-stale-results" style="margin-bottom:12px"></div>
-          <div id="vm-stale-actions" style="display:none;margin-bottom:12px">
-            <button class="btn btn-red" onclick="compactSelectedStale()" style="background:var(--red);color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px">Compact Selected</button>
-            <span id="vm-stale-count" style="margin-left:8px;font-size:12px;color:var(--text-dim)"></span>
-          </div>
+      </div>
+      <div style="border-top:1px solid var(--border);padding-top:14px">
+        <div style="font-size:13px;font-weight:500;margin-bottom:8px;color:var(--accent)">Bulk Version Operations</div>
+        <div class="tool-actions" style="margin-bottom:10px">
+          <label style="font-size:12px;color:var(--text-dim);white-space:nowrap">Expire older than</label>
+          <input type="number" id="vm-purge-days" value="90" min="1" style="width:60px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px">
+          <span style="font-size:11px;color:var(--text-dim)">days</span>
+          <button onclick="expireOldVersions()" style="background:var(--red);color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Expire</button>
         </div>
-
+        <div class="tool-actions" style="margin-bottom:10px">
+          <button onclick="findStaleNodes()" style="background:var(--accent);color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Find Stale Nodes (version > 5)</button>
+        </div>
+        <div id="vm-stale-results" style="margin-bottom:10px"></div>
+        <div id="vm-stale-actions" style="display:none;margin-bottom:10px">
+          <button onclick="compactSelectedStale()" style="background:var(--red);color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Compact Selected</button>
+          <span id="vm-stale-count" style="margin-left:6px;font-size:11px;color:var(--text-dim)"></span>
+        </div>
       </div>
     </div>
+  </div>
+
+  <!-- SYSTEM -->
+  <div class="tools-group">
+    <div class="tools-group-hdr">System</div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">System Health</div>
+      <div id="healthDetail" style="font-size:12px;color:var(--text-dim)"></div>
+    </div>
+  </div>
 </div>
 
 <!-- GRAPH TAB -->
@@ -1671,9 +1675,10 @@ async function runQualityAnalysis() {
     scoreValue.textContent = score + '%';
     scoreBar.style.width = score + '%';
     scoreBar.style.background = score >= 80 ? 'var(--green)' : score >= 50 ? 'var(--yellow)' : 'var(--red)';
-    scoreValue.style.color = score >= 80 ? 'var(--green)' : score >= 50 ? 'var(--yellow)' : 'var(--red)';
+    scoreValue.className = 'dqa-score-big ' + (score >= 80 ? 'dqa-score-ok' : score >= 50 ? 'dqa-score-warn' : 'dqa-score-bad');
     const totalIssues = orphans.length + disconnected.length + duplicates.length + emptyContent.length + lowImportance.length;
-    scoreDetail.textContent = nodes.length + ' nodes checked · ' + totalIssues + ' issues found';
+    const goodNodes = nodes.length - totalIssues;
+    scoreDetail.textContent = `${nodes.length} nodes checked · ${goodNodes} good · ${totalIssues} need attention`;
     scoreEl.style.display = 'block';
 
     // Save snapshot for trend tracking
@@ -1685,7 +1690,6 @@ async function runQualityAnalysis() {
 
     progressEl.style.display = 'none';
     resultsEl.style.display = 'block';
-    fixBtn.style.display = 'inline-block';
     updateFixBtn();
 
   } catch(e) {
@@ -1699,7 +1703,6 @@ async function runQualityAnalysis() {
 
 function calculateQualityScore(nodes, orphans, disconnected, duplicates, emptyContent, lowImportance) {
   if (nodes.length === 0) return 100;
-  // Collect unique bad node IDs
   const badIds = new Set([
     ...orphans.map(n => n.id),
     ...disconnected,
@@ -1714,38 +1717,87 @@ function calculateQualityScore(nodes, orphans, disconnected, duplicates, emptyCo
 function renderDqaResults() {
   const el = document.getElementById('dqa-results');
   const categories = [
-    { key: 'orphan', label: 'Orphan Nodes', desc: 'No edges connected' },
-    { key: 'disconnected', label: 'Disconnected Cluster', desc: 'Not part of main graph' },
-    { key: 'duplicate', label: 'Duplicate Labels', desc: 'Same label in same namespace' },
-    { key: 'empty', label: 'Empty Content', desc: 'No content or summary' },
-    { key: 'lowImportance', label: 'Low Importance', desc: 'Importance < 0.1' }
+    { key: 'orphan', label: 'Orphan Nodes', desc: 'No edges connected', severity: 'warn' },
+    { key: 'disconnected', label: 'Disconnected Cluster', desc: 'Not part of main graph', severity: 'warn' },
+    { key: 'duplicate', label: 'Duplicate Labels', desc: 'Same label in same namespace', severity: 'bad' },
+    { key: 'empty', label: 'Empty Content', desc: 'No content or summary', severity: 'bad' },
+    { key: 'lowImportance', label: 'Low Importance', desc: 'Importance < 0.1', severity: 'ok' }
   ];
 
+  // Sort by issue count descending (most severe first)
+  categories.sort((a, b) => {
+    const countA = (dqaResults[a.key] || []).length;
+    const countB = (dqaResults[b.key] || []).length;
+    return countB - countA;
+  });
+
   el.innerHTML = categories.map(cat => {
-    const items = dqaResults[cat.key];
-    if (!items || items.length === 0) return '';
-    const badgeClass = items.length > 0 ? 'warn' : '';
+    const items = dqaResults[cat.key] || [];
+    const count = items.length;
+    const severityClass = count === 0 ? 'dqa-cat-ok' : (cat.severity === 'bad' ? 'dqa-cat-bad' : 'dqa-cat-warn');
+    const badgeColor = count === 0 ? 'var(--green)' : (cat.severity === 'bad' ? 'var(--red)' : 'var(--yellow)');
+    
+    // Show max 5 items with expander
+    const maxVisible = 5;
+    const visibleItems = items.slice(0, maxVisible);
+    const hiddenCount = items.length - maxVisible;
+    
+    let itemsHtml = visibleItems.map((n, idx) => {
+      const id = n.id;
+      const label = n.label || id;
+      const ns = n.namespace || '';
+      const checked = dqaChecked.has(id) ? 'checked' : '';
+      return `<div class="dqa-item-row">
+        <input type="checkbox" class="dqa-cb" ${checked} onchange="dqaToggleCheck('${id}')">
+        <span style="flex:1;cursor:pointer" onclick="selectNodeById('${id}')">${esc(label)}</span>
+        <span style="font-size:11px;color:var(--text-dim)">${esc(ns)}</span>
+      </div>`;
+    }).join('');
+    
+    if (hiddenCount > 0) {
+      itemsHtml += `<div class="dqa-show-more" onclick="dqaExpandCat('${cat.key}',this)">Show ${hiddenCount} more...</div>`;
+    }
+    
+    if (count === 0) {
+      itemsHtml = `<div class="dqa-item-row" style="color:var(--green)">✓ No ${cat.label.toLowerCase()} found</div>`;
+    }
+    
     return `
-      <div class="dqa-category">
-        <div class="dqa-category-header" onclick="toggleCategory('${cat.key}')">
-          <span>${cat.label} <span style="font-size:11px;color:var(--text-dim);margin-left:6px;">${cat.desc}</span></span>
-          <span class="badge ${badgeClass}">${items.length}</span>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;margin-bottom:8px;overflow:hidden;${severityClass}">
+        <div style="padding:8px 12px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;background:var(--surface)" onclick="toggleCategory('${cat.key}')">
+          <div>
+            <span style="font-size:13px;font-weight:500">${cat.label}</span>
+            <span style="font-size:11px;color:var(--text-dim);margin-left:6px">${cat.desc}</span>
+          </div>
+          <span class="badge-pill" style="background:${badgeColor}20;color:${badgeColor}">${count}</span>
         </div>
-        <div class="dqa-category-body" id="dqa-cat-${cat.key}">
-          ${items.map(n => {
-            const id = n.id;
-            const label = n.label || id;
-            const ns = n.namespace || '';
-            const checked = dqaChecked.has(id) ? 'checked' : '';
-            return `<div class="dqa-item">
-              <input type="checkbox" ${checked} onchange="dqaToggleCheck('${id}')">
-              <span class="dqa-item-label" onclick="selectNodeById('${id}')">${esc(label)}</span>
-              <span class="dqa-item-meta">${esc(ns)}</span>
-            </div>`;
-          }).join('')}
+        <div class="dqa-category-body open" id="dqa-cat-${cat.key}">
+          ${itemsHtml}
         </div>
       </div>`;
   }).join('');
+}
+
+function dqaExpandCat(catKey, el) {
+  const items = dqaResults[catKey] || [];
+  const maxVisible = 5;
+  const hidden = items.slice(maxVisible);
+  const container = el.parentElement;
+  el.remove();
+  
+  const extraHtml = hidden.map(n => {
+    const id = n.id;
+    const label = n.label || id;
+    const ns = n.namespace || '';
+    const checked = dqaChecked.has(id) ? 'checked' : '';
+    return `<div class="dqa-item-row">
+      <input type="checkbox" class="dqa-cb" ${checked} onchange="dqaToggleCheck('${id}')">
+      <span style="flex:1;cursor:pointer" onclick="selectNodeById('${id}')">${esc(label)}</span>
+      <span style="font-size:11px;color:var(--text-dim)">${esc(ns)}</span>
+    </div>`;
+  }).join('');
+  
+  container.insertAdjacentHTML('beforeend', extraHtml);
 }
 
 function toggleCategory(cat) {
@@ -1764,12 +1816,11 @@ function updateFixBtn() {
   const selAll = document.getElementById('dqa-selectall-btn');
   const hasIssues = Object.values(dqaResults).some(arr => arr && arr.length > 0);
   btn.textContent = 'Fix Selected (' + dqaChecked.size + ')';
-  btn.style.display = dqaChecked.size > 0 ? 'inline-block' : 'none';
-  selAll.style.display = hasIssues ? 'inline-block' : 'none';
+  btn.style.display = dqaChecked.size > 0 ? 'block' : 'none';
+  selAll.style.display = hasIssues ? 'block' : 'none';
 }
 
 function dqaSelectAll() {
-  // Toggle: if any are unchecked, check all; else uncheck all
   const allIds = new Set();
   for (const cat of ['orphan','disconnected','duplicate','empty','lowImportance']) {
     const items = dqaResults[cat];
@@ -1781,15 +1832,63 @@ function dqaSelectAll() {
   } else {
     dqaChecked = new Set(allIds);
   }
-  // Re-render to update checkboxes
   renderDqaResults();
   updateFixBtn();
+}
+
+async function dqaQuickFix() {
+  // Auto-fix safe issues: orphans (link-orphans) + disconnected (auto-connect)
+  const btn = document.querySelector('button[onclick="dqaQuickFix()"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Fixing...'; }
+  
+  const summary = [];
+  let linked = 0, connected = 0;
+  
+  // Fix orphans
+  if (dqaResults.orphan && dqaResults.orphan.length > 0) {
+    const nsSet = new Set(dqaResults.orphan.map(n => n.namespace).filter(Boolean));
+    for (const ns of nsSet) {
+      try {
+        const r = await fetch(API + '/analyze/link-orphans?dry_run=false&limit=50&namespace=' + encodeURIComponent(ns), { method: 'POST' });
+        const data = await r.json();
+        if (data && data.linked_count) linked += data.linked_count;
+      } catch(e) { console.error('link-orphans failed', ns, e); }
+    }
+    summary.push('Orphans: linked ' + linked + ' nodes');
+  }
+  
+  // Fix disconnected
+  if (dqaResults.disconnected && dqaResults.disconnected.length > 0) {
+    const nsSet = new Set();
+    // disconnected is array of IDs, need to find nodes
+    const allNodes = await api('/nodes?limit=5000');
+    dqaResults.disconnected.forEach(id => {
+      const n = allNodes.find(x => x.id === id);
+      if (n && n.namespace) nsSet.add(n.namespace);
+    });
+    for (const ns of nsSet) {
+      try {
+        const r = await fetch(API + '/nodes/auto-connect?namespace=' + encodeURIComponent(ns), { method: 'POST' });
+        const data = await r.json();
+        if (data && data.edges_created) connected += data.edges_created;
+      } catch(e) { console.error('auto-connect failed', ns, e); }
+    }
+    summary.push('Disconnected: created ' + connected + ' edges');
+  }
+  
+  if (summary.length === 0) {
+    toast('No auto-fixable issues found');
+  } else {
+    toast(summary.join(' · '));
+  }
+  
+  if (btn) { btn.disabled = false; btn.textContent = 'Quick Fix All'; }
+  runQualityAnalysis();
 }
 
 async function fixSelected() {
   if (dqaChecked.size === 0) return;
 
-  // Group checked IDs by their category
   const byCategory = { orphan:[], disconnected:[], duplicate:[], empty:[], lowImportance:[] };
   for (const id of dqaChecked) {
     for (const cat of Object.keys(byCategory)) {
@@ -1805,7 +1904,6 @@ async function fixSelected() {
   btn.disabled = true;
   btn.textContent = 'Fixing...';
 
-  // 1. Fix orphans: try link-orphans per namespace
   if (byCategory.orphan.length > 0) {
     const nsSet = new Set();
     byCategory.orphan.forEach(id => {
@@ -1823,7 +1921,6 @@ async function fixSelected() {
     summary.push('Orphans: linked ' + linked + ' nodes');
   }
 
-  // 2. Fix disconnected: try auto-connect per namespace
   if (byCategory.disconnected.length > 0) {
     const nsSet = new Set();
     byCategory.disconnected.forEach(id => {
@@ -1841,37 +1938,29 @@ async function fixSelected() {
     summary.push('Disconnected: created ' + connected + ' edges');
   }
 
-  // 3. Fix duplicates: delete extras
   if (byCategory.duplicate.length > 0) {
     let deleted = 0;
     for (const id of byCategory.duplicate) {
-      try {
-        await fetch(API + '/nodes/' + id, { method: 'DELETE' });
-        deleted++;
-      } catch(e) { console.error('Failed to delete duplicate', id, e); }
+      try { await fetch(API + '/nodes/' + id, { method: 'DELETE' }); deleted++; } catch(e) {}
     }
     summary.push('Duplicates: deleted ' + deleted + ' nodes');
   }
 
-  // 4. Fix empty: delete
   if (byCategory.empty.length > 0) {
     let deleted = 0;
     for (const id of byCategory.empty) {
-      try {
-        await fetch(API + '/nodes/' + id, { method: 'DELETE' });
-        deleted++;
-      } catch(e) { console.error('Failed to delete empty', id, e); }
+      try { await fetch(API + '/nodes/' + id, { method: 'DELETE' }); deleted++; } catch(e) {}
     }
     summary.push('Empty content: deleted ' + deleted + ' nodes');
   }
 
-  // 5. Low importance: skip (can't auto-fix meaningfully)
   if (byCategory.lowImportance.length > 0) {
     summary.push('Low importance: skipped ' + byCategory.lowImportance.length + ' nodes (manual review needed)');
   }
 
-  alert(summary.join('\n'));
+  toast(summary.join(' · '));
   btn.disabled = false;
+  btn.textContent = 'Fix Selected (0)';
   dqaChecked = new Set();
   runQualityAnalysis();
 }
