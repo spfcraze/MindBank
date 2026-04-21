@@ -55,11 +55,13 @@ fi
 # ---- Helper: GitHub API call ----
 gh_api() {
     local url="$1"
-    local extra_headers=""
+    local auth_header=""
     if [ -n "${GITHUB_TOKEN:-}" ]; then
-        extra_headers="-H \"Authorization: Bearer ${GITHUB_TOKEN}\""
+        auth_header="-H Authorization: Bearer ${GITHUB_TOKEN}"
     fi
-    curl -sf -H "Accept: application/vnd.github.v3+json" $extra_headers "$url" 2>/dev/null
+    curl -sf --connect-timeout 10 --max-time 30 \
+        -H "Accept: application/vnd.github.v3+json" \
+        $auth_header "$url" 2>/dev/null
 }
 
 # ---- Get local version ----
@@ -261,7 +263,7 @@ else
 
     TMPDIR=$(mktemp -d)
     echo "  Downloading..."
-    curl -sfL "$TARBALL_URL" -o "$TMPDIR/mindbank.tar.gz"
+    curl -sfL --connect-timeout 10 --max-time 60 "$TARBALL_URL" -o "$TMPDIR/mindbank.tar.gz"
     echo "  Extracting..."
     tar -xzf "$TMPDIR/mindbank.tar.gz" -C "$TMPDIR"
 
