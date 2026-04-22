@@ -4,9 +4,9 @@
 
 **Goal:** Fix broken UI filters, deduplicate migrations, split monolithic code, add resilience, unify patterns, and add pagination — verified by Darwin rubric on each phase.
 
-**Architecture:** 6 independent phases, each produces working code on its own. No cross-phase dependencies.
+**Architecture:** 5 independent phases, each produces working code on its own. No cross-phase dependencies.
 
-**Tech Stack:** Go, PostgreSQL, Chi router, Canvas 2D, Three.js, vanilla JS
+**Tech Stack:** Go, PostgreSQL, Chi router, Canvas 2D, vanilla JS
 
 ---
 
@@ -21,79 +21,7 @@ Each phase must pass this 5-point checklist before moving to the next:
 
 ---
 
-## Phase 1: Fix Broken NS Filter on Tree-Map
-
-**Problem:** The namespace dropdown exists in the Tree-Map toolbar and calls `loadTreeForest()` on change, but `buildThreeForest()` never reads the selected namespace. All namespaces always shown regardless of filter.
-
-**Darwin score:** Edge Case Coverage 4/10 → 8/10 after fix. Real bug — filter exists but does nothing.
-
-**Files:**
-- Modify: `internal/handler/static/index.html` — `buildThreeForest()` function (line ~2149)
-
-**Steps:**
-
-- [ ] **Step 1: Read selected namespace in buildThreeForest**
-
-In `buildThreeForest(data)`, after building the node map, read the dropdown:
-
-```javascript
-function buildThreeForest(data) {
-  // ... existing clear + nodeMap build ...
-
-  const nsFilter = document.getElementById('treeNS').value;
-```
-
-- [ ] **Step 2: Filter roots by namespace**
-
-After building roots array, filter if NS selected:
-
-```javascript
-  const roots = Object.values(nm).filter(n => n.children.length > 0 && !childIds.has(n.node.id))
-    .sort((a, b) => (b.node.importance || 0) - (a.node.importance || 0));
-
-  // Filter by namespace if selected
-  const nsFilter = document.getElementById('treeNS').value;
-  const filteredRoots = nsFilter
-    ? roots.filter(r => r.node.namespace === nsFilter)
-    : roots;
-```
-
-- [ ] **Step 3: Filter orphans by namespace**
-
-```javascript
-  const orphans = Object.values(nm).filter(n => !childIds.has(n.node.id) && n.children.length === 0);
-  const filteredOrphans = nsFilter
-    ? orphans.filter(n => n.node.namespace === nsFilter)
-    : orphans;
-```
-
-- [ ] **Step 4: Update layout to use filtered arrays**
-
-Replace `roots` with `filteredRoots` and `orphans` with `filteredOrphans` in the layout section. Update the info bar text:
-
-```javascript
-  // Use filtered arrays for layout
-  filteredRoots.forEach((root, ti) => { ... });
-  filteredOrphans.forEach((n, i) => { ... });
-
-  document.getElementById('treeInfo').textContent = filteredRoots.length + ' trees, ' + treeHitBoxes.length + ' nodes';
-```
-
-- [ ] **Step 5: Sync and rebuild**
-
-```bash
-cp internal/handler/static/index.html ready/internal/handler/static/index.html
-cd ready && go build -o mindbank-api ./cmd/mindbank/
-cp mindbank-api ../mindbank-api
-```
-
-- [ ] **Step 6: Verify — test namespace filter**
-
-Restart MindBank, open Tree-Map tab, select a namespace from dropdown. Verify only trees from that namespace appear. Click "All" to verify all trees return.
-
----
-
-## Phase 2: Deduplicate Migrations
+## Phase 1: Deduplicate Migrations
 
 **Problem:** Two migration directories exist: `./migrations/` and `./internal/db/migrations/`. They've diverged:
 - `migrations/003_nodes.sql` — missing `question` in node_type enum
@@ -149,7 +77,7 @@ cd ready && go build -o mindbank-api ./cmd/mindbank/
 
 ---
 
-## Phase 3: Split analyze.go into Per-Concern Files
+## Phase 2: Split analyze.go into Per-Concern Files
 
 **Problem:** `analyze.go` is 1092 lines with 7 unrelated intelligence endpoints. Each is a different concern (contradictions, gaps, diff, patterns, confidence, link-orphans, merge-duplicates) plus shared helpers. Hard to navigate, hard to review, hard to maintain.
 
@@ -269,7 +197,7 @@ curl -s localhost:8095/api/v1/analyze/confidence | jq .count
 
 ---
 
-## Phase 4: Ollama Circuit Breaker
+## Phase 3: Ollama Circuit Breaker
 
 **Problem:** When Ollama is down, the embedder worker keeps retrying every 2 seconds, filling the queue with failed attempts. No backoff, no circuit breaker. The queue table grows unbounded.
 
@@ -395,13 +323,12 @@ Stop Ollama, create a node, watch logs for "circuit open" after 5 failures. Rest
 
 ---
 
-## Phase 5: Unify Tab Loading Pattern
+## Phase 4: Unify Tab Loading Pattern
 
 **Problem:** Each tab loads data differently:
 - Dashboard: auto-loads via `loadStats()` + `loadNodes()` on page load
 - Graph: auto-loads via `loadGraph()` on tab switch
 - Brain: lazy-loads iframe on first tab switch
-- Tree: re-fetches `/api/v1/graph` every tab switch (fixed with 30s cache)
 - Questions/Edges: load on tab switch
 
 No consistent pattern. Some cache, some don't. Some auto-refresh, some don't.
@@ -416,7 +343,7 @@ No consistent pattern. Some cache, some don't. Some auto-refresh, some don't.
 - [ ] **Step 1: Add loaded flags to all tabs**
 
 ```javascript
-let tabLoaded = { dashboard: false, questions: false, edges: false, tools: false, graph: false, brain: false, tree: false };
+let tabLoaded = { dashboard: false, questions: false, edges: false, tools: false, graph: false, brain: false };
 ```
 
 - [ ] **Step 2: Update switchTab to use unified pattern**
@@ -424,7 +351,7 @@ let tabLoaded = { dashboard: false, questions: false, edges: false, tools: false
 ```javascript
 function switchTab(name){
   document.querySelectorAll('.tab').forEach((t,i)=>{
-    t.classList.toggle('active',['dashboard','questions','edges','tools','graph','brain','tree'][i]===name);
+    t.classList.toggle('active',['dashboard','questions','edges','tools','graph','brain'][i]===name);
   });
   document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
   document.getElementById('tab-'+name).classList.add('active');
@@ -442,12 +369,8 @@ function switchTab(name){
         if(!f.dataset.loaded){f.src='/graph-view?embed=1';f.dataset.loaded='1'}
         f.style.width='100%';f.style.height=(window.innerHeight-60)+'px';
         break;
-      case 'tree': treeTabActive=true; loadTreeForest(); break;
     }
   }
-  // Tree tab needs animation control
-  if(name==='tree') treeTabActive=true;
-  else treeTabActive=false;
 }
 ```
 
@@ -468,15 +391,14 @@ Open dashboard — stats should load. Switch to Questions — should load once. 
 
 ---
 
-## Phase 6: Graph Endpoint Pagination
+## Phase 5: Graph Endpoint Pagination
 
-**Problem:** `GET /api/v1/graph` returns ALL nodes (capped at 200) and ALL edges between them. As the graph grows, this becomes a performance bottleneck. Both Brain 3D and Tree-Map consume this endpoint.
+**Problem:** `GET /api/v1/graph` returns ALL nodes (capped at 200) and ALL edges between them. As the graph grows, this becomes a performance bottleneck. Brain 3D consumes this endpoint.
 
-**Darwin score:** Edge Case Coverage 5/10 → 7/10. Current 200 cap is a silent truncation — user doesn't know 17 nodes are missing.
+**Darwin score:** Edge Case Coverage 5/10 → 7/10. Current 200 cap is a silent truncation — user doesn't know nodes are missing.
 
 **Files:**
 - Modify: `internal/handler/ask.go` — `Graph()` function (line ~177)
-- Modify: `internal/handler/static/index.html` — `loadTreeForest()` to accept params
 - Modify: `internal/handler/static/graph.html` — `load()` to accept params
 
 **Steps:**
@@ -524,13 +446,6 @@ func (h *AskHandler) Graph(w http.ResponseWriter, r *http.Request) {
 
 - [ ] **Step 2: Update frontend to use params**
 
-For Tree-Map (index.html), keep default behavior (no params = 200 limit):
-
-```javascript
-// No change needed — default limit=200 is fine for tree-map
-fetch('/api/v1/graph')
-```
-
 For Brain 3D (graph.html), keep default:
 
 ```javascript
@@ -568,12 +483,11 @@ curl -s "localhost:8095/api/v1/graph?limit=5000" | jq '.limit'
 
 | Phase | What | Darwin Improvement | Lines Changed |
 |-------|------|-------------------|---------------|
-| 1 | Tree-Map NS filter | Edge Case 4→8 | ~15 |
-| 2 | Dedup migrations | Edge Case 5→8 | file moves |
-| 3 | Split analyze.go | Architecture 6→8 | ~1092 → ~7 files |
-| 4 | Ollama circuit breaker | Edge Case 5→8 | ~40 |
-| 5 | Unify tab loading | Architecture 5→7 | ~20 |
-| 6 | Graph pagination | Edge Case 5→7 | ~25 |
+| 1 | Dedup migrations | Edge Case 5→8 | file moves |
+| 2 | Split analyze.go | Architecture 6→8 | ~1092 → ~7 files |
+| 3 | Ollama circuit breaker | Edge Case 5→8 | ~40 |
+| 4 | Unify tab loading | Architecture 5→7 | ~20 |
+| 5 | Graph pagination | Edge Case 5→7 | ~25 |
 
 **Total estimated time:** ~2 hours
 **Each phase is independent** — can be done in any order, each produces working code.
@@ -582,9 +496,8 @@ curl -s "localhost:8095/api/v1/graph?limit=5000" | jq '.limit'
 
 ## Execution Order
 
-1. Phase 1 (Tree-Map NS) — quick fix, high user impact
-2. Phase 2 (Migrations) — cleanup, prevents future confusion
-3. Phase 3 (Split analyze.go) — code quality, no behavior change
-4. Phase 4 (Circuit breaker) — resilience, prevents queue flood
-5. Phase 5 (Tab loading) — consistency, reduces redundant fetches
-6. Phase 6 (Pagination) — scalability, backward compatible
+1. Phase 1 (Migrations) — cleanup, prevents future confusion
+2. Phase 2 (Split analyze.go) — code quality, no behavior change
+3. Phase 3 (Circuit breaker) — resilience, prevents queue flood
+4. Phase 4 (Tab loading) — consistency, reduces redundant fetches
+5. Phase 5 (Pagination) — scalability, backward compatible

@@ -489,13 +489,18 @@ class MindBankProvider(MemoryProvider):
                 if _is_duplicate(self._api_url, label, ns):
                     return
 
-                _api_call(self._api_url, "POST", "/nodes", {
+                result = _api_call(self._api_url, "POST", "/nodes", {
                     "label": label,
                     "node_type": node_type,
                     "content": f"User: {user_content[:300]}\n\nAssistant: {assistant_content[:300]}",
                     "namespace": self._namespace or "hermes",
                     "summary": f"Session {session_id[:8]}",
                 }, timeout=10)
+                if result and result.get("id"):
+                    try:
+                        self._link_to_project(result["id"], self._namespace or "hermes")
+                    except Exception:
+                        pass
             except Exception as e:
                 logger.warning("MindBank sync failed: %s", e)
 
@@ -534,12 +539,17 @@ class MindBankProvider(MemoryProvider):
                     label = content[:80].strip()
                     if _is_duplicate(self._api_url, label, ns):
                         continue
-                    _api_call(self._api_url, "POST", "/nodes", {
+                    result = _api_call(self._api_url, "POST", "/nodes", {
                         "label": label,
                         "node_type": node_type,
                         "content": content[:500],
                         "namespace": ns,
                     }, timeout=10)
+                    if result and result.get("id"):
+                        try:
+                            self._link_to_project(result["id"], ns)
+                        except Exception:
+                            pass
             except Exception as e:
                 logger.warning("MindBank session extract failed: %s", e)
 
@@ -556,13 +566,18 @@ class MindBankProvider(MemoryProvider):
                     # Skip if duplicate exists
                     if _is_duplicate(self._api_url, label, ns):
                         return
-                    _api_call(self._api_url, "POST", "/nodes", {
+                    result = _api_call(self._api_url, "POST", "/nodes", {
                         "label": label,
                         "node_type": "preference" if target == "user" else "fact",
                         "content": content[:500],
                         "namespace": ns,
                         "summary": f"Built-in memory ({action})",
                     }, timeout=10)
+                    if result and result.get("id"):
+                        try:
+                            self._link_to_project(result["id"], ns)
+                        except Exception:
+                            pass
                 except Exception as e:
                     logger.warning("MindBank memory write mirror failed: %s", e)
 
@@ -627,6 +642,13 @@ class MindBankProvider(MemoryProvider):
 
         node_id = result.get("id", "")
 
+        # Link to project root (organizational anchor)
+        if node_id:
+            try:
+                self._link_to_project(node_id, ns)
+            except Exception:
+                pass
+
         # Create semantic edges to related nodes
         if node_id and content:
             try:
@@ -638,6 +660,38 @@ class MindBankProvider(MemoryProvider):
         if contradiction_warning:
             response += contradiction_warning
         return response
+
+    def _ensure_project_root(self, ns: str) -> Optional[str]:
+        """Find or create a project node for the given namespace. Returns project node ID."""
+        if not ns:
+            ns = "hermes"
+        # Search for existing project node in this namespace
+        result = _api_call(self._api_url, "GET", f"/nodes?type=project&namespace={ns}&limit=5", timeout=5)
+        nodes = result if isinstance(result, list) else result.get("nodes", [])
+        if nodes and len(nodes) > 0:
+            return nodes[0].get("id")
+        # Create project node
+        create_result = _api_call(self._api_url, "POST", "/nodes", {
+            "label": ns.capitalize(),
+            "node_type": "project",
+            "content": f"Project root for {ns} namespace",
+            "namespace": ns,
+            "summary": "Organizational anchor",
+        }, timeout=10)
+        return create_result.get("id") if create_result else None
+
+    def _link_to_project(self, node_id: str, ns: str) -> None:
+        """Create a contains edge from project root to the given node."""
+        if not node_id:
+            return
+        project_id = self._ensure_project_root(ns)
+        if project_id and project_id != node_id:
+            _api_call(self._api_url, "POST", "/edges", {
+                "source_id": project_id,
+                "target_id": node_id,
+                "edge_type": "contains",
+                "workspace_name": "hermes",
+            }, timeout=5)
 
     def _create_semantic_edges(self, node_id: str, node_type: str, label: str, content: str, ns: str) -> None:
         """Create semantic edges between the new node and related existing nodes."""
