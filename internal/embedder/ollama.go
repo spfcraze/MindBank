@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -216,7 +217,12 @@ func (c *Client) Health(ctx context.Context) error {
 		return fmt.Errorf("failed to decode tags: %w", err)
 	}
 	for _, m := range tags.Models {
-		if m.Name == c.model {
+		// Strip tag suffix (e.g., ":latest") for comparison
+		name := m.Name
+		if idx := strings.LastIndex(name, ":"); idx > 0 {
+			name = name[:idx]
+		}
+		if name == c.model || m.Name == c.model {
 			return nil
 		}
 	}

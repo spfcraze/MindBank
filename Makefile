@@ -8,17 +8,17 @@ setup:
 
 # Build the binary
 build:
-	go build -o mindbank ./cmd/mindbank
+	go build -o mindbank-api ./cmd/mindbank
 
 # Start everything (Postgres + API)
 run: build db-up
 	@echo "Starting MindBank API..."
-	@pkill -x "./mindbank" 2>/dev/null || true
+	@pkill -x "./mindbank-api" 2>/dev/null || true
 	@sleep 1
-	@MB_DB_DSN="postgres://mindbank:mindbank_secret@localhost:5434/mindbank?sslmode=disable" \
+	@MB_DB_DSN="postgres://mindbank:***@localhost:5434/mindbank?sslmode=disable" \
 		MB_OLLAMA_URL="http://localhost:11434" \
 		MB_PORT=8095 \
-		nohup ./mindbank >> /tmp/mindbank.log 2>&1 &
+		nohup ./mindbank-api >> /tmp/mindbank.log 2>&1 &
 	@sleep 2
 	@curl -s http://localhost:8095/api/v1/health
 	@echo ""
@@ -26,7 +26,7 @@ run: build db-up
 
 # Stop everything
 stop:
-	@pkill -x "./mindbank" 2>/dev/null && echo "API stopped" || echo "API not running"
+	@pkill -x "./mindbank-api" 2>/dev/null && echo "API stopped" || echo "API not running"
 	@$(MAKE) db-down
 
 # === Database (Docker) ===
@@ -61,7 +61,7 @@ logs:
 	tail -f /tmp/mindbank.log
 
 clean:
-	rm -f mindbank mindbank-mcp
+	rm -f mindbank-api mindbank-mcp
 	docker compose down -v
 
 # === MCP Server ===

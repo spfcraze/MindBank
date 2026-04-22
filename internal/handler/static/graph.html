@@ -236,15 +236,24 @@ if(new URLSearchParams(location.search).get('embed'))document.body.classList.add
 // === Data Loading ===
 async function load(){
   toast('Loading graph...');
-  // Fetch up to 5000 nodes for accurate sidebar counts (was 200 default)
-  const d=await(await fetch('/api/v1/graph?limit=5000')).json();
-  document.getElementById('sn').textContent=d.nodes.length;
-  document.getElementById('se').textContent=d.edges.length;
-  // Get actual total count from count API for poll comparison
+  // Fetch reasonable limit for smooth physics (200 nodes max for 60fps)
+  const d=await(await fetch('/api/v1/graph?limit=200')).json();
+  // Get actual total counts for stats display
   try{
     const cnt=await(await fetch('/api/v1/nodes?limit=1&count=true')).json();
     lastNodeCount=cnt.count||d.nodes.length;
-  }catch(e){lastNodeCount=d.nodes.length;}
+    document.getElementById('sn').textContent=lastNodeCount;
+  }catch(e){
+    lastNodeCount=d.nodes.length;
+    document.getElementById('sn').textContent=d.nodes.length;
+  }
+  try{
+    const ecnt=await(await fetch('/api/v1/edges?limit=1')).json();
+    const edgeTotal=ecnt.edges?ecnt.edges.length:ecnt.length||d.edges.length;
+    document.getElementById('se').textContent=edgeTotal;
+  }catch(e){
+    document.getElementById('se').textContent=d.edges.length;
+  }
   buildGraph(d);
   renderLegend(d);
   renderNamespaceChips(d);
@@ -1097,12 +1106,12 @@ async function pollHermesRecalls(){
       if(typeof remoteCount==='number'&&remoteCount!==lastNodeCount){
         const delta=Math.abs(remoteCount-lastNodeCount);
         if(delta>=5){
-          // Big change — full rebuild (fetch up to 5000 for accurate sidebar)
-          const fullGraph=await(await fetch('/api/v1/graph?limit=5000')).json();
+          // Big change — full rebuild (fetch up to 200 for smooth physics)
+          const fullGraph=await(await fetch('/api/v1/graph?limit=200')).json();
           buildGraph(fullGraph);
           renderDataSidebar(fullGraph);
           renderNamespaceChips(fullGraph);
-          document.getElementById('sn').textContent=fullGraph.nodes.length;
+          document.getElementById('sn').textContent=lastNodeCount;
           document.getElementById('se').textContent=fullGraph.edges.length;
           toast(`${delta>0?'+':''}${delta} nodes, graph refreshed`);
           suppressSimRecall();

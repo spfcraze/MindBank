@@ -137,7 +137,7 @@ textarea{resize:vertical;min-height:50px}
     <div class="form-row"><textarea id="nodeContent" placeholder="Content"></textarea></div>
     <div class="form-row"><input id="nodeSummary" placeholder="Summary"><button class="btn" onclick="createNode()">Create</button></div>
   </div></div>
-  <div class="section"><div class="section-hdr"><h2>Search</h2><button class="btn btn-sm" onclick="toggleSearchMode()">Mode: <span id="searchModeLabel">HYBRID</span></button><button class="btn btn-sm" onclick="toggleDependenceExpansion()" title="Trace causal precursors">Dep: <span id="depExpandLabel">ON</span></button></div>
+  <div class="section"><div class="section-hdr"><h2>Search</h2><button class="btn btn-sm" onclick="toggleSearchMode()">Mode: <span id="searchModeLabel">Hybrid</span></button></div>
     <div style="padding:12px"><input id="searchQuery" placeholder="Search nodes... (Ctrl+K or /)" onkeyup="if(event.key==='Enter')doSearch()"></div>
     <div id="searchResults"></div></div>
   <div class="section"><div class="section-hdr"><h2>Nodes</h2><div style="display:flex;gap:6px">
@@ -709,15 +709,12 @@ async function deleteNode(id){
 }
 
 // === Search with highlighting ===
-let lastQuery='',dependenceExpansion=true;
+let lastQuery='';
 function toggleSearchMode(){searchMode=searchMode==='hybrid'?'fts':'hybrid';document.getElementById('searchModeLabel').textContent=searchMode.toUpperCase()}
-function toggleDependenceExpansion(){dependenceExpansion=!dependenceExpansion;document.getElementById('depExpandLabel').textContent=dependenceExpansion?'ON':'OFF'}
 async function doSearch(){
   const q=document.getElementById('searchQuery').value.trim();if(!q)return;lastQuery=q;
   addFeed('search',q.substring(0,30));
-  const body={query:q,limit:10};
-  if(searchMode==='hybrid'&&dependenceExpansion)body.dependence_expansion=true;
-  const results=searchMode==='fts'?await api('/search?q='+encodeURIComponent(q)):await api('/search/hybrid',{method:'POST',body:JSON.stringify(body)});
+  const results=searchMode==='fts'?await api('/search?q='+encodeURIComponent(q)):await api('/search/hybrid',{method:'POST',body:JSON.stringify({query:q,limit:10})});
   const el=document.getElementById('searchResults');
   if(!results||!results.length){el.innerHTML='<div style="padding:12px;color:#444">No results</div>';return}
   el.innerHTML=results.map(r=>`<div style="padding:6px 14px;border-bottom:1px solid #ffffff06">

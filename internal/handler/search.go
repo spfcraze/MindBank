@@ -16,10 +16,11 @@ type SearchHandler struct {
 	searchRepo *repository.SearchRepo
 	embedder   *embedder.Client
 	edgeRepo   *repository.EdgeRepo
+	depRepo    *repository.DependenceRepo
 }
 
-func NewSearchHandler(searchRepo *repository.SearchRepo, emb *embedder.Client, edgeRepo *repository.EdgeRepo) *SearchHandler {
-	return &SearchHandler{searchRepo: searchRepo, embedder: emb, edgeRepo: edgeRepo}
+func NewSearchHandler(searchRepo *repository.SearchRepo, emb *embedder.Client, edgeRepo *repository.EdgeRepo, depRepo *repository.DependenceRepo) *SearchHandler {
+	return &SearchHandler{searchRepo: searchRepo, embedder: emb, edgeRepo: edgeRepo, depRepo: depRepo}
 }
 
 // FTS handles GET /api/v1/search?q=...
@@ -90,10 +91,11 @@ func (h *SearchHandler) Semantic(w http.ResponseWriter, r *http.Request) {
 // Hybrid handles POST /api/v1/search/hybrid
 func (h *SearchHandler) Hybrid(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Query     string `json:"query"`
-		Workspace string `json:"workspace,omitempty"`
-		Namespace string `json:"namespace,omitempty"`
-		Limit     int    `json:"limit,omitempty"`
+		Query               string `json:"query"`
+		Workspace           string `json:"workspace,omitempty"`
+		Namespace           string `json:"namespace,omitempty"`
+		Limit               int    `json:"limit,omitempty"`
+		DependenceExpansion bool   `json:"dependence_expansion,omitempty"`
 	}
 	if err := bindJSON(r, &req); err != nil {
 		respondError(w, 400, "invalid request: "+err.Error())
@@ -120,6 +122,26 @@ func (h *SearchHandler) Hybrid(w http.ResponseWriter, r *http.Request) {
 		respondError(w, 500, "search failed")
 		return
 	}
+
+	// Dependence-aware expansion: trace backward from top result to find supporting evidence
+	if req.DependenceExpansion && len(results) > 0 && h.depRepo != nil {
+		topResult := results[0]
+		precursors, err := h.depRepo.DependenceExpand(r.Context(), topResult.NodeID, req.Limit/4)
+		if err == nil && len(precursors) > 0 {
+			// Build existing set to avoid duplicates
+			existing := make(map[string]bool)
+			for _, r := range results {
+				existing[r.NodeID] = true
+			}
+			for _, p := range precursors {
+				if !existing[p.NodeID] {
+					results = append(results, p)
+					existing[p.NodeID] = true
+				}
+			}
+		}
+	}
+
 	if results == nil {
 		results = []models.SearchResult{}
 	}

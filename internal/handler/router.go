@@ -51,6 +51,7 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 	searchRepo := repository.NewSearchRepo(pool)
 	sessionRepo := repository.NewSessionRepo(pool)
 	snapshotRepo := repository.NewSnapshotRepo(pool)
+	depRepo := repository.NewDependenceRepo(pool)
 
 	// Embedder client
 	embClient := embedder.NewClient(cfg.OllamaURL, cfg.EmbedModel)
@@ -65,7 +66,7 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 	// Handlers
 	nh := &NodeHandler{repo: nodeRepo, pool: pool}
 	eh := &EdgeHandler{repo: edgeRepo, nodeRepo: nodeRepo}
-	sh := NewSearchHandler(searchRepo, embClient, edgeRepo)
+	sh := NewSearchHandler(searchRepo, embClient, edgeRepo, depRepo)
 	sessH := NewSessionHandler(sessionRepo, nodeRepo, ruleBased)
 	askH := NewAskHandler(searchRepo, snapshotRepo, edgeRepo, embClient)
 	bh := NewBatchHandler(nodeRepo, edgeRepo)
@@ -195,8 +196,12 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 			r.Get("/diff", ah.Diff)
 			r.Get("/patterns", ah.Patterns)
 			r.Get("/confidence", ah.Confidence)
+			r.Post("/dependence", ah.Dependence)
+			r.Post("/synchronize", ah.Synchronize)
+			r.Get("/observability", ah.Observability)
 			r.Post("/link-orphans", ah.LinkOrphans)
 			r.Post("/merge-duplicates", ah.MergeDuplicates)
+			r.Post("/connect-components", ah.ConnectComponents)
 		})
 
 		// Batch + Export/Import + Purge

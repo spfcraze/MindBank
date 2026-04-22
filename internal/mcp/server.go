@@ -26,6 +26,7 @@ type Server struct {
 	searchRepo  *repository.SearchRepo
 	snapRepo    *repository.SnapshotRepo
 	sessionRepo *repository.SessionRepo
+	depRepo     *repository.DependenceRepo
 	embedder    *embedder.Client
 	writeMu     sync.Mutex // protects stdout writes
 }
@@ -39,6 +40,7 @@ func NewServer(pool *pgxpool.Pool, emb *embedder.Client) *Server {
 		searchRepo:  repository.NewSearchRepo(pool),
 		snapRepo:    repository.NewSnapshotRepo(pool),
 		sessionRepo: repository.NewSessionRepo(pool),
+		depRepo:     repository.NewDependenceRepo(pool),
 		embedder:    emb,
 	}
 }
@@ -185,6 +187,8 @@ func (s *Server) handleToolCall(ctx context.Context, req *MCPRequest) *MCPRespon
 		result, err = s.toolNeighbors(ctx, params.Arguments)
 	case "create_edge":
 		result, err = s.toolCreateEdge(ctx, params.Arguments)
+	case "dependence":
+		result, err = s.toolDependence(ctx, params.Arguments)
 	default:
 		return s.error(req, -32601, fmt.Sprintf("unknown tool: %s", params.Name))
 	}
@@ -238,10 +242,11 @@ func (s *Server) toolCreateNode(ctx context.Context, args json.RawMessage) (any,
 
 func (s *Server) toolSearch(ctx context.Context, args json.RawMessage) (any, error) {
 	var req struct {
-		Query     string `json:"query"`
-		Workspace string `json:"workspace,omitempty"`
-		Namespace string `json:"namespace,omitempty"`
-		Limit     int    `json:"limit,omitempty"`
+		Query               string `json:"query"`
+		Workspace           string `json:"workspace,omitempty"`
+		Namespace           string `json:"namespace,omitempty"`
+		Limit               int    `json:"limit,omitempty"`
+		DependenceExpansion bool   `json:"dependence_expansion,omitempty"`
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
@@ -255,6 +260,24 @@ func (s *Server) toolSearch(ctx context.Context, args json.RawMessage) (any, err
 	results, err := s.searchRepo.HybridSearch(ctx, req.Query, embedding, req.Workspace, req.Namespace, req.Limit, s.edgeRepo)
 	if err != nil {
 		return nil, err
+	}
+
+	// Dependence-aware expansion: trace backward from top result to find supporting evidence
+	if req.DependenceExpansion && len(results) > 0 && s.depRepo != nil {
+		topResult := results[0]
+		precursors, err := s.depRepo.DependenceExpand(ctx, topResult.NodeID, req.Limit/4)
+		if err == nil && len(precursors) > 0 {
+			existing := make(map[string]bool)
+			for _, r := range results {
+				existing[r.NodeID] = true
+			}
+			for _, p := range precursors {
+				if !existing[p.NodeID] {
+					results = append(results, p)
+					existing[p.NodeID] = true
+				}
+			}
+		}
 	}
 
 	if len(results) == 0 {
@@ -274,9 +297,10 @@ func (s *Server) toolSearch(ctx context.Context, args json.RawMessage) (any, err
 
 func (s *Server) toolAsk(ctx context.Context, args json.RawMessage) (any, error) {
 	var req struct {
-		Query     string `json:"query"`
-		Workspace string `json:"workspace,omitempty"`
-		Namespace string `json:"namespace,omitempty"`
+		Query               string `json:"query"`
+		Workspace           string `json:"workspace,omitempty"`
+		Namespace           string `json:"namespace,omitempty"`
+		DependenceExpansion bool   `json:"dependence_expansion,omitempty"`
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
@@ -290,6 +314,24 @@ func (s *Server) toolAsk(ctx context.Context, args json.RawMessage) (any, error)
 	results, err := s.searchRepo.HybridSearch(ctx, req.Query, embedding, req.Workspace, req.Namespace, 5, s.edgeRepo)
 	if err != nil {
 		return nil, err
+	}
+
+	// Dependence-aware expansion
+	if req.DependenceExpansion && len(results) > 0 && s.depRepo != nil {
+		topResult := results[0]
+		precursors, err := s.depRepo.DependenceExpand(ctx, topResult.NodeID, 2)
+		if err == nil && len(precursors) > 0 {
+			existing := make(map[string]bool)
+			for _, r := range results {
+				existing[r.NodeID] = true
+			}
+			for _, p := range precursors {
+				if !existing[p.NodeID] {
+					results = append(results, p)
+					existing[p.NodeID] = true
+				}
+			}
+		}
 	}
 
 	if len(results) == 0 {
@@ -389,6 +431,65 @@ func (s *Server) toolCreateEdge(ctx context.Context, args json.RawMessage) (any,
 	return fmt.Sprintf("Created edge: %s -> %s (%s, id: %s)", edge.SourceID, edge.TargetID, edge.EdgeType, edge.ID), nil
 }
 
+func (s *Server) toolDependence(ctx context.Context, args json.RawMessage) (any, error) {
+	var req struct {
+		NodeID    string `json:"node_id,omitempty"`
+		Query     string `json:"query,omitempty"`
+		Namespace string `json:"namespace,omitempty"`
+		MaxDepth  int    `json:"max_depth,omitempty"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return nil, err
+	}
+
+	seedID := req.NodeID
+	if seedID == "" && req.Query != "" {
+		// Search for seed via hybrid search
+		embedding, err := s.embedder.Embed(ctx, req.Query)
+		if err != nil {
+			return nil, fmt.Errorf("embedding failed: %w", err)
+		}
+		results, err := s.searchRepo.HybridSearch(ctx, req.Query, embedding, "", req.Namespace, 1, s.edgeRepo)
+		if err != nil || len(results) == 0 {
+			return nil, fmt.Errorf("no seed found for query")
+		}
+		seedID = results[0].NodeID
+	}
+	if seedID == "" {
+		return nil, fmt.Errorf("node_id or query required")
+	}
+	if req.MaxDepth <= 0 || req.MaxDepth > 5 {
+		req.MaxDepth = 3
+	}
+
+	nodes, edges, modes, criticalDepth, coverage, blindSpots, err := s.depRepo.GetDependenceGraph(ctx, seedID,
+		[]string{"depends_on", "learned_from", "decided_by", "produced", "supports"},
+		req.MaxDepth, 0.1)
+	if err != nil {
+		return nil, err
+	}
+
+	out := fmt.Sprintf("Domain of Dependence for %s\n", seedID)
+	out += fmt.Sprintf("Critical Depth: %d | Coverage: %.1f%%\n\n", criticalDepth, coverage*100)
+
+	if len(modes) > 0 {
+		out += "Top Influence Modes:\n"
+		for _, m := range modes {
+			out += fmt.Sprintf("- [%s] %s (score: %.3f, depth: %d)\n", m.NodeType, m.Label, m.InfluenceScore, m.Depth)
+		}
+	}
+
+	if len(blindSpots) > 0 {
+		out += "\nBlind Spots:\n"
+		for _, b := range blindSpots {
+			out += fmt.Sprintf("- [%s] %s\n", b.Severity, b.Description)
+		}
+	}
+
+	out += fmt.Sprintf("\nGraph: %d nodes, %d edges\n", len(nodes), len(edges))
+	return out, nil
+}
+
 func (s *Server) tools() []map[string]any {
 	return []map[string]any{
 		{
@@ -409,27 +510,29 @@ func (s *Server) tools() []map[string]any {
 		},
 		{
 			"name":        "search",
-			"description": "Search the mindmap using hybrid FTS + semantic search",
+			"description": "Search the mindmap using hybrid FTS + semantic search. Optionally traces causal precursors (dependence expansion) for richer context.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"query":     map[string]string{"type": "string", "description": "Search query"},
-					"workspace": map[string]string{"type": "string", "description": "Filter by workspace"},
-					"namespace": map[string]string{"type": "string", "description": "Filter by namespace"},
-					"limit":     map[string]string{"type": "integer", "description": "Max results (default: 10)"},
+					"query":                map[string]string{"type": "string", "description": "Search query"},
+					"workspace":            map[string]string{"type": "string", "description": "Filter by workspace"},
+					"namespace":            map[string]string{"type": "string", "description": "Filter by namespace"},
+					"limit":                map[string]string{"type": "integer", "description": "Max results (default: 10)"},
+					"dependence_expansion": map[string]string{"type": "boolean", "description": "Trace causal precursors of top result (default: false)"},
 				},
 				"required": []string{"query"},
 			},
 		},
 		{
 			"name":        "ask",
-			"description": "Ask a natural language question and get relevant context from the mindmap",
+			"description": "Ask a natural language question and get relevant context from the mindmap. Optionally includes causal precursors.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"query":     map[string]string{"type": "string", "description": "Your question"},
-					"workspace": map[string]string{"type": "string", "description": "Filter by workspace"},
-					"namespace": map[string]string{"type": "string", "description": "Filter by project namespace (isolates memories)"},
+					"query":                map[string]string{"type": "string", "description": "Your question"},
+					"workspace":            map[string]string{"type": "string", "description": "Filter by workspace"},
+					"namespace":            map[string]string{"type": "string", "description": "Filter by project namespace (isolates memories)"},
+					"dependence_expansion": map[string]string{"type": "boolean", "description": "Trace causal precursors of top result (default: false)"},
 				},
 				"required": []string{"query"},
 			},
@@ -455,6 +558,19 @@ func (s *Server) tools() []map[string]any {
 					"depth":   map[string]string{"type": "integer", "description": "Traversal depth (default: 1)"},
 				},
 				"required": []string{"node_id"},
+			},
+		},
+		{
+			"name":        "dependence",
+			"description": "Trace the domain of dependence (causal precursors) for a node or query. Returns influence modes, critical depth, coverage, and blind spots.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"node_id":   map[string]string{"type": "string", "description": "Node ID to trace (optional if query provided)"},
+					"query":     map[string]string{"type": "string", "description": "Search query to find seed node (optional if node_id provided)"},
+					"namespace": map[string]string{"type": "string", "description": "Filter by namespace"},
+					"max_depth": map[string]string{"type": "integer", "description": "Max traversal depth 1-5 (default: 3)"},
+				},
 			},
 		},
 		{

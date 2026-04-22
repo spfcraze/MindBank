@@ -46,9 +46,9 @@ stop_mindbank() {
 }
 
 # Check if binary exists, build if not
-if [ ! -f ./mindbank ]; then
-    log "Building mindbank binary..."
-    go build -o mindbank ./cmd/mindbank
+if [ ! -f ./mindbank-api ]; then
+    log "Building mindbank-api binary..."
+    go build -o mindbank-api ./cmd/mindbank
 fi
 
 # Start Postgres via Docker
@@ -88,7 +88,7 @@ MB_DB_DSN="$MB_DSN" \
 MB_OLLAMA_URL="http://localhost:11434" \
 MB_PORT="$MB_PORT" \
 MB_LOG_LEVEL=info \
-./mindbank >> "$MB_LOGFILE" 2>&1 &
+./mindbank-api >> "$MB_LOGFILE" 2>&1 &
 
 MB_PID=$!
 echo "$MB_PID" > "$MB_PIDFILE"

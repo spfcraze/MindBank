@@ -61,6 +61,7 @@ MindBank **remembers**:
 | 🔗 **Graph Relationships** | Nodes connected by typed edges (`contains`, `relates_to`, `depends_on`, `decided_by`, etc.) |
 | 🖼️ **Per-Project Isolation** | Auto-namespace by working directory. `~/project-a` and `~/project-b` have separate memory graphs |
 | ⚡ **Wake-Up Context** | Pre-computed snapshot of important memories served on session start |
+| 🔮 **Observer Perspective** | Trace causal precursors, detect blind spots, measure knowledge coverage — understand *why* a decision was made |
 | 🤖 **MCP Native** | Works with Claude Desktop, Claude Code CLI, and Hermes Agent out of the box |
 
 ---
@@ -109,6 +110,7 @@ The web UI gives you:
 - **Tools** — Auto-connect, clean orphans, import/export, batch operations, data quality analyzer
 - **Graph 2D** — Interactive force-directed visualization
 - **Brain 3D** — Immersive 3D graph exploration
+- **Observer** — Causal precursor tracing, blind spot detection, knowledge coverage analysis
 
 ---
 
@@ -162,6 +164,112 @@ Nodes are automatically scored by 5 factors:
 
 ---
 
+## 🔮 Observer Perspective: Causal Intelligence
+
+MindBank doesn't just store memories — it understands their **causal structure**. The Observer Perspective system treats every memory as an observable event and traces backward to find its **domain of dependence**: the set of precursors that had to exist for this memory to be possible.
+
+### Why This Matters
+
+Traditional search gives you *what* you know. The Observer Perspective tells you *why* you know it:
+
+- **"We chose PostgreSQL"** → *Because* load testing showed MongoDB failed at 10k req/s
+- **"Use connection pooling"** → *Because* we learned from an outage where connections exhausted
+- **"JWT for auth"** → *Depends on* the decision to go stateless, which *depends on* scaling requirements
+
+Without this, AI agents repeat decisions without understanding their rationale. With it, they inherit the full reasoning chain.
+
+### Core Concepts
+
+| Concept | Definition |
+|---------|-----------|
+| **Domain of Dependence** | All causal precursors of a node — everything that had to happen for this memory to exist |
+| **Critical Depth** | The shallowest depth at which 90% of total influence is captured. If critical depth is 2, you only need to look 2 hops back to understand almost everything that matters |
+| **Coverage** | Fraction of a node's immediate edges that have upstream precursors. 100% = fully explained; low = orphan decisions |
+| **Influence Modes** | Ranked list of precursors by influence score (weighted by edge strength and decayed by depth) |
+| **Blind Spots** | Automatically detected gaps: unresolved contradictions, missing supporting evidence, orphan decisions |
+
+### How It Works
+
+```
+User asks: "Why did we choose PostgreSQL?"
+    ↓
+[Hybrid Search] finds node: "Use PostgreSQL for primary store"
+    ↓
+[Dependence Trace] backward BFS through causal edges:
+  depth 1: "Load testing results" (decided_by)
+  depth 1: "ACID requirements" (depends_on)
+  depth 2: "Financial data integrity" (depends_on)
+  depth 2: "MongoDB failure at 10k req/s" (learned_from)
+    ↓
+[Analysis]
+  Critical Depth: 2 (90% of influence within 2 hops)
+  Coverage: 100% (all immediate edges have precursors)
+  Blind Spots: none
+  Influence Modes:
+    1. "Load testing results" (score: 0.85, depth: 1)
+    2. "ACID requirements" (score: 0.72, depth: 1)
+    3. "MongoDB failure at 10k req/s" (score: 0.51, depth: 2)
+```
+
+### Dependence-Aware Search & Q&A
+
+Both search and Q&A support **opt-in dependence expansion**:
+
+```json
+// Search with causal context
+{"name": "mindbank_search", "arguments": {
+  "query": "database choice",
+  "dependence_expansion": true
+}}
+
+// Ask with supporting evidence
+{"name": "mindbank_ask", "arguments": {
+  "query": "why postgres over mongodb",
+  "dependence_expansion": true
+}}
+```
+
+When enabled, MindBank:
+1. Runs hybrid search to find the most relevant node
+2. Traces backward up to 2 hops through causal edges
+3. Appends the top precursors (up to `limit/4`) to the result set
+4. Returns both the answer *and* its supporting evidence chain
+
+This is **disabled by default** for backward compatibility. Agents must explicitly opt-in.
+
+### Direct Dependence Trace
+
+For deep causal analysis, use the dedicated `dependence` tool:
+
+```json
+{"name": "mindbank_dependence", "arguments": {
+  "query": "database configuration",
+  "max_depth": 3
+}}
+```
+
+Returns:
+- **Critical Depth**: How far back you need to go to capture 90% of influence
+- **Coverage %**: How well-explained the seed node is
+- **Influence Modes**: Ranked precursors with scores and depths
+- **Blind Spots**: Detected gaps (unresolved contradictions, missing evidence)
+- **Graph Stats**: Node and edge counts in the dependence subgraph
+
+### Edge Types Used for Causal Tracing
+
+The dependence system follows these edge types backward:
+
+| Edge Type | Direction | Meaning |
+|-----------|-----------|---------|
+| `depends_on` | A → B | A depends on B (B is prerequisite) |
+| `learned_from` | A → B | A was learned from experience B |
+| `decided_by` | A → B | Decision A was informed by B |
+| `produced` | A → B | A produced outcome B |
+| `supports` | A → B | A supports/evidences B |
+| `contradicts` | A → B | A contradicts B (triggers blind spot detection) |
+
+---
+
 ## Connect Your AI Agent
 
 ```bash
@@ -186,10 +294,13 @@ bash scripts/install-plugin.sh --claude-desktop --hermes
 | Tool | Description |
 |------|-------------|
 | `mindbank_store` | Save facts, decisions, questions, preferences |
-| `mindbank_search` | Hybrid FTS + semantic search |
-| `mindbank_ask` | Natural language query → structured context |
+| `mindbank_search` | Hybrid FTS + semantic search (opt-in causal precursors) |
+| `mindbank_ask` | Natural language query → structured context (opt-in supporting evidence) |
 | `mindbank_snapshot` | Get wake-up context on session start |
 | `mindbank_neighbors` | Graph traversal (connected nodes) |
+| `mindbank_dependence` | **Trace causal precursors** — understand *why* a decision exists |
+
+**Dependence Expansion:** Both `search` and `ask` support an optional `dependence_expansion` flag. When enabled, MindBank traces backward from the top result through `depends_on`, `learned_from`, `decided_by`, `produced`, and `supports` edges to surface the supporting evidence that led to a decision or fact. This gives your AI agent the full causal chain, not just the conclusion.
 
 ---
 
@@ -231,6 +342,10 @@ POST /api/v1/search/semantic
 # Hybrid (best of both)
 POST /api/v1/search/hybrid
 {"query":"rate limiter bug","limit":10}
+
+# Dependence trace
+POST /api/v1/analyze/dependence
+{"query":"database choice","max_depth":3}
 ```
 
 ### Snapshots
@@ -248,23 +363,24 @@ POST /api/v1/snapshot/rebuild
 ## Architecture
 
 ```
-┌───────────────────────────────────────────────────────────┐
+┌─────────────────────────────────────────────────────────────────────┐
 │                    MindBank Architecture                     │
-└───────────────────────────────────────────────────────────┘
+└─────────────────────────────────────────────────────────────────────┘
 
   💻 Dashboard (static/)          🤖 MCP Server (stdio)
          │                              │
-         └──────────────────────────────┘
+         └──────────────────────────────────┘
                         │
               🔗 Go HTTP API (chi router)
                         │
-       ┌──────────────────────────────────────┐
+       ┌──────────────────────────────────────────┐
        │                                              │
    💾 PostgreSQL 16+                          🔬 Ollama
    • pgvector (HNSW)                          • nomic-embed-text:v1.5
    • tsvector (FTS)                           • 768 dims
    • Temporal tables                          • Local, offline
    • Recursive CTEs                           • 4 concurrent semaphores
+   • Dependence analysis (BFS)                • Embedding client
 ```
 
 ### Key Design Decisions
@@ -274,6 +390,7 @@ POST /api/v1/snapshot/rebuild
 - **Semaphore-bounded embeddings** — Max 4 concurrent Ollama requests to prevent overload.
 - **Typed errors** — `BUSY` (retry), `UNAVAILABLE` (wait), `BAD_QUERY` (don't retry).
 - **Rate limiting** — 100 req/min per IP with chi middleware.
+- **Observer Perspective** — Recursive CTE BFS for causal precursor tracing, influence scoring with depth decay, and blind spot detection.
 
 ---
 
