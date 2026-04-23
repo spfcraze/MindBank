@@ -93,6 +93,15 @@ textarea{resize:vertical;min-height:50px}
 .btn-restart{color:#ff8800;border:1px solid #ff880060}.btn-restart:hover{border-color:#ff8800;color:#ffaa33}
 .btn-sync{color:#00ff88;border:1px solid #00ff8860}.btn-sync:hover{border-color:#00ff88;color:#33ffaa}
 .header-actions button[disabled]{opacity:.4;cursor:not-allowed}
+.graph-overlay{position:absolute;inset:0;background:#08080dd0;display:flex;align-items:center;justify-content:center;z-index:5;flex-direction:column;gap:12px}
+.graph-overlay .msg{color:#ffaa00;font-size:13px;text-align:center;max-width:400px;padding:0 20px}
+.graph-overlay .btn-retry{background:#ff880018;color:#ff8800;border:1px solid #ff880060;padding:6px 14px;border-radius:4px;cursor:pointer;font-family:inherit;font-size:12px;transition:all .2s}
+.graph-overlay .btn-retry:hover{border-color:#ff8800}
+.graph-spinner{width:28px;height:28px;border:2px solid #ffffff10;border-top-color:#00ff88;border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.graph-search{width:140px;background:#ffffff06;border:1px solid #ffffff10;color:#e0e0e0;padding:3px 8px;border-radius:4px;font-family:inherit;font-size:11px}
+.graph-search::placeholder{color:#444}
+.graph-search:focus{outline:none;border-color:#00ff8830}
 </style>
 </head>
 <body>
@@ -547,10 +556,12 @@ textarea{resize:vertical;min-height:50px}
 <div class="container tab-content" id="tab-graph">
   <div class="section" style="margin:0"><div style="padding:10px 14px;border-bottom:1px solid #16162a;display:flex;gap:10px;align-items:center">
     <label style="font-size:11px;color:#666">NS:</label>
-    <select id="graphNS" onchange="loadGraph()" style="width:auto;padding:3px 6px"><option value="">All</option></select>
+    <select id="graphNS" onchange="debouncedLoadGraph()" style="width:auto;padding:3px 6px"><option value="">All</option></select>
     <button class="btn btn-sm" onclick="loadGraph()">Refresh</button>
     <button class="btn btn-sm" onclick="graphFit()">Fit</button>
-    <span style="color:#444;font-size:10px;margin-left:auto" id="graphInfo">Loading...</span>
+    <input type="text" id="graphSearch" class="graph-search" placeholder="Find node..." onkeydown="if(event.key==='Enter')graphSearchNode()">
+    <button class="btn btn-sm" onclick="graphSearchNode()">Find</button>
+    <span style="color:#444;font-size:10px;margin-left:auto" id="graphInfo">Ready</span>
   </div><div style="position:relative"><div id="graphContainer" style="width:100%;height:calc(100vh - 140px);min-height:400px;background:#08080d"></div></div></div>
 </div>
 
@@ -606,17 +617,27 @@ function hl(text,query){if(!query||!text)return esc(text);const q=query.toLowerC
 
 // === Tabs ===
 let tabLoaded = { dashboard: true, questions: false, edges: false, tools: true, graph: false, brain: false, observer: false };
+let currentTab='dashboard';
 function switchTab(name){
+  const prevTab=currentTab;
+  currentTab=name;
   document.querySelectorAll('.tab').forEach((t,i)=>{t.classList.toggle('active',['dashboard','questions','edges','tools','graph','brain','observer'][i]===name)});
   document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
   document.getElementById('tab-'+name).classList.add('active');
-  // Unified lazy-load: load once on first switch
+  // Tear down graph when leaving to free memory
+  if(prevTab==='graph'&&graphNetwork){
+    try{graphNetwork.destroy()}catch{}
+    graphNetwork=null;
+  }
+  // Lazy-load on first switch; graph rebuilds fresh each time
   if(!tabLoaded[name]){
     tabLoaded[name]=true;
     if(name==='graph')loadGraph();
     if(name==='brain'){const f=document.getElementById('brainFrame');if(!f.dataset.loaded){f.src='/graph-view?embed=1';f.dataset.loaded='1'}f.style.width='100%';f.style.height=(window.innerHeight-60)+'px';}
     if(name==='questions')loadQuestions();
     if(name==='edges')loadEdges();
+  }else if(name==='graph'){
+    loadGraph();
   }
 }
 
@@ -1020,21 +1041,74 @@ async function pollObsidianStatus(){
 }
 
 // === Graph 2D ===
+const GRAPH_SHAPE_MAP={project:'diamond',decision:'star',problem:'triangle',person:'circle',event:'triangleDown',topic:'box',concept:'ellipse',fact:'circle',advice:'dot',preference:'text',question:'diamond',agent:'dot'};
+let graphLoadTimer=null,graphPhysicsWasRunning=false;
+
 async function loadVisNetwork(){
-  if(visLoaded)return;
-  await new Promise((res,rej)=>{const s=document.createElement('script');s.src='https://unpkg.com/vis-network@9.1.6/standalone/umd/vis-network.min.js';s.onload=res;s.onerror=rej;document.head.appendChild(s)}).catch(()=>{toast('vis-network CDN unavailable',true)});
-  visLoaded=true;
+  if(visLoaded&&typeof vis!=='undefined')return;
+  const container=document.getElementById('graphContainer');
+  showGraphOverlay('<div class="graph-spinner"></div><div style="color:#888;font-size:11px;margin-top:8px">Loading graph engine...</div>');
+  for(let attempt=1;attempt<=3;attempt++){
+    try{
+      await new Promise((res,rej)=>{
+        const s=document.createElement('script');
+        s.src='https://unpkg.com/vis-network@9.1.6/standalone/umd/vis-network.min.js';
+        s.onload=res;
+        s.onerror=()=>rej(new Error('CDN failed'));
+        document.head.appendChild(s);
+      });
+      visLoaded=true;
+      hideGraphOverlay();
+      return;
+    }catch(e){
+      if(attempt===3){
+        showGraphOverlay('<div class="msg">vis-network CDN unavailable</div><button class="btn-retry" onclick="visLoaded=false;loadGraph()">Retry</button>');
+        throw e;
+      }
+      await new Promise(r=>setTimeout(r,1000*attempt));
+    }
+  }
 }
+
+function showGraphOverlay(html){
+  const container=document.getElementById('graphContainer');
+  let el=document.getElementById('graphOverlay');
+  if(!el){el=document.createElement('div');el.id='graphOverlay';el.className='graph-overlay';container.appendChild(el);}
+  el.innerHTML=html;
+  el.style.display='flex';
+}
+function hideGraphOverlay(){
+  const el=document.getElementById('graphOverlay');
+  if(el)el.style.display='none';
+}
+
+function debouncedLoadGraph(){
+  if(graphLoadTimer)clearTimeout(graphLoadTimer);
+  graphLoadTimer=setTimeout(()=>loadGraph(),200);
+}
+
 async function loadGraph(){
-  await loadVisNetwork().catch(()=>{});
+  const container=document.getElementById('graphContainer');
+  showGraphOverlay('<div class="graph-spinner"></div><div style="color:#888;font-size:11px;margin-top:8px">Loading graph data...</div>');
+  try{
+    await loadVisNetwork();
+  }catch(e){return}
   if(typeof vis==='undefined'){toast('Graph library not loaded',true);return}
   const ns=document.getElementById('graphNS').value;
   let url='/graph?';if(ns)url+='namespace='+encodeURIComponent(ns);
-  const data=await api(url);if(!data)return;
+  const data=await api(url);if(!data){hideGraphOverlay();return}
   graphData=data;
-  document.getElementById('graphInfo').textContent=`${data.nodes.length} nodes, ${data.edges.length} edges`;
 
-  // Calculate node importance for sizing
+  // Node limit guard
+  if(data.nodes.length>500){
+    showGraphOverlay(`<div class="msg">Graph too large (${data.nodes.length} nodes).<br>Select a namespace filter to view.</div>`);
+    document.getElementById('graphInfo').textContent=`${data.nodes.length} nodes — filter required`;
+    return;
+  }
+
+  document.getElementById('graphInfo').textContent=`${data.nodes.length} nodes, ${data.edges.length} edges`;
+  hideGraphOverlay();
+
   const maxAcc=Math.max(...data.nodes.map(n=>n.access_count||0),1);
   const maxImp=Math.max(...data.nodes.map(n=>n.importance||0.5),1);
 
@@ -1044,10 +1118,12 @@ async function loadGraph(){
     return{id:n.id,label:n.label.length>22?n.label.substring(0,20)+'..':n.label,
       title:`${esc(n.label)}\n[${n.node_type}] ${n.namespace}\nimp:${(n.importance||0).toFixed(2)} acc:${n.access_count||0}\n${esc((n.summary||'').substring(0,60))}`,
       color:{background:c.bg,border:c.bd,highlight:{background:c.bg,border:'#fff'},hover:{background:c.bg,border:c.bg}},
-      shape:n.node_type==='project'?'diamond':n.node_type==='decision'?'star':n.node_type==='problem'?'triangle':'dot',
-      size:10+accNorm*15+impNorm*10,
-      font:{color:'#aaa',size:10,face:'SF Mono,monospace'},
-      borderWidth:2,borderWidthSelected:3}});
+      shape:GRAPH_SHAPE_MAP[n.node_type]||'dot',
+      size:Math.min(8,4+accNorm*3+impNorm*2),
+      opacity:0.85,
+      font:{color:'#aaa',size:8,face:'SF Mono,monospace'},
+      borderWidth:1.5,borderWidthSelected:2}});
+
   const visEdges=data.edges.map(e=>{
     const src=data.nodes.find(n=>n.id===e.source);
     const tgt=data.nodes.find(n=>n.id===e.target);
@@ -1067,37 +1143,34 @@ async function loadGraph(){
     graphNetwork=null;
   }
 
-  const container=document.getElementById('graphContainer');
   const ds={nodes:new vis.DataSet(visNodes),edges:new vis.DataSet(visEdges)};
   graphNetwork=new vis.Network(container,ds,{
     layout:{improvedLayout:false},
     physics:{enabled:true,
-      barnesHut:{gravitationalConstant:-2500,centralGravity:0.25,springLength:140,springConstant:0.04,damping:0.12},
+      barnesHut:{gravitationalConstant:-2500,centralGravity:0.15,springLength:200,springConstant:0.04,damping:0.12},
       stabilization:{iterations:150,updateInterval:25}},
     interaction:{hover:true,tooltipDelay:150,navigationButtons:true,keyboard:{enabled:true,bindToWindow:false},
       multiselect:true,selectConnectedEdges:true},
-    nodes:{scaling:{min:8,max:40},shadow:{enabled:true,size:5,color:'rgba(0,255,136,0.15)'}},
+    nodes:{shadow:{enabled:false},widthConstraint:{maximum:60},font:{size:8}},
     edges:{scaling:{min:0.5,max:3},shadow:{enabled:false}}});
 
-  // Highlight connected edges on node click
+  // Click handler with batch edge updates
   graphNetwork.on('click',function(params){
     if(params.nodes.length>0){
       const nodeId=params.nodes[0];
-      // Highlight all connected edges
-      const connectedEdges=ds.edges.get().filter(e=>e.from===nodeId||e.to===nodeId);
-      ds.edges.forEach(e=>{
-        const isConnected=connectedEdges.some(ce=>ce.id===e.id);
-        ds.edges.update({id:e.id,color:{color:isConnected?'#00ff88':'#333333',highlight:'#00ff88'}});
-      });
+      const connectedIds=new Set();
+      ds.edges.get().forEach(e=>{if(e.from===nodeId||e.to===nodeId)connectedIds.add(e.id)});
+      const updates=ds.edges.get().map(e=>({id:e.id,color:{color:connectedIds.has(e.id)?'#00ff88':'#333333',highlight:'#00ff88'}}));
+      ds.edges.update(updates);
       showDetail(nodeId);
     }else{
-      // Reset edge colors
-      ds.edges.forEach(e=>{
+      const updates=ds.edges.get().map(e=>{
         const src=data.nodes.find(n=>n.id===e.from);
         const tgt=data.nodes.find(n=>n.id===e.to);
         const nsMatch=src&&tgt&&src.namespace===tgt.namespace;
-        ds.edges.update({id:e.id,color:{color:nsMatch?'#333':'#553333',highlight:'#00ff88'}});
+        return{id:e.id,color:{color:nsMatch?'#333':'#553333',highlight:'#00ff88'}};
       });
+      ds.edges.update(updates);
     }
   });
 
@@ -1108,10 +1181,40 @@ async function loadGraph(){
   });
   graphNetwork.on('stabilizationIterationsDone',function(){
     document.getElementById('graphInfo').textContent=`${data.nodes.length} nodes, ${data.edges.length} edges`;
-    graphNetwork.setOptions({physics:{enabled:false}}); // Disable physics after stabilization for performance
+    graphNetwork.setOptions({physics:{enabled:false}});
+    graphPhysicsWasRunning=false;
   });
+
+  // Track physics state for visibility pausing
+  graphPhysicsWasRunning=true;
 }
+
 function graphFit(){if(graphNetwork)graphNetwork.fit({animation:true})}
+
+function graphSearchNode(){
+  if(!graphNetwork||!graphData)return;
+  const q=document.getElementById('graphSearch').value.trim().toLowerCase();
+  if(!q)return;
+  const node=graphData.nodes.find(n=>n.label.toLowerCase().includes(q));
+  if(node){
+    graphNetwork.focus(node.id,{scale:1.2,animation:{duration:400,easingFunction:'easeInOutQuad'}});
+    graphNetwork.selectNodes([node.id]);
+  }else{
+    toast('Node not found',true);
+  }
+}
+
+// Pause graph physics when browser tab is hidden
+function handleGraphVisibility(){
+  if(currentTab!=='graph'||!graphNetwork)return;
+  if(document.hidden){
+    const opts=graphNetwork.physics.physicsEnabled;
+    if(opts){graphPhysicsWasRunning=true;graphNetwork.setOptions({physics:{enabled:false}});}
+  }else if(graphPhysicsWasRunning){
+    graphNetwork.setOptions({physics:{enabled:true}});
+  }
+}
+document.addEventListener('visibilitychange',handleGraphVisibility);
 
 async function recalcImportance(){
   document.getElementById('recalcResult').innerHTML='<span style="color:#ffaa00">Recalculating...</span>';
