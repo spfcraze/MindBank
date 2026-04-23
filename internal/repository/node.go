@@ -628,3 +628,13 @@ func (r *NodeRepo) RecalculateImportance(ctx context.Context) (int64, error) {
 	}
 	return tag.RowsAffected(), nil
 }
+
+// CountNodes returns the number of active (non-deleted) nodes.
+func (r *NodeRepo) CountNodes(ctx context.Context) (int, error) {
+	var count int
+	err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM nodes WHERE valid_to IS NULL`).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count nodes: %w", err)
+	}
+	return count, nil
+}

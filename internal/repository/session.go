@@ -18,6 +18,10 @@ func NewSessionRepo(pool *pgxpool.Pool) *SessionRepo {
 	return &SessionRepo{pool: pool}
 }
 
+func (r *SessionRepo) Pool() *pgxpool.Pool {
+	return r.pool
+}
+
 // Create creates a new session.
 func (r *SessionRepo) Create(ctx context.Context, req models.SessionCreate) (*models.Session, error) {
 	ws := req.WorkspaceName
