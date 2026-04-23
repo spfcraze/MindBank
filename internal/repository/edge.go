@@ -383,3 +383,13 @@ func scanEdges(rows pgx.Rows) ([]models.Edge, error) {
 	}
 	return edges, nil
 }
+
+// Count returns the total number of edges in the database.
+func (r *EdgeRepo) Count(ctx context.Context) (int64, error) {
+	var count int64
+	err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM edges`).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count edges: %w", err)
+	}
+	return count, nil
+}

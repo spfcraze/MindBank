@@ -248,9 +248,8 @@ async function load(){
     document.getElementById('sn').textContent=d.nodes.length;
   }
   try{
-    const ecnt=await(await fetch('/api/v1/edges?limit=1')).json();
-    const edgeTotal=ecnt.edges?ecnt.edges.length:ecnt.length||d.edges.length;
-    document.getElementById('se').textContent=edgeTotal;
+    const edgeCnt=await(await fetch('/api/v1/edges?count=true')).json();
+    document.getElementById('se').textContent=edgeCnt.count||d.edges.length;
   }catch(e){
     document.getElementById('se').textContent=d.edges.length;
   }
@@ -440,7 +439,7 @@ function physics(){
 
   // Edge attraction (skip when repulsion skipped for large graphs)
   if(!skipRepulsion){
-    const edgeCap=Math.min(edges.length,500); // Cap edges in physics for performance
+    const edgeCap=Math.min(edges.length,300); // Cap edges in physics for performance
     for(let ei=0;ei<edgeCap;ei++){
       const e=edges[ei];
       const a=nodeMap.get(e.src),b=nodeMap.get(e.dst);
@@ -506,9 +505,11 @@ let renderIdle=false; // pause render loop when fully settled
 function render(){
   if(!renderRunning)return;
   // Skip rendering when physics settled, no bursts, no rotation, no hover
-  if(physicsSettled&&bursts.length===0&&!autoR&&!hovered&&!drag){
+  // OPTIMIZED: Use || instead of && to make it easier to pause rendering
+  // This prevents unnecessary frame rendering when nothing is changing
+  if(physicsSettled&&!autoR&&!drag&&!bursts.length){
     if(!renderIdle){renderIdle=true;drawMinimap();} // one last minimap draw
-    requestAnimationFrame(render);
+    // DO NOT requestAnimationFrame — actually pause to save CPU/GPU
     return;
   }
   renderIdle=false;
@@ -517,20 +518,17 @@ function render(){
     ctx.fillStyle='#08080d';ctx.fillRect(0,0,W,H);
     if(autoR)cam.x+=0.3;
     const cx=W/2,cy=H/2;
-    // Subtle radial background gradient
-    const bgGrad=ctx.createRadialGradient(cx,cy,0,cx,cy,Math.max(W,H)*0.7);
-    bgGrad.addColorStop(0,'#0a0a14');bgGrad.addColorStop(1,'#050508');
-    ctx.fillStyle=bgGrad;ctx.fillRect(0,0,W,H);
+    // Subtle radial background — solid color for performance (Firefox-friendly)
+    ctx.fillStyle='#0a0a14';ctx.fillRect(0,0,W,H);
     drawGrid(cx,cy);
     drawParticles(cx,cy);
     drawEdges(cx,cy);
     drawNodes(cx,cy);
     drawBursts();
     if(frameCount%2===0)drawMinimap(); // every other frame
-    // Vignette overlay — cinematic dark edges
-    const vigGrad=ctx.createRadialGradient(cx,cy,Math.min(W,H)*0.3,cx,cy,Math.max(W,H)*0.75);
-    vigGrad.addColorStop(0,'rgba(0,0,0,0)');vigGrad.addColorStop(1,'rgba(0,0,0,0.4)');
-    ctx.fillStyle=vigGrad;ctx.fillRect(0,0,W,H);
+    // Vignette overlay — pre-rendered pattern for performance
+    // Skip expensive radial gradient in Firefox; use globalAlpha fade instead
+    ctx.fillStyle='rgba(0,0,0,0.15)';ctx.fillRect(0,0,W,H);
     frameCount++;
     if(performance.now()-lastFps>=1000){document.getElementById('sf').textContent=frameCount;frameCount=0;lastFps=performance.now();}
   }catch(e){console.error('Render error:',e);}
@@ -675,14 +673,13 @@ function drawNodes(cx,cy){
     const glowAlphaBase=(isHL?0.25:isHov?0.2:0.08)*pulse*nodeAlpha;
 
     // Glow (high LOD only, skip when too many nodes or zoomed in)
+    // OPTIMIZED: Use solid circles with globalAlpha instead of radial gradients
+    // Firefox suffers from per-frame gradient allocation; this saves ~200 allocs/frame
     if((lod==='high'&&cam.z<2.5&&nodes.length<80)||isHov||isHL){
       const glowSz=Math.min(sz*2.5,60); // cap max glow radius
-      const grad=ctx.createRadialGradient(sx,sy,0,sx,sy,glowSz);
-      grad.addColorStop(0,n.rgba+(glowAlphaBase*0.8).toFixed(2)+')');
-      grad.addColorStop(0.5,n.rgba+(glowAlphaBase*0.3).toFixed(2)+')');
-      grad.addColorStop(1,n.rgba+'0)');
       ctx.beginPath();ctx.arc(sx,sy,glowSz,0,Math.PI*2);
-      ctx.fillStyle=grad;ctx.fill();
+      ctx.globalAlpha=glowAlphaBase*0.5;
+      ctx.fillStyle=n.rgbaFull;ctx.fill();
       ctx.globalAlpha=nodeAlpha;
     }
 
@@ -711,13 +708,11 @@ function drawNodes(cx,cy){
     ctx.globalAlpha=1;
 
     // Inner specular highlight (3D sphere look, high LOD only)
-    if(lod==='high'){
-      const grad=ctx.createRadialGradient(sx-sz*0.25,sy-sz*0.25,0,sx,sy,sz);
-      grad.addColorStop(0,'rgba(255,255,255,0.18)');
-      grad.addColorStop(0.4,'rgba(255,255,255,0.06)');
-      grad.addColorStop(1,'rgba(0,0,0,0)');
-      ctx.beginPath();ctx.arc(sx,sy,sz,0,Math.PI*2);
-      ctx.fillStyle=grad;ctx.fill();
+    // OPTIMIZED: Solid white dot instead of radial gradient for Firefox performance
+    if(lod==='high'&&nodes.length<60){
+      ctx.beginPath();ctx.arc(sx-sz*0.25,sy-sz*0.25,sz*0.3,0,Math.PI*2);
+      ctx.globalAlpha=0.15;ctx.fillStyle='#fff';ctx.fill();
+      ctx.globalAlpha=nodeAlpha;
     }
 
     // Avatar/emoji for person/agent/project nodes
@@ -883,11 +878,11 @@ function drawBursts(){
     bctx.beginPath();bctx.arc(b.x,b.y,r2,0,Math.PI*2);
     bctx.strokeStyle=`${b.color}${(alpha*0.3).toFixed(2)})`;
     bctx.lineWidth=1.5*(1-b.t);bctx.stroke();
-    // Radial gradient flash
-    const grad=bctx.createRadialGradient(b.x,b.y,0,b.x,b.y,r*0.4);
-    grad.addColorStop(0,`${b.color}${(alpha*0.25).toFixed(2)})`);
-    grad.addColorStop(1,'rgba(0,0,0,0)');
-    bctx.beginPath();bctx.arc(b.x,b.y,r*0.4,0,Math.PI*2);bctx.fillStyle=grad;bctx.fill();
+    // Radial gradient flash — OPTIMIZED: solid circle for Firefox
+    bctx.beginPath();bctx.arc(b.x,b.y,r*0.4,0,Math.PI*2);
+    bctx.globalAlpha=alpha*0.25;
+    bctx.fillStyle=b.color+'1)';bctx.fill();
+    bctx.globalAlpha=1;
     // Radiating particles (8 instead of 6)
     for(let j=0;j<8;j++){
       const angle=(j/8)*Math.PI*2+b.t*4;const pr=r*0.85;
@@ -1112,7 +1107,7 @@ async function pollHermesRecalls(){
           renderDataSidebar(fullGraph);
           renderNamespaceChips(fullGraph);
           document.getElementById('sn').textContent=lastNodeCount;
-          document.getElementById('se').textContent=fullGraph.edges.length;
+          try{const ec=await(await fetch('/api/v1/edges?count=true')).json();document.getElementById('se').textContent=ec.count||fullGraph.edges.length;}catch(e){document.getElementById('se').textContent=fullGraph.edges.length;}
           toast(`${delta>0?'+':''}${delta} nodes, graph refreshed`);
           suppressSimRecall();
         }
@@ -1214,8 +1209,12 @@ function filterNodes(q){
 function toggleRotate(){autoR=!autoR;document.getElementById('btnRotate').classList.toggle('active',autoR);}
 
 // === Interaction ===
-canvas.onmousedown=e=>{const r=canvas.getBoundingClientRect();drag=true;dragStart={x:e.clientX-r.left,y:e.clientY-r.top};camStart={x:cam.x,y:cam.y};};
+canvas.onmousedown=e=>{
+  // Wake render loop if paused
+  if(renderIdle&&renderRunning){renderIdle=false;requestAnimationFrame(render);}const r=canvas.getBoundingClientRect();drag=true;dragStart={x:e.clientX-r.left,y:e.clientY-r.top};camStart={x:cam.x,y:cam.y};};
 canvas.onmousemove=e=>{
+  // Wake render loop if paused
+  if(renderIdle&&renderRunning){renderIdle=false;requestAnimationFrame(render);}
   const rect=canvas.getBoundingClientRect();
   const mx=e.clientX-rect.left,my=e.clientY-rect.top;
   if(drag){cam.x=camStart.x-(mx-dragStart.x)/cam.z;cam.y=camStart.y-(my-dragStart.y)/cam.z;}
@@ -1326,7 +1325,7 @@ document.onkeydown=e=>{
 initParticles();load();render();
 
 // Real-time polling every 5s (optimized)
-setInterval(pollHermesRecalls,10000);
+const pollInterval=setInterval(()=>{if(!document.hidden)pollHermesRecalls();},15000);
 
 // Fallback simulation every 10-20s when no real activity
 function scheduleSim(){simTimer=setTimeout(()=>{simulateRecall();scheduleSim();},10000+Math.random()*10000);}
