@@ -106,7 +106,9 @@ textarea{resize:vertical;min-height:50px}
   <div class="ollama-stats" id="ollamaStats" style="display:flex;gap:10px;font-size:10px;color:#555;align-items:center">
     <span id="ollamaQueue" title="Embedding queue">q:—</span>
     <span id="ollamaActive" title="Active embeddings">act:—</span>
+    <span id="ollamaPending" title="Nodes without embeddings" style="display:none">pend:—</span>
     <span id="ollamaLatency" title="Avg latency">lat:—ms</span>
+    <button id="ollamaEnqueueBtn" onclick="enqueueAllNodes()" style="display:none;background:#ff880018;color:#ff8800;border:1px solid #ff880030;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:9px;font-family:inherit">Enqueue</button>
   </div>
   <div class="status" id="healthStatus">checking...</div>
 </div>
@@ -137,7 +139,7 @@ textarea{resize:vertical;min-height:50px}
     <div class="form-row"><textarea id="nodeContent" placeholder="Content"></textarea></div>
     <div class="form-row"><input id="nodeSummary" placeholder="Summary"><button class="btn" onclick="createNode()">Create</button></div>
   </div></div>
-  <div class="section"><div class="section-hdr"><h2>Search</h2><button class="btn btn-sm" onclick="toggleSearchMode()">Mode: <span id="searchModeLabel">HYBRID</span></button><button class="btn btn-sm" onclick="toggleDependenceExpansion()" title="Trace causal precursors">Dep: <span id="depExpandLabel">ON</span></button></div>
+  <div class="section"><div class="section-hdr"><h2>Search</h2><button class="btn btn-sm" onclick="toggleSearchMode()">Mode: <span id="searchModeLabel">Hybrid</span></button></div>
     <div style="padding:12px"><input id="searchQuery" placeholder="Search nodes... (Ctrl+K or /)" onkeyup="if(event.key==='Enter')doSearch()"></div>
     <div id="searchResults"></div></div>
   <div class="section"><div class="section-hdr"><h2>Nodes</h2><div style="display:flex;gap:6px">
@@ -622,22 +624,57 @@ async function loadOllamaStats(){
     if(!s)return;
     const q=document.getElementById('ollamaQueue');
     const a=document.getElementById('ollamaActive');
+    const p=document.getElementById('ollamaPending');
     const l=document.getElementById('ollamaLatency');
+    const btn=document.getElementById('ollamaEnqueueBtn');
     q.textContent=`q:${s.queued}`;
     a.textContent=`act:${s.active}`;
     l.textContent=`lat:${Math.round(s.avg_latency_ms)}ms`;
-    // Color code: green if healthy, yellow if queued, red if errors
-    const color = s.queued > 3 ? '#ff8800' : s.active > 0 ? '#00ff88' : '#555';
-    q.style.color=color; a.style.color=color; l.style.color=s.avg_latency_ms > 500 ? '#ff4444' : '#555';
+    // Show pending nodes count if there are nodes without embeddings
+    if(s.pending_nodes > 0){
+      p.style.display='inline';
+      p.textContent=`pend:${s.pending_nodes}`;
+      btn.style.display='inline-block';
+    } else {
+      p.style.display='none';
+      btn.style.display='none';
+    }
+    // Color code: green if healthy, yellow if queued, red if pending nodes or errors
+    const color = s.pending_nodes > 0 ? '#ff8800' : s.queued > 3 ? '#ff8800' : s.active > 0 ? '#00ff88' : '#555';
+    q.style.color=color; a.style.color=color; p.style.color='#ff8800'; l.style.color=s.avg_latency_ms > 500 ? '#ff4444' : '#555';
   }catch(e){}
+}
+
+async function enqueueAllNodes(){
+  const btn=document.getElementById('ollamaEnqueueBtn');
+  btn.textContent='...';
+  btn.disabled=true;
+  try{
+    const r=await api('/embeddings/enqueue-all',{method:'POST'});
+    if(r){
+      toast(`Enqueued ${r.enqueued} nodes for embedding`);
+      loadOllamaStats();
+    }else{
+      toast('Failed to enqueue nodes',true);
+    }
+  }catch(e){
+    toast('Error: '+e.message,true);
+  }finally{
+    btn.textContent='Enqueue';
+    btn.disabled=false;
+  }
 }
 
 // === Stats ===
 async function loadStats(){
   const t0=performance.now();
-  // Accurate count via dedicated endpoint (not capped at 50)
-  const countData=await api('/nodes?count=true');
+  // Accurate counts via dedicated endpoints (not capped at 50/200)
+  const [countData, edgeCountData] = await Promise.all([
+    api('/nodes?count=true'),
+    api('/edges?count=true')
+  ]);
   const totalNodes=countData&&typeof countData.count==='number'?countData.count:0;
+  const totalEdges=edgeCountData&&typeof edgeCountData.count==='number'?edgeCountData.count:0;
   // Namespace distribution from graph (top 200 nodes by importance)
   const g=await api('/graph');
   const lat=Math.round(performance.now()-t0);
@@ -646,7 +683,8 @@ async function loadStats(){
   const nsMap={};(g.nodes||[]).forEach(n=>{nsMap[n.namespace]=(nsMap[n.namespace]||0)+1});
   document.getElementById('statNodes').textContent=totalNodes;
   document.getElementById('statNodesSub').textContent=totalNodes>g.nodes.length?`top ${g.nodes.length} shown`:'';
-  document.getElementById('statEdges').textContent=g.edges.length;
+  document.getElementById('statEdges').textContent=totalEdges;
+  document.getElementById('statEdgesSub').textContent=totalEdges>(g.edges||[]).length?`top ${(g.edges||[]).length} shown`:'';
   document.getElementById('statNS').textContent=Object.keys(nsMap).length;
   const maxN=Math.max(...Object.values(nsMap),1);
   const nsColors={};Object.keys(nsMap).forEach((ns,i)=>{nsColors[ns]=NS_COLORS[i%NS_COLORS.length]});
@@ -709,15 +747,12 @@ async function deleteNode(id){
 }
 
 // === Search with highlighting ===
-let lastQuery='',dependenceExpansion=true;
+let lastQuery='';
 function toggleSearchMode(){searchMode=searchMode==='hybrid'?'fts':'hybrid';document.getElementById('searchModeLabel').textContent=searchMode.toUpperCase()}
-function toggleDependenceExpansion(){dependenceExpansion=!dependenceExpansion;document.getElementById('depExpandLabel').textContent=dependenceExpansion?'ON':'OFF'}
 async function doSearch(){
   const q=document.getElementById('searchQuery').value.trim();if(!q)return;lastQuery=q;
   addFeed('search',q.substring(0,30));
-  const body={query:q,limit:10};
-  if(searchMode==='hybrid'&&dependenceExpansion)body.dependence_expansion=true;
-  const results=searchMode==='fts'?await api('/search?q='+encodeURIComponent(q)):await api('/search/hybrid',{method:'POST',body:JSON.stringify(body)});
+  const results=searchMode==='fts'?await api('/search?q='+encodeURIComponent(q)):await api('/search/hybrid',{method:'POST',body:JSON.stringify({query:q,limit:10})});
   const el=document.getElementById('searchResults');
   if(!results||!results.length){el.innerHTML='<div style="padding:12px;color:#444">No results</div>';return}
   el.innerHTML=results.map(r=>`<div style="padding:6px 14px;border-bottom:1px solid #ffffff06">
