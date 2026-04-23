@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import threading
+import time
 from typing import Any, Dict, List, Optional
 from urllib import request, error
 
@@ -208,10 +209,6 @@ def _detect_namespace() -> str:
         if parent in _PROJECT_NS:
             return _PROJECT_NS[parent]
 
-        # Check parent mapping
-        if parent in _PROJECT_NS:
-            return _PROJECT_NS[parent]
-
         # Use directory name directly as namespace (sanitized)
         if basename and basename not in (".", "home", "root", "tmp"):
             # Sanitize: lowercase, replace non-alphanumeric with hyphens
@@ -225,19 +222,26 @@ def _detect_namespace() -> str:
 
 
 def _is_duplicate(api_url: str, label: str, namespace: str) -> bool:
-    """Check if a node with similar label already exists (fuzzy match)."""
+    """Check if a node with similar label already exists (fuzzy match).
+
+    BUGFIX: Omit namespace from search query parameter — it can cause
+    "No results found" even when results exist. Filter client-side instead.
+    """
     if not label or len(label) < 10:
         return False
     try:
         result = _api_call(api_url, "POST", "/search/hybrid", {
             "query": label,
-            "namespace": namespace,
             "limit": 5,
         }, timeout=3)
         if isinstance(result, list):
             label_lower = label.lower().strip()
             for r in result:
                 existing = r.get("label", "").lower().strip()
+                existing_ns = r.get("namespace", "")
+                # Only match within same namespace
+                if existing_ns and namespace and existing_ns != namespace:
+                    continue
                 # Exact match
                 if existing == label_lower:
                     return True
@@ -256,7 +260,7 @@ def _is_duplicate(api_url: str, label: str, namespace: str) -> bool:
         return False
     except Exception:
         return False
-        return False
+
 
 class MindBankProvider(MemoryProvider):
     """Graph-structured persistent memory for Hermes Agent."""
@@ -267,21 +271,24 @@ class MindBankProvider(MemoryProvider):
         self._session_id = ""
         self._sync_thread: Optional[threading.Thread] = None
         self._available = None  # cached availability check
+        self._available_checked_at = 0  # timestamp for cache invalidation
 
     @property
     def name(self) -> str:
         return "mindbank"
 
     def is_available(self) -> bool:
-        """Check if MindBank API is reachable. No heavy network calls."""
-        if self._available is not None:
-            return self._available
-        # Quick health check with short timeout
+        """Check if MindBank API is reachable. Retries after 60s if previously failed."""
+        now = time.time()
+        # Retry after 60 seconds if previously failed
+        if self._available is False and (now - self._available_checked_at) < 60:
+            return False
         try:
             result = _api_call(self._api_url, "GET", "/health", timeout=3)
             self._available = result.get("status") == "ok"
         except Exception:
             self._available = False
+        self._available_checked_at = now
         return self._available
 
     def save_config(self, values: dict, hermes_home: str) -> None:
@@ -340,7 +347,6 @@ class MindBankProvider(MemoryProvider):
         # Clean up stale MCP server processes (older than 1 hour)
         try:
             import subprocess
-            import time
             result = subprocess.run(["pgrep", "-af", "mindbank-mcp"], capture_output=True, text=True, timeout=3)
             for line in result.stdout.strip().split("\n"):
                 if not line.strip():
@@ -369,7 +375,56 @@ class MindBankProvider(MemoryProvider):
         except Exception:
             pass
 
+        # Ensure session exists in MindBank so we can store messages
+        self._ensure_session(session_id)
+
         logger.info("MindBank initialized: %s ns=%s (session: %s)", self._api_url, self._namespace or "*", session_id)
+
+    def _ensure_session(self, session_id: str) -> None:
+        """Ensure a session record exists in MindBank."""
+        if not session_id:
+            return
+        ns = self._namespace or "hermes"
+        # Try to get existing session
+        result = _api_call(self._api_url, "GET", f"/sessions/{session_id}", timeout=5)
+        if result and "error" not in result and result.get("id") == session_id:
+            return
+        # Create session
+        _api_call(self._api_url, "POST", "/sessions", {
+            "id": session_id,
+            "workspace_name": "hermes",
+            "metadata": json.dumps({"namespace": ns}),
+        }, timeout=5)
+
+    def _send_messages(self, session_id: str, messages: List[Dict[str, str]]) -> None:
+        """Send messages to MindBank's session API (best-effort, non-blocking).
+
+        This preserves the full conversation before context compression destroys it.
+        The backend's AddMessages handler runs ruleBased.ProcessAndStore() async
+        on every user/assistant message, so extraction happens server-side.
+        """
+        if not session_id or not messages:
+            return
+        try:
+            # Ensure session exists before sending messages
+            self._ensure_session(session_id)
+            # Send ALL messages — no filtering, no truncation
+            # The backend's AddMessages handler will run ProcessAndStore()
+            # asynchronously on each user/assistant message
+            body = [{"role": m.get("role", ""), "content": m.get("content", "")} for m in messages]
+            result = _api_call(
+                self._api_url,
+                "POST",
+                f"/sessions/{session_id}/messages",
+                body,
+                timeout=15,
+            )
+            if result and "error" in result:
+                logger.warning("MindBank message sync failed: %s", result.get("error"))
+            else:
+                logger.debug("MindBank synced %d messages to session %s", len(messages), session_id[:8])
+        except Exception as e:
+            logger.warning("MindBank message sync error: %s", e)
 
     def system_prompt_block(self) -> str:
         """Return context to inject into system prompt."""
@@ -444,7 +499,6 @@ class MindBankProvider(MemoryProvider):
         body = {
             "query": query,
             "limit": 3,
-            "workspace": "hermes",
             "namespace": ns,
         }
         result = _api_call(self._api_url, "POST", "/search/hybrid", body, timeout=15)
@@ -473,47 +527,67 @@ class MindBankProvider(MemoryProvider):
         pass
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "") -> None:
-        """Store conversation turn in MindBank (non-blocking)."""
+        """Store conversation turn in MindBank (non-blocking).
+
+        CRITICAL FIX: Previously this dropped 90% of turns due to keyword
+        filtering and only stored 300 chars. Now it:
+        1. Sends the FULL turn to the session API (preserves everything)
+        2. Does keyword-based node extraction as a SECONDARY best-effort pass
+        """
+        sid = session_id or self._session_id
+        if not sid:
+            return
+
         def _sync():
             try:
-                # Skip very short messages
-                label = user_content[:60].strip()
-                if not label or len(user_content) < 30:
+                # PRIMARY: Preserve full conversation in session API
+                # This ensures no data is lost even if extraction fails
+                messages = []
+                if user_content and len(user_content) >= 2:
+                    messages.append({"role": "user", "content": user_content})
+                if assistant_content and len(assistant_content) >= 2:
+                    messages.append({"role": "assistant", "content": assistant_content})
+                if messages:
+                    self._send_messages(sid, messages)
+
+                # SECONDARY: Keyword-based node extraction (best-effort)
+                # Only run for substantial user messages with clear signals
+                if not user_content or len(user_content) < 30:
                     return
-                # Detect node type from content — require 1+ keyword matches for noise reduction
+
                 lower = user_content.lower()
-                hits = 0
-                node_type = "event"
+                node_type = None
                 decision_kw = ["decided", "chose", "going with", "switching to", "switching"]
                 problem_kw = ["bug", "broken", "error", "issue", "crash", "fails"]
                 advice_kw = ["recommend", "suggest", "better to", "best practice"]
                 pref_kw = ["prefer", "always use", "never use", "i like"]
-                if sum(1 for w in decision_kw if w in lower) >= 1:
+                if any(w in lower for w in decision_kw):
                     node_type = "decision"
-                elif sum(1 for w in problem_kw if w in lower) >= 1:
+                elif any(w in lower for w in problem_kw):
                     node_type = "problem"
-                elif sum(1 for w in advice_kw if w in lower) >= 1:
+                elif any(w in lower for w in advice_kw):
                     node_type = "advice"
-                elif sum(1 for w in pref_kw if w in lower) >= 1:
+                elif any(w in lower for w in pref_kw):
                     node_type = "preference"
-                else:
-                    return  # Skip non-classifiable turns (reduces noise)
 
-                # Dedup: skip if similar node already exists
+                if not node_type:
+                    return  # No strong signal — but message is already preserved in session API
+
                 ns = self._namespace or "hermes"
+                label = user_content[:80].strip()
                 if _is_duplicate(self._api_url, label, ns):
                     return
 
                 result = _api_call(self._api_url, "POST", "/nodes", {
                     "label": label,
                     "node_type": node_type,
-                    "content": f"User: {user_content[:300]}\n\nAssistant: {assistant_content[:300]}",
-                    "namespace": self._namespace or "hermes",
-                    "summary": f"Session {session_id[:8]}",
+                    "content": f"User: {user_content[:500]}\n\nAssistant: {assistant_content[:500]}",
+                    "namespace": ns,
+                    "summary": f"Session {sid[:8]}",
                 }, timeout=10)
                 if result and result.get("id"):
                     try:
-                        self._link_to_project(result["id"], self._namespace or "hermes")
+                        self._link_to_project(result["id"], ns)
                     except Exception:
                         pass
             except Exception as e:
@@ -524,40 +598,85 @@ class MindBankProvider(MemoryProvider):
         self._sync_thread = threading.Thread(target=_sync, daemon=True)
         self._sync_thread.start()
 
+    def on_pre_compress(self, messages: List[Dict[str, Any]]) -> str:
+        """EMERGENCY SYNC: Send all messages to MindBank before compression destroys them.
+
+        This is the critical hook. When Hermes compacts context, old messages
+        are summarized and the originals are PERMANENTLY LOST. This method
+        dumps the full conversation to MindBank's session API BEFORE that happens.
+
+        Returns: empty string (no text to add to compression summary)
+        """
+        sid = self._session_id
+        if not sid or not messages:
+            return ""
+
+        def _emergency_sync():
+            try:
+                # Send ALL messages — no filtering, no truncation
+                # The backend's AddMessages handler will run ProcessAndStore()
+                # asynchronously on each user/assistant message
+                self._send_messages(sid, messages)
+                logger.info("MindBank emergency pre-compression sync: %d messages preserved", len(messages))
+            except Exception as e:
+                logger.warning("MindBank pre-compression sync failed: %s", e)
+
+        thread = threading.Thread(target=_emergency_sync, daemon=True)
+        thread.start()
+        return ""
+
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
-        """Extract memories from completed session."""
+        """Extract memories from completed session.
+
+        CRITICAL FIX: Previously only scanned user messages with keyword filtering.
+        Now:
+        1. Sends ALL remaining messages to session API (full preservation)
+        2. Scans BOTH user AND assistant messages for extraction
+        """
         if not messages:
             return
+
+        sid = self._session_id
 
         def _extract():
             try:
                 ns = self._namespace or "hermes"
-                # Extract key turns from the conversation — only high-signal messages
-                for msg in messages:  # scan all messages
+
+                # PRIMARY: Ensure all messages are in the session API
+                self._send_messages(sid, messages)
+
+                # SECONDARY: Extract nodes from high-signal messages (both roles)
+                for msg in messages:
                     role = msg.get("role", "")
                     content = msg.get("content", "")
-                    if role != "user" or len(content) < 30:
+                    if role not in ("user", "assistant") or len(content) < 30:
                         continue
+
                     lower = content.lower()
-                    # Only extract messages with strong decision/problem/fixed signals
                     node_type = None
-                    if any(w in lower for w in ["decided", "chose", "going with", "switching to"]):
+                    # Broader signal detection for both roles
+                    if any(w in lower for w in ["decided", "chose", "going with", "switching to", "concluded"]):
                         node_type = "decision"
-                    elif any(w in lower for w in ["fixed", "solution", "workaround", "resolved"]):
+                    elif any(w in lower for w in ["fixed", "solution", "workaround", "resolved", "patched"]):
                         node_type = "advice"
-                    elif any(w in lower for w in ["bug", "broken", "error", "crash", "fails"]):
+                    elif any(w in lower for w in ["bug", "broken", "error", "crash", "fails", "regression"]):
                         node_type = "problem"
-                    elif any(w in lower for w in ["migrated", "upgraded", "deprecated", "deployed"]):
+                    elif any(w in lower for w in ["migrated", "upgraded", "deprecated", "deployed", "released"]):
                         node_type = "fact"
+                    elif any(w in lower for w in ["implemented", "added", "created", "built", "wrote"]):
+                        node_type = "fact"
+
                     if not node_type:
                         continue
+
                     label = content[:80].strip()
                     if _is_duplicate(self._api_url, label, ns):
                         continue
+
                     result = _api_call(self._api_url, "POST", "/nodes", {
                         "label": label,
                         "node_type": node_type,
-                        "content": content[:500],
+                        "content": content[:800],
                         "namespace": ns,
                     }, timeout=10)
                     if result and result.get("id"):
