@@ -130,6 +130,37 @@ func (h *NodeHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	// If requesting count only (limit=0), return just the count
 	if r.URL.Query().Get("count") == "true" {
+		// If group_by=namespace, return per-namespace breakdown
+		if r.URL.Query().Get("group_by") == "namespace" {
+			query := `SELECT namespace, COUNT(*) FROM nodes WHERE valid_to IS NULL`
+			args := []any{}
+			argN := 1
+			if workspace != "" {
+				query += fmt.Sprintf(" AND workspace_name = $%d", argN)
+				args = append(args, workspace)
+				argN++
+			}
+			query += ` GROUP BY namespace ORDER BY COUNT(*) DESC`
+			rows, err := h.pool.Query(r.Context(), query, args...)
+			if err != nil {
+				respondError(w, 500, "namespace count failed")
+				return
+			}
+			defer rows.Close()
+			nsMap := make(map[string]int)
+			total := 0
+			for rows.Next() {
+				var ns string
+				var cnt int
+				if err := rows.Scan(&ns, &cnt); err == nil {
+					nsMap[ns] = cnt
+					total += cnt
+				}
+			}
+			respondJSON(w, 200, map[string]any{"count": total, "namespaces": nsMap})
+			return
+		}
+
 		var count int
 		query := `SELECT COUNT(*) FROM nodes WHERE valid_to IS NULL`
 		args := []any{}

@@ -225,22 +225,37 @@ def _detect_namespace() -> str:
 
 
 def _is_duplicate(api_url: str, label: str, namespace: str) -> bool:
-    """Check if a node with similar label already exists."""
+    """Check if a node with similar label already exists (fuzzy match)."""
     if not label or len(label) < 10:
         return False
     try:
         result = _api_call(api_url, "POST", "/search/hybrid", {
             "query": label,
             "namespace": namespace,
-            "limit": 3,
+            "limit": 5,
         }, timeout=3)
         if isinstance(result, list):
+            label_lower = label.lower().strip()
             for r in result:
                 existing = r.get("label", "").lower().strip()
-                if existing == label.lower().strip():
+                # Exact match
+                if existing == label_lower:
                     return True
+                # Fuzzy match: check if one contains the other
+                if existing and label_lower:
+                    if existing in label_lower or label_lower in existing:
+                        return True
+                    # Check word overlap for multi-word labels
+                    existing_words = set(existing.split())
+                    label_words = set(label_lower.split())
+                    if existing_words and label_words:
+                        overlap = len(existing_words & label_words)
+                        total = len(existing_words | label_words)
+                        if total > 0 and overlap / total >= 0.7:
+                            return True
         return False
     except Exception:
+        return False
         return False
 
 class MindBankProvider(MemoryProvider):
@@ -465,7 +480,7 @@ class MindBankProvider(MemoryProvider):
                 label = user_content[:60].strip()
                 if not label or len(user_content) < 30:
                     return
-                # Detect node type from content — require 2+ keyword matches for noise reduction
+                # Detect node type from content — require 1+ keyword matches for noise reduction
                 lower = user_content.lower()
                 hits = 0
                 node_type = "event"
@@ -477,7 +492,7 @@ class MindBankProvider(MemoryProvider):
                     node_type = "decision"
                 elif sum(1 for w in problem_kw if w in lower) >= 1:
                     node_type = "problem"
-                elif sum(1 for w in advice_kw if w in lower) >= 2:
+                elif sum(1 for w in advice_kw if w in lower) >= 1:
                     node_type = "advice"
                 elif sum(1 for w in pref_kw if w in lower) >= 1:
                     node_type = "preference"
@@ -518,7 +533,7 @@ class MindBankProvider(MemoryProvider):
             try:
                 ns = self._namespace or "hermes"
                 # Extract key turns from the conversation — only high-signal messages
-                for msg in messages[-10:]:  # last 10 messages
+                for msg in messages:  # scan all messages
                     role = msg.get("role", "")
                     content = msg.get("content", "")
                     if role != "user" or len(content) < 30:

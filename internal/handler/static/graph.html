@@ -15,7 +15,8 @@ body.embed-mode canvas{left:260px}
 body.embed-mode .topbar{left:270px}
 
 /* Sidebar - left (data sidebar like video) */
-.sidebar{position:fixed;left:0;top:0;bottom:0;width:260px;background:linear-gradient(180deg,#0c0c12 0%,#08080d 100%);border-right:1px solid #16162a;z-index:10;display:flex;flex-direction:column;overflow:hidden}
+.sidebar{position:fixed;left:0;top:0;bottom:0;width:260px;background:linear-gradient(180deg,#0c0c12 0%,#08080d 100%);border-right:1px solid #16162a;z-index:10;display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden}
+.sidebar::-webkit-scrollbar{width:3px}.sidebar::-webkit-scrollbar-thumb{background:#222;border-radius:2px}
 .sidebar-head{padding:14px 16px;border-bottom:1px solid #16162a;display:flex;align-items:center;gap:10px}
 .sidebar-head h1{font-size:14px;letter-spacing:3px;color:#00ff88;text-shadow:0 0 20px #00ff8840}
 .sidebar-head .pulse-ring{width:8px;height:8px;border-radius:50%;background:#00ff88;box-shadow:0 0 12px #00ff88;animation:pulse-ring 2s infinite}
@@ -28,7 +29,7 @@ body.embed-mode .topbar{left:270px}
 .stat .lbl{font-size:8px;color:#444;text-transform:uppercase;letter-spacing:.5px;margin-top:2px}
 
 /* Data sidebar - the key section from the video */
-.data-section{border-bottom:1px solid #16162a;padding:10px 0;max-height:260px;overflow-y:auto}
+.data-section{border-bottom:1px solid #16162a;padding:10px 0;max-height:200px;overflow-y:auto;flex-shrink:0}
 .data-section::-webkit-scrollbar{width:3px}.data-section::-webkit-scrollbar-thumb{background:#222;border-radius:2px}
 .data-title{font-size:8px;color:#555;text-transform:uppercase;letter-spacing:2px;padding:0 16px;margin-bottom:6px}
 .data-row{display:flex;align-items:center;gap:8px;padding:4px 16px;cursor:pointer;transition:background .15s}
@@ -39,8 +40,9 @@ body.embed-mode .topbar{left:270px}
 .data-row .count{font-size:9px;color:#666;min-width:20px;text-align:right}
 
 /* Namespace chips */
-.ns-list{padding:10px 16px;border-bottom:1px solid #16162a}
-.ns-list h3{font-size:8px;color:#555;text-transform:uppercase;letter-spacing:2px;margin-bottom:6px}
+.ns-list{padding:10px 16px;border-bottom:1px solid #16162a;max-height:180px;overflow-y:auto;flex-shrink:0}
+.ns-list::-webkit-scrollbar{width:3px}.ns-list::-webkit-scrollbar-thumb{background:#222;border-radius:2px}
+.ns-list h3{font-size:8px;color:#555;text-transform:uppercase;letter-spacing:2px;margin-bottom:6px;position:sticky;top:0;background:linear-gradient(180deg,#0c0c12 0%,#08080d 100%);padding:4px 0;z-index:2}
 .ns-chip{display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:4px;cursor:pointer;margin-bottom:3px;transition:background .2s}
 .ns-chip:hover{background:#ffffff06}
 .ns-chip.active{background:#00ff8812;border:1px solid #00ff8820}
@@ -48,11 +50,16 @@ body.embed-mode .topbar{left:270px}
 .ns-name{font-size:10px;color:#aaa;flex:1}
 .ns-count{font-size:9px;color:#555;background:#ffffff06;padding:1px 5px;border-radius:6px}
 
-/* Activity feed */
-.feed{flex:1;overflow:hidden;display:flex;flex-direction:column}
-.feed-head{padding:10px 16px 6px;font-size:8px;color:#555;text-transform:uppercase;letter-spacing:2px;border-bottom:1px solid #16162a;flex-shrink:0;display:flex;align-items:center;justify-content:space-between}
+/* Activity feed - expandable */
+.feed{border-bottom:1px solid #16162a;display:flex;flex-direction:column;transition:all .3s ease;flex-shrink:0}
+.feed.expanded{max-height:400px}
+.feed-head{padding:10px 16px 6px;font-size:8px;color:#555;text-transform:uppercase;letter-spacing:2px;border-bottom:1px solid #16162a;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none;transition:background .15s}
+.feed-head:hover{background:#ffffff06}
 .feed-head .live{width:6px;height:6px;border-radius:50%;background:#00ff88;box-shadow:0 0 8px #00ff88;animation:pulse-ring 2s infinite}
-.feed-items{flex:1;overflow-y:auto;padding:2px 0}
+.feed-head .expand-icon{font-size:10px;color:#444;transition:transform .2s}
+.feed.expanded .expand-icon{transform:rotate(180deg)}
+.feed-items{max-height:180px;overflow-y:auto;padding:2px 0;transition:max-height .3s ease}
+.feed.expanded .feed-items{max-height:350px}
 .feed-items::-webkit-scrollbar{width:3px}.feed-items::-webkit-scrollbar-thumb{background:#222;border-radius:2px}
 .feed-item{padding:6px 14px;border-bottom:1px solid #ffffff04;font-size:10px;animation:slide-in .3s ease-out}
 @keyframes slide-in{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:translateX(0)}}
@@ -112,6 +119,30 @@ body.embed-mode .topbar{left:270px}
 .recall-popup .rp-card{background:#0c0c12ee;border:1px solid #00ff8830;border-radius:6px;padding:8px 12px;backdrop-filter:blur(10px);box-shadow:0 4px 20px #00000060;max-width:280px}
 .recall-popup .rp-type{font-size:8px;text-transform:uppercase;font-weight:bold;margin-bottom:3px}
 .recall-popup .rp-text{font-size:10px;color:#aaa;line-height:1.3}
+
+/* === WIDGET SYSTEM === */
+.widget-container{display:flex;flex-direction:column;flex:1;overflow-y:auto;overflow-x:hidden}
+.widget-container::-webkit-scrollbar{width:3px}
+.widget-container::-webkit-scrollbar-thumb{background:#222;border-radius:2px}
+.widget{background:#0a0a0f;border-bottom:1px solid #16162a;flex-shrink:0;position:relative}
+.widget-header{padding:8px 14px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none;transition:background .15s;border-bottom:1px solid transparent}
+.widget-header:hover{background:#ffffff06}
+.widget.collapsed .widget-header{border-bottom:none}
+.widget-title{font-size:9px;color:#888;text-transform:uppercase;letter-spacing:1.5px;display:flex;align-items:center;gap:6px}
+.widget-title .w-icon{font-size:10px;color:#555;transition:transform .2s}
+.widget.collapsed .widget-title .w-icon{transform:rotate(-90deg)}
+.widget-controls{display:flex;align-items:center;gap:4px}
+.widget-btn{background:none;border:none;color:#555;cursor:pointer;font-size:10px;padding:2px 4px;border-radius:3px;transition:all .15s;font-family:inherit}
+.widget-btn:hover{color:#00ff88;background:#00ff8808}
+.widget-body{overflow-y:auto;transition:max-height .25s ease,opacity .2s ease;max-height:400px;opacity:1}
+.widget.collapsed .widget-body{max-height:0;opacity:0;overflow:hidden}
+.widget-body::-webkit-scrollbar{width:3px}
+.widget-body::-webkit-scrollbar-thumb{background:#222;border-radius:2px}
+.widget-resize{height:4px;cursor:row-resize;position:relative;z-index:5;transition:background .15s}
+.widget-resize:hover{background:#00ff8830}
+.widget-resize::after{content:'';position:absolute;left:40%;right:40%;top:1px;height:2px;background:#ffffff10;border-radius:1px}
+.widget.dragging{opacity:.7;box-shadow:0 0 10px #00ff8815}
+.widget-ghost{position:fixed;pointer-events:none;z-index:100;opacity:.6;background:#0c0c12;border:1px dashed #00ff8840;border-radius:4px;padding:8px 14px;font-size:9px;color:#888;text-transform:uppercase;letter-spacing:1.5px}
 </style>
 </head>
 <body>
@@ -128,22 +159,67 @@ body.embed-mode .topbar{left:270px}
     <div class="stat"><div class="val" id="sf">-</div><div class="lbl">FPS</div></div>
     <div class="stat"><div class="val" id="sr">0</div><div class="lbl">Recalls</div></div>
   </div>
-  <!-- Data sidebar — like the video's file-type list, but for node types -->
-  <div class="data-section">
-    <div class="data-title">Memory Types — Live Counts</div>
-    <div id="dataRows"></div>
-  </div>
-  <div class="ns-list">
-    <h3>Namespaces</h3>
-    <div id="nschips"></div>
-  </div>
-  <div class="feed">
-    <div class="feed-head">Hermes Recall Feed <div class="live"></div></div>
-    <div class="feed-items" id="feeditems"></div>
-  </div>
-  <div class="legend">
-    <h3>Node Types</h3>
-    <div class="legend-items" id="legitems"></div>
+  <div class="widget-container" id="widgetContainer">
+    <!-- Memory Types Widget -->
+    <div class="widget" id="widget-memory" draggable="true">
+      <div class="widget-header" onclick="toggleWidget('memory')">
+        <span class="widget-title"><span class="w-icon">▾</span> Memory Types</span>
+        <div class="widget-controls">
+          <button class="widget-btn" onclick="event.stopPropagation();toggleWidget('memory')" title="Collapse">▼</button>
+        </div>
+      </div>
+      <div class="widget-body" style="max-height:200px">
+        <div class="data-section" style="border:none;max-height:none">
+          <div id="dataRows"></div>
+        </div>
+      </div>
+      <div class="widget-resize" onmousedown="startResize(event,'memory')"></div>
+    </div>
+    <!-- Namespaces Widget -->
+    <div class="widget" id="widget-namespaces" draggable="true">
+      <div class="widget-header" onclick="toggleWidget('namespaces')">
+        <span class="widget-title"><span class="w-icon">▾</span> Namespaces</span>
+        <div class="widget-controls">
+          <button class="widget-btn" onclick="event.stopPropagation();toggleWidget('namespaces')" title="Collapse">▼</button>
+        </div>
+      </div>
+      <div class="widget-body" style="max-height:250px">
+        <div class="ns-list" style="border:none;max-height:none;padding:8px 14px">
+          <div id="nschips"></div>
+        </div>
+      </div>
+      <div class="widget-resize" onmousedown="startResize(event,'namespaces')"></div>
+    </div>
+    <!-- Recall Feed Widget -->
+    <div class="widget" id="widget-feed" draggable="true">
+      <div class="widget-header" onclick="toggleWidget('feed')">
+        <span class="widget-title"><span class="w-icon">▾</span> Recall Feed</span>
+        <div class="widget-controls">
+          <button class="widget-btn" onclick="event.stopPropagation();toggleWidget('feed')" title="Collapse">▼</button>
+        </div>
+      </div>
+      <div class="widget-body" style="max-height:250px">
+        <div class="feed" style="border:none">
+          <div class="feed-items" id="feeditems" style="max-height:none"></div>
+        </div>
+      </div>
+      <div class="widget-resize" onmousedown="startResize(event,'feed')"></div>
+    </div>
+    <!-- Legend Widget -->
+    <div class="widget" id="widget-legend" draggable="true">
+      <div class="widget-header" onclick="toggleWidget('legend')">
+        <span class="widget-title"><span class="w-icon">▾</span> Legend</span>
+        <div class="widget-controls">
+          <button class="widget-btn" onclick="event.stopPropagation();toggleWidget('legend')" title="Collapse">▼</button>
+        </div>
+      </div>
+      <div class="widget-body" style="max-height:150px">
+        <div class="legend" style="border:none;padding:8px 14px">
+          <div class="legend-items" id="legitems"></div>
+        </div>
+      </div>
+      <div class="widget-resize" onmousedown="startResize(event,'legend')"></div>
+    </div>
   </div>
 </div>
 
@@ -255,9 +331,17 @@ async function load(){
   }
   buildGraph(d);
   renderLegend(d);
-  renderNamespaceChips(d);
+  // Fetch real namespace counts, fallback to graph data
+  fetchNamespaceCounts().then(nsCounts=>{
+    if(nsCounts){
+      renderNamespaceChips(null); // uses cache
+    }else{
+      renderNamespaceChips(d); // fallback
+    }
+  });
   renderDataSidebar(d);
   toast(d.nodes.length+' nodes loaded');
+  initWidgets();
   // Auto-fit after physics settles (1.5s delay)
   setTimeout(()=>zoomFit(),1500);
 }
@@ -1050,6 +1134,132 @@ function renderFeed(){
   }).join('');
 }
 
+function toggleFeedExpand(){
+  const feed=document.getElementById('feedSection');
+  if(feed)feed.classList.toggle('expanded');
+}
+
+// === Widget System ===
+const WIDGET_STATE_KEY='mb_widgets';
+let widgetState=JSON.parse(localStorage.getItem(WIDGET_STATE_KEY)||'{}');
+let resizeState={active:false,widget:null,startY:0,startH:0};
+let dragState={active:false,widget:null,ghost:null,container:null,startIndex:0};
+
+function saveWidgetState(){
+  const order=[];
+  document.querySelectorAll('.widget-container > .widget').forEach((w,i)=>{
+    order.push(w.id.replace('widget-',''));
+    const body=w.querySelector('.widget-body');
+    if(body)widgetState[w.id]={collapsed:w.classList.contains('collapsed'),height:body.style.maxHeight};
+  });
+  widgetState._order=order;
+  localStorage.setItem(WIDGET_STATE_KEY,JSON.stringify(widgetState));
+}
+
+function toggleWidget(name){
+  const w=document.getElementById('widget-'+name);
+  if(!w)return;
+  w.classList.toggle('collapsed');
+  saveWidgetState();
+}
+
+function startResize(e,name){
+  e.preventDefault();
+  e.stopPropagation();
+  const w=document.getElementById('widget-'+name);
+  if(!w)return;
+  const body=w.querySelector('.widget-body');
+  if(!body)return;
+  resizeState={active:true,widget:body,startY:e.clientY,startH:body.offsetHeight};
+  document.body.style.cursor='row-resize';
+  document.addEventListener('mousemove',doResize);
+  document.addEventListener('mouseup',stopResize);
+}
+
+function doResize(e){
+  if(!resizeState.active)return;
+  const delta=e.clientY-resizeState.startY;
+  const newH=Math.max(60,Math.min(500,resizeState.startH+delta));
+  resizeState.widget.style.maxHeight=newH+'px';
+}
+
+function stopResize(){
+  if(!resizeState.active)return;
+  resizeState.active=false;
+  document.body.style.cursor='';
+  document.removeEventListener('mousemove',doResize);
+  document.removeEventListener('mouseup',stopResize);
+  saveWidgetState();
+}
+
+function initWidgets(){
+  // Restore collapse state
+  document.querySelectorAll('.widget').forEach(w=>{
+    const s=widgetState[w.id];
+    if(s){
+      if(s.collapsed)w.classList.add('collapsed');
+      if(s.height)w.querySelector('.widget-body').style.maxHeight=s.height;
+    }
+  });
+  // Restore order
+  if(widgetState._order&&Array.isArray(widgetState._order)){
+    const container=document.getElementById('widgetContainer');
+    const widgets={};
+    container.querySelectorAll('.widget').forEach(w=>{widgets[w.id]=w;});
+    widgetState._order.forEach(id=>{
+      const w=widgets['widget-'+id];
+      if(w)container.appendChild(w);
+    });
+  }
+  // Setup drag & drop
+  setupWidgetDragDrop();
+}
+
+function setupWidgetDragDrop(){
+  const container=document.getElementById('widgetContainer');
+  if(!container)return;
+  container.querySelectorAll('.widget').forEach(w=>{
+    w.addEventListener('dragstart',widgetDragStart);
+    w.addEventListener('dragend',widgetDragEnd);
+    w.addEventListener('dragover',widgetDragOver);
+    w.addEventListener('drop',widgetDrop);
+  });
+}
+
+function widgetDragStart(e){
+  e.dataTransfer.effectAllowed='move';
+  e.dataTransfer.setData('text/plain',this.id);
+  this.classList.add('dragging');
+  dragState.widget=this;
+  dragState.startIndex=Array.from(this.parentNode.children).indexOf(this);
+}
+
+function widgetDragEnd(e){
+  this.classList.remove('dragging');
+  dragState.widget=null;
+  saveWidgetState();
+}
+
+function widgetDragOver(e){
+  e.preventDefault();
+  e.dataTransfer.dropEffect='move';
+  const target=e.currentTarget;
+  if(target===dragState.widget)return;
+  const container=target.parentNode;
+  const targetIndex=Array.from(container.children).indexOf(target);
+  const dragIndex=Array.from(container.children).indexOf(dragState.widget);
+  if(dragIndex<targetIndex){
+    container.insertBefore(dragState.widget,target.nextSibling);
+  }else{
+    container.insertBefore(dragState.widget,target);
+  }
+}
+
+function widgetDrop(e){
+  e.preventDefault();
+  saveWidgetState();
+}
+
 // === Real-Time Hermes Recall Integration (optimized) ===
 let lastSnapshotHash='',lastGraphCheck=0,pollBusy=false;
 async function pollHermesRecalls(){
@@ -1133,6 +1343,18 @@ async function pollHermesRecalls(){
           }
         }
       } // end remoteCount<=300
+      
+      // Update namespace counts every poll (lightweight)
+      try{
+        const nsResp=await fetch('/api/v1/nodes?limit=1&count=true&group_by=namespace');
+        if(nsResp.ok){
+          const nsData=await nsResp.json();
+          if(nsData&&nsData.namespaces){
+            nsCountsCache=nsData.namespaces;
+            renderNamespaceChips(null); // uses cache
+          }
+        }
+      }catch(e){}
     }catch(e){}
   }
   pollBusy=false;
@@ -1165,9 +1387,28 @@ function simulateRecall(){
 }
 
 // === Namespace & Filter ===
+let nsCountsCache={};
+async function fetchNamespaceCounts(){
+  try{
+    const resp=await fetch('/api/v1/nodes?limit=1&count=true&group_by=namespace');
+    if(!resp.ok)return null;
+    const data=await resp.json();
+    if(data&&data.namespaces){
+      nsCountsCache=data.namespaces;
+      return data.namespaces;
+    }
+    return null;
+  }catch(e){return null;}
+}
+
 function renderNamespaceChips(data){
-  if(!data||!data.nodes||!Array.isArray(data.nodes))return;
-  const nsMap={};data.nodes.forEach(n=>{if(n&&n.namespace)nsMap[n.namespace]=(nsMap[n.namespace]||0)+1;});
+  // Use cached API counts if available, fallback to graph data
+  const nsMap={};
+  if(Object.keys(nsCountsCache).length>0){
+    Object.assign(nsMap,nsCountsCache);
+  }else if(data&&data.nodes&&Array.isArray(data.nodes)){
+    data.nodes.forEach(n=>{if(n&&n.namespace)nsMap[n.namespace]=(nsMap[n.namespace]||0)+1;});
+  }
   const colors=['#00ff88','#0088ff','#ffaa00','#ff00ff','#ff4444','#88ff00','#00ffff'];
   const el=document.getElementById('nschips');
   el.innerHTML=Object.entries(nsMap).map(([ns,count],i)=>{
