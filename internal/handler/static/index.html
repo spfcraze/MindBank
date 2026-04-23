@@ -88,6 +88,11 @@ textarea{resize:vertical;min-height:50px}
 .tree-node .tree-toggle:hover { background: var(--surface); }
 .tree-children { transition: all 0.2s ease; }
 .tree-arrow { transition: transform 0.15s ease; }
+.header-actions{display:flex;gap:6px;align-items:center}
+.header-actions button{font-size:10px;padding:4px 10px;border-radius:4px;cursor:pointer;font-family:inherit;background:transparent;transition:all .2s}
+.btn-restart{color:#ff8800;border:1px solid #ff880060}.btn-restart:hover{border-color:#ff8800;color:#ffaa33}
+.btn-sync{color:#00ff88;border:1px solid #00ff8860}.btn-sync:hover{border-color:#00ff88;color:#33ffaa}
+.header-actions button[disabled]{opacity:.4;cursor:not-allowed}
 </style>
 </head>
 <body>
@@ -109,6 +114,11 @@ textarea{resize:vertical;min-height:50px}
     <span id="ollamaPending" title="Nodes without embeddings" style="display:none">pend:—</span>
     <span id="ollamaLatency" title="Avg latency">lat:—ms</span>
     <button id="ollamaEnqueueBtn" onclick="enqueueAllNodes()" style="display:none;background:#ff880018;color:#ff8800;border:1px solid #ff880030;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:9px;font-family:inherit">Enqueue</button>
+  </div>
+  <div class="header-actions">
+    <button class="btn-restart" onclick="restartServer()" id="restartBtn">Restart Server</button>
+    <button class="btn-sync" onclick="syncSessions()" id="syncBtn">Sync Sessions</button>
+    <span id="lastSyncInfo" style="font-size:9px;color:#444;white-space:nowrap"></span>
   </div>
   <div class="status" id="healthStatus">checking...</div>
 </div>
@@ -1113,8 +1123,57 @@ async function recalcImportance(){
   }else{document.getElementById('recalcResult').innerHTML='<span style="color:#ff4444">Failed</span>'}
 }
 
+// === Server & Sync Actions ===
+function fmtTimeAgo(ts){
+  if(!ts)return'never';
+  const s=Math.floor((Date.now()-ts)/1000);
+  if(s<60)return s+'s ago';
+  if(s<3600)return Math.floor(s/60)+'m ago';
+  if(s<86400)return Math.floor(s/3600)+'h ago';
+  return Math.floor(s/86400)+'d ago';
+}
+function updateLastSyncDisplay(){
+  const last=parseInt(localStorage.getItem('mindbankLastSync')||'0',10);
+  const el=document.getElementById('lastSyncInfo');
+  if(el)el.textContent='last: '+fmtTimeAgo(last||0);
+}
+
+async function restartServer(){
+  const btn=document.getElementById('restartBtn');
+  if(!confirm('Restart the MindBank server?'))return;
+  if(btn){btn.disabled=true;}
+  try{
+    const r=await fetch(API+'/updates/restart',{method:'POST'});
+    if(r.ok){toast('Server restart initiated');setTimeout(()=>location.reload(),5000);}
+    else{toast('Restart failed',true);}
+  }catch(e){toast('Error: '+e.message,true);}
+  finally{if(btn){btn.disabled=false;}}
+}
+
+async function syncSessions(silent=false){
+  const btn=document.getElementById('syncBtn');
+  if(btn){btn.disabled=true;}
+  try{
+    const r=await fetch(API+'/sessions/sync',{method:'POST'});
+    const data=await r.json();
+    if(r.ok){
+      localStorage.setItem('mindbankLastSync',Date.now().toString());
+      if(data.nodes_created>0){
+        toast('Sync: '+data.nodes_created+' node(s) created');
+        loadStats();loadNodes();
+      }else if(!silent){
+        toast('Sync: no new nodes');
+      }
+      updateLastSyncDisplay();
+    }else{
+      toast(data.message||'Sync failed',true);
+    }
+  }catch(e){if(!silent)toast('Sync error: '+e.message,true);}
+  finally{if(btn){btn.disabled=false;}}
+}
+
 // === Init ===
-loadHealth();loadOllamaStats();loadStats().then(()=>{lastDashNodeCount=parseInt(document.getElementById('statNodes').textContent)||0});
+loadHealth();loadOllamaStats();updateLastSyncDisplay();loadStats().then(()=>{lastDashNodeCount=parseInt(document.getElementById('statNodes').textContent)||0});
 loadNodes();loadSnapshot();loadDQATrend();
 // Recalculate importance scores on first load (one-time)
 if(!sessionStorage.getItem('mb_recalc_done')){api('/nodes/recalculate',{method:'POST'}).then(r=>{if(r&&r.rows_updated){sessionStorage.setItem('mb_recalc_done','1');addFeed('recalc',r.rows_updated+' nodes scored');loadStats();loadNodes()}})}

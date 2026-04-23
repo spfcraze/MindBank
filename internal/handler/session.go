@@ -152,6 +152,73 @@ func (h *SessionHandler) Close(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, 200, map[string]string{"status": "closed"})
 }
 
+func (h *SessionHandler) Sync(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// Count nodes before sync
+	beforeCount, _ := h.nodeRepo.CountNodes(ctx)
+
+	// Get all active sessions with messages that have few or no linked nodes
+	rows, err := h.repo.Pool().Query(ctx, `
+		SELECT DISTINCT s.id, s.workspace_name, s.metadata
+		FROM sessions s
+		JOIN messages m ON m.session_id = s.id
+		LEFT JOIN session_nodes sn ON sn.session_id = s.id
+		WHERE s.is_active = true
+		GROUP BY s.id
+		HAVING COUNT(sn.node_id) < COUNT(m.id) / 5 + 1
+		LIMIT 100
+	`)
+	if err != nil {
+		slog.Error("sync sessions query", "error", err)
+		respondError(w, 500, "failed to query sessions")
+		return
+	}
+	defer rows.Close()
+
+	var processed int
+	for rows.Next() {
+		var sessionID, workspace string
+		var metadata []byte
+		if err := rows.Scan(&sessionID, &workspace, &metadata); err != nil {
+			continue
+		}
+
+		// Determine namespace from metadata
+		ns := "global"
+		if len(metadata) > 0 {
+			var meta map[string]any
+			if json.Unmarshal(metadata, &meta) == nil {
+				if v, ok := meta["namespace"].(string); ok && v != "" {
+					ns = v
+				}
+			}
+		}
+
+		// Get messages for this session
+		msgs, err := h.repo.GetMessages(ctx, sessionID, 10000)
+		if err != nil {
+			continue
+		}
+
+		for _, msg := range msgs {
+			if msg.Role == "user" || msg.Role == "assistant" {
+				_ = h.ruleBased.ProcessAndStore(ctx, sessionID, workspace, ns, msg.Content)
+			}
+		}
+		processed++
+	}
+
+	// Count nodes after sync
+	afterCount, _ := h.nodeRepo.CountNodes(ctx)
+
+	respondJSON(w, 200, map[string]any{
+		"status":        "ok",
+		"sessions_processed": processed,
+		"nodes_created": afterCount - beforeCount,
+	})
+}
+
 // RegisterSessionRoutes adds session endpoints to the router.
 func RegisterSessionRoutes(r chi.Router, sh *SessionHandler) {
 	r.Route("/sessions", func(r chi.Router) {
@@ -161,5 +228,6 @@ func RegisterSessionRoutes(r chi.Router, sh *SessionHandler) {
 		r.Post("/{id}/messages", sh.AddMessages)
 		r.Get("/{id}/context", sh.GetContext)
 		r.Post("/{id}/close", sh.Close)
+		r.Post("/sync", sh.Sync)
 	})
 }
