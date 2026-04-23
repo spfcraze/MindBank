@@ -234,10 +234,14 @@ body.embed-mode .topbar{left:270px}
 
 <!-- Burst overlay -->
 <canvas id="burstC" class="burst-canvas"></canvas>
-<canvas id="minimapC" style="position:fixed;bottom:10px;right:10px;width:180px;height:120px;background:#0a0a0f88;border:1px solid #16162a;border-radius:4px;z-index:15"></canvas>
 
 <!-- Recall popup container -->
 <div id="recallPopups"></div>
+<div id="emptyState" style="display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);text-align:center;z-index:5;pointer-events:none">
+  <div style="font-size:48px;margin-bottom:12px">🌌</div>
+  <div style="color:#555;font-size:12px;letter-spacing:2px;text-transform:uppercase">No Memories Yet</div>
+  <div style="color:#333;font-size:10px;margin-top:6px">Start a conversation to build your graph</div>
+</div>
 <div id="hoverCard" style="display:none;position:fixed;background:#0c0c12f0;border:1px solid #16162a;border-radius:6px;padding:10px 12px;font-size:11px;color:#ccc;z-index:20;pointer-events:none;max-width:280px"></div>
 
 <!-- Detail panel -->
@@ -288,7 +292,6 @@ const EDGE_STYLES={
 
 const canvas=document.getElementById('c'),ctx=canvas.getContext('2d');
 const burstCanvas=document.getElementById('burstC'),bctx=burstCanvas.getContext('2d');
-const minimapCanvas=document.getElementById('minimapC'),mctx=minimapCanvas.getContext('2d');
 let W,H,nodes=[],edges=[],nodeMap=new Map(),cam={x:0,y:0,z:1},camTargetZ=1,autoR=false,showLabels=true;
 let drag=false,dragStart={x:0,y:0},camStart={x:0,y:0},hovered=null,selected=null;
 let particles=[],bursts=[],recallPopups=[];
@@ -296,7 +299,15 @@ let recallCount=0,nsFilter='',typeFilter='',activityFeed=[],searchQuery='';
 let lastSnapshotCount=0,lastNodeCount=0;
 let healthMode=false,selectedNode=null,connectedSet=null;
 
-function resize(){W=canvas.width=innerWidth;H=canvas.height=innerHeight;burstCanvas.width=W;burstCanvas.height=H;burstCanvas.style.width=W+'px';burstCanvas.style.height=H+'px';minimapCanvas.width=180;minimapCanvas.height=120;}
+let resizeTimer;
+function resize(){
+  clearTimeout(resizeTimer);
+  resizeTimer=setTimeout(()=>{
+    W=canvas.width=innerWidth;H=canvas.height=innerHeight;
+    burstCanvas.width=W;burstCanvas.height=H;
+    burstCanvas.style.width=W+'px';burstCanvas.style.height=H+'px';
+  },100);
+}
 window.onresize=resize;resize();
 
 // Embed mode: hide sidebar when loaded in iframe
@@ -323,6 +334,7 @@ async function load(){
     document.getElementById('se').textContent=d.edges.length;
   }
   buildGraph(d);
+  updateEmptyState();
   wakeRender(); // ensure render loop is alive after data loads
   renderLegend(d);
   // Fetch real namespace counts, fallback to graph data
@@ -392,7 +404,7 @@ function buildGraph(data){
     n.health=Math.min(1,conn*0.4+imp*0.3+acc*0.3);
   }
 
-  cam={x:0,y:0,z:1};
+  cam={x:0,y:0,z:1};camTargetZ=1;
   // Reset reusable arrays
   visNodesCache.length=0;
   physicsFrame=0;
@@ -406,7 +418,6 @@ let physicsSettled=false;
 let settleCounter=0;
 
 function physics(){
-  if(physicsSettled)return;
   physicsFrame++;
 
   // Rebuild visible nodes cache FIRST (before checking count)
@@ -464,9 +475,9 @@ function physics(){
           const pushStrength=Math.min(1,overlap/(minDist*0.3))*0.8;
 
           a.x+=nx*overlap*pushStrength;
-          a.y-=ny*overlap*pushStrength;
+          a.y+=ny*overlap*pushStrength;
           b.x-=nx*overlap*pushStrength;
-          b.y+=ny*overlap*pushStrength;
+          b.y-=ny*overlap*pushStrength;
 
           const vDotN=(a.vx-b.vx)*nx+(a.vy-b.vy)*ny;
           if(vDotN<0){
@@ -591,8 +602,29 @@ function rebuildVisCache(){
 let frameCount=0,lastFps=performance.now(),renderRunning=true,simTimer=null;
 let renderIdle=false; // pause render loop when fully settled
 
+// === Profiler (Darwin zoom performance test) ===
+const PROF={frames:0,totalMs:0,nodeMs:0,edgeMs:0,partMs:0,burstMs:0,gridMs:0,
+  nodesDrawn:0,edgesDrawn:0,particlesDrawn:0,lastLog:0};
+function logProf(){
+  const f=PROF.frames||1;
+  console.table({
+    zoom:{value:cam.z.toFixed(3)},
+    fps:{value:(1000/(PROF.totalMs/f)).toFixed(1)},
+    frameMs:{value:(PROF.totalMs/f).toFixed(2)},
+    nodeMs:{value:(PROF.nodeMs/f).toFixed(2)},
+    edgeMs:{value:(PROF.edgeMs/f).toFixed(2)},
+    partMs:{value:(PROF.partMs/f).toFixed(2)},
+    nodes:{value:Math.round(PROF.nodesDrawn/f)},
+    edges:{value:Math.round(PROF.edgesDrawn/f)},
+    particles:{value:Math.round(PROF.particlesDrawn/f)}
+  });
+  PROF.frames=PROF.totalMs=PROF.nodeMs=PROF.edgeMs=PROF.partMs=PROF.burstMs=PROF.gridMs=0;
+  PROF.nodesDrawn=PROF.edgesDrawn=PROF.particlesDrawn=0;
+}
+
 function render(){
   if(!renderRunning)return;
+  const t0=performance.now();
   try{
     physics();
     // Smooth zoom interpolation
@@ -601,19 +633,28 @@ function render(){
     ctx.fillStyle='#08080d';ctx.fillRect(0,0,W,H);
     if(autoR)cam.x+=0.3;
     const cx=W/2,cy=H/2;
-    // Subtle radial background — solid color for performance (Firefox-friendly)
+    const tg=performance.now();
     ctx.fillStyle='#0a0a14';ctx.fillRect(0,0,W,H);
     drawGrid(cx,cy);
+    PROF.gridMs+=performance.now()-tg;
+    const tp=performance.now();
     drawParticles(cx,cy);
+    PROF.partMs+=performance.now()-tp;
+    const te=performance.now();
     drawEdges(cx,cy);
+    PROF.edgeMs+=performance.now()-te;
+    const tn=performance.now();
     drawNodes(cx,cy);
+    PROF.nodeMs+=performance.now()-tn;
+    const tb=performance.now();
     drawBursts();
-    if(frameCount%5===0)drawMinimap(); // every 5th frame (~12fps)
-    // Vignette overlay — pre-rendered pattern for performance
-    // Skip expensive radial gradient in Firefox; use globalAlpha fade instead
+    PROF.burstMs+=performance.now()-tb;
     ctx.fillStyle='rgba(0,0,0,0.15)';ctx.fillRect(0,0,W,H);
     frameCount++;
+    PROF.frames++;
+    PROF.totalMs+=performance.now()-t0;
     if(performance.now()-lastFps>=1000){document.getElementById('sf').textContent=frameCount;frameCount=0;lastFps=performance.now();}
+    if(PROF.frames>=60&&(performance.now()-PROF.lastLog)>2000){logProf();PROF.lastLog=performance.now();}
   }catch(e){console.error('Render error:',e);}
   requestAnimationFrame(render);
 }
@@ -629,12 +670,14 @@ function drawGrid(cx,cy){
 
 function drawEdges(cx,cy){
   const lod=cam.z>0.5?'high':cam.z>0.25?'medium':'low';
-  // Cap edges drawn for performance
-  const maxEdges=lod==='high'?1000:lod==='medium'?500:200;
+  // Zoom-aware edge cap: fewer edges at high zoom where detail isn't needed
+  const maxEdges=lod==='high'?Math.round(Math.min(1000,800/cam.z)):lod==='medium'?500:200;
+  // Zoom-aware particle budget: scale down as zoom increases
+  const maxParticles=Math.round(Math.max(400,1200/cam.z));
   // Viewport bounds in world space for early culling
   const vpLeft=cam.x-W/(2*cam.z)-200, vpRight=cam.x+W/(2*cam.z)+200;
   const vpTop=cam.y-H/(2*cam.z)-200, vpBottom=cam.y+H/(2*cam.z)+200;
-  let drawn=0;
+  let drawn=0,pdrawn=0;
   for(let ei=0;ei<edges.length;ei++){
     if(drawn>=maxEdges)break;
     const e=edges[ei];
@@ -703,6 +746,7 @@ function drawEdges(cx,cy){
       e.nextSpawn=e.type==='contradicts'?15+Math.random()*20:30+Math.random()*60;
     }
     for(let i=e.particles.length-1;i>=0;i--){
+      if(pdrawn>=maxParticles)break;
       const p=e.particles[i];p.t+=p.speed;
       if(p.t>1){e.particles.splice(i,1);continue;}
       const t=p.t;
@@ -717,17 +761,24 @@ function drawEdges(cx,cy){
       const pa=1-Math.abs(t-0.5)*2;
       ctx.beginPath();ctx.arc(px,py,(1.5+Math.sin(t*Math.PI)*0.5)*cam.z,0,Math.PI*2);
       ctx.fillStyle=`${p.color}${(pa*0.9).toFixed(2)})`;ctx.fill();
+      pdrawn++;
     }
     }else{
       e.particles.length=0; // Clear particles in low LOD
     }
   }
   ctx.globalAlpha=1;
+  PROF.edgesDrawn+=drawn;
+  PROF.particlesDrawn+=pdrawn;
 }
 
 function drawNodes(cx,cy){
   const time=performance.now()*0.001;
   const lod=cam.z>0.5?'high':cam.z>0.25?'medium':'low';
+  let drawn=0;
+  // Zoom-aware detail cap: only render glow/spikes for top-N important nodes
+  const detailCap=Math.round(Math.max(20,80/cam.z));
+  let detailDrawn=0;
   // Use visNodesCache (already filtered to visible nodes)
   for(const n of visNodesCache){
     if(!n.visible)continue;
@@ -737,6 +788,7 @@ function drawNodes(cx,cy){
 
     // Skip if offscreen
     if(sx<-50||sx>W+50||sy<-50||sy>H+50)continue;
+    drawn++;
 
     const sz=n.size*cam.z;
     if(!isFinite(sz)||sz<=0)continue; // Guard against bad size
@@ -746,7 +798,7 @@ function drawNodes(cx,cy){
     // Determine effective color
     let effRgba=n.rgba;
     if(healthMode){
-      effRgba=healthColorPrefix(n.health);
+      effRgba=healthColor(n.health).prefix;
     }
 
     // Selection dimming
@@ -758,16 +810,18 @@ function drawNodes(cx,cy){
     // Glow (high LOD only, skip when too many nodes or zoomed in)
     // OPTIMIZED: Use solid circles with globalAlpha instead of radial gradients
     // Firefox suffers from per-frame gradient allocation; this saves ~200 allocs/frame
-    if((lod==='high'&&cam.z<2.5&&nodes.length<80)||isHov||isHL){
+    const allowGlow=(lod==='high'&&cam.z<2.5&&nodes.length<80)||isHov||isHL;
+    if(allowGlow&&(isHov||isHL||detailDrawn<detailCap)){
       const glowSz=Math.min(sz*2.5,60); // cap max glow radius
       ctx.beginPath();ctx.arc(sx,sy,glowSz,0,Math.PI*2);
       ctx.globalAlpha=glowAlphaBase*0.5;
-      ctx.fillStyle=n.rgbaFull;ctx.fill();
+      ctx.fillStyle=healthMode?effRgba+'1)':n.rgbaFull;ctx.fill();
       ctx.globalAlpha=nodeAlpha;
+      if(!isHov&&!isHL)detailDrawn++;
     }
 
     // Axon spikes (high LOD only, when not zoomed in too much)
-    if(lod==='high'&&cam.z<2&&(n.imp>0.6||n.acc>3||isHL)){
+    if(lod==='high'&&cam.z<2&&(n.imp>0.6||n.acc>3||isHL)&&(isHL||detailDrawn<detailCap)){
       const sp=Math.min(n.acc||4,8);
       ctx.globalAlpha=isHL?0.5:0.25*nodeAlpha;
       ctx.strokeStyle=n.rgbaFull;
@@ -779,6 +833,7 @@ function drawNodes(cx,cy){
         ctx.lineWidth=1*cam.z;ctx.stroke();
       }
       ctx.globalAlpha=nodeAlpha;
+      if(!isHL)detailDrawn++;
     }
 
     // Core shape
@@ -851,6 +906,7 @@ function drawNodes(cx,cy){
       ctx.globalAlpha=1;
     }
   }
+  PROF.nodesDrawn+=drawn;
 }
 
 function drawNodeShape(c,x,y,s,n){
@@ -974,44 +1030,6 @@ function drawBursts(){
   }
 }
 
-// === Mini-map ===
-function drawMinimap(){
-  const mw=180,mh=120;
-  mctx.clearRect(0,0,mw,mh);
-  if(nodes.length===0)return;
-
-  // Find bounds
-  let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
-  for(const n of nodes){
-    if(n.x<minX)minX=n.x;if(n.x>maxX)maxX=n.x;
-    if(n.y<minY)minY=n.y;if(n.y>maxY)maxY=n.y;
-  }
-  const pad=50;minX-=pad;maxX+=pad;minY-=pad;maxY+=pad;
-  const rangeX=maxX-minX||1,rangeY=maxY-minY||1;
-  const scale=Math.min(mw/rangeX,mh/rangeY);
-  const offX=(mw-rangeX*scale)/2,offY=(mh-rangeY*scale)/2;
-
-  // Draw nodes as dots (visible only, NaN-safe)
-  for(const n of nodes){
-    if(!n.visible)continue;
-    if(!isFinite(n.x)||!isFinite(n.y))continue;
-    const x=(n.x-minX)*scale+offX;
-    const y=(n.y-minY)*scale+offY;
-    if(!isFinite(x)||!isFinite(y))continue;
-    const c=healthMode?healthColorPrefix(n.health):n.rgba;
-    mctx.fillStyle=`${c}0.6)`;
-    mctx.fillRect(x-1,y-1,2,2);
-  }
-
-  // Draw viewport rectangle
-  const vpL=(-cam.x-W/2/cam.z-minX)*scale+offX;
-  const vpT=(-cam.y-H/2/cam.z-minY)*scale+offY;
-  const vpW=(W/cam.z)*scale;
-  const vpH=(H/cam.z)*scale;
-  mctx.strokeStyle='#00ff8866';mctx.lineWidth=1;
-  mctx.strokeRect(vpL,vpT,vpW,vpH);
-}
-
 // === Health Mode Toggle ===
 function toggleHealth(){
   healthMode=!healthMode;
@@ -1030,15 +1048,10 @@ function selectNodeForHighlight(nid){
 }
 
 // === Health Color Helper ===
-function healthColorRgb(h){
-  if(h>0.7)return[0,255,136];
-  if(h>0.4)return[255,200,0];
-  return[255,80,60];
-}
-function healthColorPrefix(h){
-  if(h>0.7)return'rgba(0,255,136,';
-  if(h>0.4)return'rgba(255,200,0,';
-  return'rgba(255,80,60,';
+function healthColor(h){
+  if(h>0.7)return{rgb:[0,255,136],prefix:'rgba(0,255,136,'};
+  if(h>0.4)return{rgb:[255,200,0],prefix:'rgba(255,200,0,'};
+  return{rgb:[255,80,60],prefix:'rgba(255,80,60,'};
 }
 
 // === Namespace Clustering Colors ===
@@ -1265,6 +1278,9 @@ async function pollHermesRecalls(){
             if(local&&remote.access_count>local.acc){
               const delta=remote.access_count-local.acc;
               local.acc=remote.access_count;
+              // Recalculate visual size since it depends on access_count
+              const tc=TC[local.type]||TC.concept;
+              local.size=tc.s*Math.min(1.4,0.6+Math.min(local.imp||0.5,1)*0.4+Math.log2(1+Math.min(local.acc||0,100))*0.08);
               addFeedItem('recall',
                 `Recalled: ${local.label.substring(0,35)} (+${delta}x)`,
                 [local.id]);
@@ -1411,7 +1427,7 @@ canvas.onmousemove=e=>{
   if(hovered&&!drag){
     const tc=TC[hovered.type]||TC.concept;
     const healthPct=(hovered.health*100).toFixed(0);
-    const hcColor=healthMode?healthColorRgb(hovered.health):hovered.rgb;
+    const hcColor=healthMode?healthColor(hovered.health).rgb:hovered.rgb;
     hc.innerHTML=`<div style="color:${tc.c};font-weight:bold;margin-bottom:4px">${tc.icon} ${hovered.label}</div>
       <div style="color:#888;margin-bottom:3px">[${hovered.type}] ${hovered.ns}</div>
       <div style="display:flex;gap:12px;color:#666;font-size:10px">
@@ -1499,6 +1515,11 @@ document.onkeydown=e=>{
   if(e.key==='Escape')document.getElementById('pnl').classList.remove('open');
   if(e.key==='r'&&!e.ctrlKey)resetCam();
 };
+
+function updateEmptyState(){
+  const el=document.getElementById('emptyState');
+  if(el)el.style.display=nodes.length===0?'block':'none';
+}
 
 // === Init ===
 initParticles();load();render();
