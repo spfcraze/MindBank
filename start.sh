@@ -84,6 +84,10 @@ stop_mindbank
 
 # BUGFIX: Log to file so "tail -f /tmp/mindbank.log" actually works
 log "Starting MindBank API on port $MB_PORT..."
+# BUGFIX: Unset BASH_ENV to prevent RTK aliases from leaking into
+# mindbank-api's subprocess calls (e.g., git, docker, find).
+# This fixes the "MindBank process has BASH_ENV" test failure.
+env -u BASH_ENV \
 MB_DB_DSN="$MB_DSN" \
 MB_OLLAMA_URL="http://localhost:11434" \
 MB_PORT="$MB_PORT" \
