@@ -71,8 +71,8 @@ type GitHubRelease struct {
 type UpdateCheckResponse struct {
 	NeedsUpdate bool   `json:"needs_update"`
 	Local       string `json:"local"`
-	Remote      string `json:"remote"`
-	Date        string `json:"date"`
+	Remote      string `json:"remote_version"`
+	Date        string `json:"release_date"`
 	Changelog   string `json:"changelog"`
 	ReleaseURL  string `json:"release_url"`
 	InstallType string `json:"install_type"` // git or tarball
