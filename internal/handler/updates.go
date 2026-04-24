@@ -32,6 +32,7 @@ var TrackedFiles = []string{
 	"internal/handler/static/graph.html",
 	"plugins/memory/mindbank/__init__.py",
 	"scripts/update.sh",
+	"scripts/run-migrations.sh",
 }
 
 // sha256Hex returns SHA256 hex of bytes
@@ -474,6 +475,24 @@ func (h *UpdateHandler) SyncFile(w http.ResponseWriter, r *http.Request) {
 	if err := os.WriteFile(localPath, remoteData, 0644); err != nil {
 		respondError(w, 500, "failed to write file: "+err.Error())
 		return
+	}
+
+	// Auto-run migrations if a migration file was synced
+	if strings.Contains(req.Path, "migrations") || strings.Contains(req.Path, "run-migrations.sh") {
+		go func() {
+			time.Sleep(1 * time.Second)
+			migScript := filepath.Join(h.installDir, "scripts", "run-migrations.sh")
+			if _, err := os.Stat(migScript); err == nil {
+				cmd := exec.Command("bash", migScript)
+				cmd.Dir = h.installDir
+				output, err := cmd.CombinedOutput()
+				if err != nil {
+					slog.Error("auto-migration failed", "error", err, "output", string(output))
+				} else {
+					slog.Info("auto-migration completed", "output", string(output))
+				}
+			}
+		}()
 	}
 
 	respondJSON(w, 200, SyncFileResponse{

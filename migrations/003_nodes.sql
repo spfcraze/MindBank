@@ -2,7 +2,7 @@
 DO $$ BEGIN
     CREATE TYPE node_type AS ENUM (
         'person', 'agent', 'project', 'topic', 'decision',
-        'fact', 'event', 'preference', 'advice', 'problem', 'concept'
+        'fact', 'event', 'preference', 'advice', 'problem', 'concept', 'question'
     );
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
