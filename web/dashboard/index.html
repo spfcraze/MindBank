@@ -38,9 +38,9 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 .corner-deco.br{bottom:0;right:0;border-bottom:1px solid var(--cyan);border-right:1px solid var(--cyan)}
 
 /* Navigation */
-.nav{display:flex;align-items:center;justify-content:space-between;padding:20px 0;border-bottom:1px solid var(--border);margin-bottom:48px}
-.nav-logo{display:flex;align-items:center;gap:12px;text-decoration:none}
-.nav-logo-icon{width:36px;height:36px;border:1px solid var(--cyan);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;color:var(--cyan);position:relative}
+.nav{display:flex;align-items:center;padding:20px 0;border-bottom:1px solid var(--border);margin-bottom:48px;gap:32px}
+.nav-logo{display:flex;align-items:center;gap:12px;text-decoration:none;flex-shrink:0;margin-right:auto}
+.nav-links{display:flex;gap:20px;flex-wrap:wrap;justify-content:center;flex:1;max-width:fit-content;margin:0 auto}
 .nav-logo-icon::before{content:'';position:absolute;inset:-3px;border:1px solid var(--cyan);opacity:0.3}
 .nav-logo-text{font-family:var(--font-mono);font-size:16px;font-weight:700;letter-spacing:0.15em;color:var(--text)}
 .nav-logo-text span{color:var(--cyan)}
@@ -70,7 +70,11 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 .panel-title::before{content:'[ ';color:var(--cyan)}
 .panel-title::after{content:' ]';color:var(--cyan)}
 
-/* Buttons */
+/* Scrollbar */
+#nsBars::-webkit-scrollbar{width:6px}
+#nsBars::-webkit-scrollbar-track{background:rgba(0,0,0,0.2)}
+#nsBars::-webkit-scrollbar-thumb{background:var(--cyan);border-radius:3px}
+#nsBars{scrollbar-width:thin;scrollbar-color:var(--cyan) rgba(0,0,0,0.2)}
 .btn-cyber{padding:14px 32px;background:transparent;color:var(--cyan);border:1px solid var(--cyan);font-family:var(--font-mono);font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;cursor:pointer;text-decoration:none;position:relative;transition:all 0.2s;display:inline-block}
 .btn-cyber:hover{background:rgba(0,212,170,0.1);box-shadow:0 0 20px rgba(0,212,170,0.3);text-shadow:0 0 8px var(--cyan)}
 .btn-cyber::before{content:'';position:absolute;top:-1px;left:-1px;width:8px;height:8px;border-top:2px solid var(--cyan);border-left:2px solid var(--cyan)}
@@ -408,9 +412,9 @@ div.vis-tooltip{background:var(--bg-panel);border:1px solid var(--border);color:
       </div>
     </div>
     <!-- Right: Namespace bars -->
-    <div class="panel chart-panel">
+    <div class="panel chart-panel" style="max-height:420px;display:flex;flex-direction:column">
       <div class="panel-title">NAMESPACE BREAKDOWN</div>
-      <div id="nsBars" style="padding:8px 0"></div>
+      <div id="nsBars" style="padding:8px 0;overflow-y:auto;flex:1"></div>
     </div>
   </div>
 
@@ -1146,7 +1150,7 @@ async function loadStats(){
   if(nsBarsEl){
     nsBarsEl.innerHTML=Object.entries(nsMap).sort((a,b)=>b[1]-a[1]).map(([ns,cnt])=>{
       const c=nsColors[ns];const pct=(cnt/maxN*100).toFixed(0);
-      return`<div class="ns-bar"><div class="dot" style="background:${c};box-shadow:0 0 6px ${c}"></div><div class="name">${esc(ns)}</div><div class="bar-bg"><div class="bar-fill" style="width:${pct}%;background:${c}"></div></div><div class="cnt">${cnt}</div></div>`
+      return`<div class="ns-bar" title="${esc(ns)}: ${cnt} nodes"><div class="dot" style="background:${c};box-shadow:0 0 6px ${c}"></div><div class="name">${esc(ns)}</div><div class="bar-bg"><div class="bar-fill" style="width:${pct}%;background:${c}"></div></div><div class="cnt">${cnt}</div></div>`
     }).join('');
   }
   // Donut chart for node types
