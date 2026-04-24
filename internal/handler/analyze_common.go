@@ -18,10 +18,11 @@ func NewAnalyzeHandler(pool *pgxpool.Pool) *AnalyzeHandler {
 
 // truncate returns the first n characters of s with "..." if truncated.
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	runes := []rune(s)
+	if len(runes) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	return string(runes[:n]) + "..."
 }
 
 // itoa converts int to string.

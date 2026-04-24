@@ -374,21 +374,70 @@ func (r *NodeRepo) Update(ctx context.Context, id string, req models.NodeUpdate)
 	return n, nil
 }
 
-// Delete soft-deletes a node by setting valid_to (never hard deletes).
+// Delete soft-deletes a node and cleans up all connected records in a transaction.
 func (r *NodeRepo) Delete(ctx context.Context, id string) (bool, error) {
-	tag, err := r.pool.Exec(ctx, `
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("begin delete tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// 1. Soft-delete the node
+	tag, err := tx.Exec(ctx, `
 		UPDATE nodes SET valid_to = now()
 		WHERE id = $1 AND valid_to IS NULL
 	`, id)
 	if err != nil {
-		return false, fmt.Errorf("delete node: %w", err)
+		return false, fmt.Errorf("soft-delete node: %w", err)
 	}
-	return tag.RowsAffected() > 0, nil
+	if tag.RowsAffected() == 0 {
+		return false, nil
+	}
+
+	// 2. Delete connected edges
+	_, _ = tx.Exec(ctx, `DELETE FROM edges WHERE source_id = $1 OR target_id = $1`, id)
+
+	// 3. Clear predecessor references
+	_, _ = tx.Exec(ctx, `UPDATE nodes SET predecessor_id = NULL WHERE predecessor_id = $1`, id)
+
+	// 4. Delete embedding
+	_, _ = tx.Exec(ctx, `DELETE FROM node_embeddings WHERE node_id = $1`, id)
+
+	// 5. Delete session associations
+	_, _ = tx.Exec(ctx, `DELETE FROM session_nodes WHERE node_id = $1`, id)
+
+	// 6. Delete collection associations
+	_, _ = tx.Exec(ctx, `DELETE FROM collection_nodes WHERE node_id = $1`, id)
+
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("commit delete tx: %w", err)
+	}
+	return true, nil
 }
 
 // PurgeOldVersions hard-deletes soft-deleted temporal versions older than N days.
 func (r *NodeRepo) PurgeOldVersions(ctx context.Context, olderThanDays int) (int64, error) {
-	tag, err := r.pool.Exec(ctx, `
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("begin purge tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Clear predecessor references pointing to nodes being purged
+	_, err = tx.Exec(ctx, `
+		UPDATE nodes SET predecessor_id = NULL
+		WHERE predecessor_id IN (
+			SELECT id FROM nodes
+			WHERE valid_to IS NOT NULL
+			  AND valid_to < now() - make_interval(days => $1)
+		)
+	`, olderThanDays)
+	if err != nil {
+		return 0, fmt.Errorf("clear predecessor refs: %w", err)
+	}
+
+	// Now safe to delete old versions
+	tag, err := tx.Exec(ctx, `
 		DELETE FROM nodes
 		WHERE valid_to IS NOT NULL
 		  AND valid_to < now() - make_interval(days => $1)
@@ -396,12 +445,40 @@ func (r *NodeRepo) PurgeOldVersions(ctx context.Context, olderThanDays int) (int
 	if err != nil {
 		return 0, fmt.Errorf("purge old versions: %w", err)
 	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit purge tx: %w", err)
+	}
 	return tag.RowsAffected(), nil
 }
 
 // CompactNodeVersions hard-deletes all old temporal versions of a node chain except the current one.
 func (r *NodeRepo) CompactNodeVersions(ctx context.Context, currentID string) (int64, error) {
-	tag, err := r.pool.Exec(ctx, `
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("begin compact tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Clear predecessor references pointing to versions being compacted
+	_, err = tx.Exec(ctx, `
+		UPDATE nodes SET predecessor_id = NULL
+		WHERE predecessor_id IN (
+			WITH RECURSIVE chain AS (
+				SELECT id, predecessor_id, valid_to FROM nodes WHERE id = $1
+				UNION ALL
+				SELECT n.id, n.predecessor_id, n.valid_to
+				FROM nodes n
+				JOIN chain c ON n.id = c.predecessor_id
+			)
+			SELECT id FROM chain WHERE valid_to IS NOT NULL
+		)
+	`, currentID)
+	if err != nil {
+		return 0, fmt.Errorf("clear predecessor refs: %w", err)
+	}
+
+	tag, err := tx.Exec(ctx, `
 		WITH RECURSIVE chain AS (
 			SELECT id, predecessor_id, valid_to FROM nodes WHERE id = $1
 			UNION ALL
@@ -414,6 +491,10 @@ func (r *NodeRepo) CompactNodeVersions(ctx context.Context, currentID string) (i
 	`, currentID)
 	if err != nil {
 		return 0, fmt.Errorf("compact node versions: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit compact tx: %w", err)
 	}
 	return tag.RowsAffected(), nil
 }
@@ -485,7 +566,7 @@ func (r *NodeRepo) FindSimilarAcrossNamespaces(ctx context.Context, sourceNS, ta
 
 // List returns current nodes with optional filters.
 func (r *NodeRepo) List(ctx context.Context, workspace, namespace string, nodeType models.NodeType, limit, offset int) ([]models.Node, error) {
-	if limit <= 0 || limit > 100 {
+	if limit <= 0 || limit > 1000 {
 		limit = 50
 	}
 	if offset < 0 {

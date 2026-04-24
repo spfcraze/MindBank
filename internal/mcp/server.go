@@ -417,11 +417,15 @@ func (s *Server) toolCreateEdge(ctx context.Context, args json.RawMessage) (any,
 	}
 
 	w := req.Weight
+	edgeType := models.EdgeType(req.EdgeType)
+	if !edgeType.IsValid() {
+		return nil, fmt.Errorf("invalid edge_type: %s", req.EdgeType)
+	}
 	edge, err := s.edgeRepo.Create(ctx, models.EdgeCreate{
 		WorkspaceName: req.Workspace,
 		SourceID:      req.SourceID,
 		TargetID:      req.TargetID,
-		EdgeType:      models.EdgeType(req.EdgeType),
+		EdgeType:      edgeType,
 		Weight:        &w,
 	})
 	if err != nil {

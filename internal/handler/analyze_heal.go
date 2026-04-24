@@ -297,6 +297,7 @@ func (h *AnalyzeHandler) MergeDuplicates(w http.ResponseWriter, r *http.Request)
 // Finds nodes in small disconnected components and links them to the main component.
 func (h *AnalyzeHandler) ConnectComponents(w http.ResponseWriter, r *http.Request) {
 	ns := r.URL.Query().Get("namespace")
+	dryRun := r.URL.Query().Get("dry_run") != "false"
 	ctx := r.Context()
 
 	// Fetch all current nodes and edges for the namespace
@@ -437,11 +438,15 @@ func (h *AnalyzeHandler) ConnectComponents(w http.ResponseWriter, r *http.Reques
 		}
 
 		if bestID != "" && bestSim > 0.05 {
-			_, err := h.pool.Exec(ctx, `
-				INSERT INTO edges (workspace_name, source_id, target_id, edge_type, weight)
-				VALUES ('hermes', $1, $2, 'relates_to', 0.5) ON CONFLICT DO NOTHING
-			`, on.ID, bestID)
-			if err == nil {
+			if !dryRun {
+				_, err := h.pool.Exec(ctx, `
+					INSERT INTO edges (workspace_name, source_id, target_id, edge_type, weight)
+					VALUES ('hermes', $1, $2, 'relates_to', 0.5) ON CONFLICT DO NOTHING
+				`, on.ID, bestID)
+				if err == nil {
+					created++
+				}
+			} else {
 				created++
 			}
 		}

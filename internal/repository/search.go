@@ -28,7 +28,7 @@ func NewSearchRepo(pool *pgxpool.Pool) *SearchRepo {
 
 // FullTextSearch performs PostgreSQL FTS using ts_rank_cd with synonym expansion.
 func (r *SearchRepo) FullTextSearch(ctx context.Context, query string, workspace, namespace string, limit int) ([]models.SearchResult, error) {
-	if limit <= 0 || limit > 50 {
+	if limit <= 0 || limit > 100 {
 		limit = 10
 	}
 
@@ -146,7 +146,7 @@ func (r *SearchRepo) trigramSearch(ctx context.Context, query string, workspace,
 
 // VectorSearch performs semantic search using pgvector cosine similarity.
 func (r *SearchRepo) VectorSearch(ctx context.Context, embedding []float32, workspace, namespace string, limit int) ([]models.SearchResult, error) {
-	if limit <= 0 || limit > 50 {
+	if limit <= 0 || limit > 100 {
 		limit = 10
 	}
 
@@ -204,7 +204,7 @@ func (r *SearchRepo) CacheStats() (size int, maxAge time.Duration) {
 
 // HybridSearch combines FTS + vector results using Reciprocal Rank Fusion.
 func (r *SearchRepo) HybridSearch(ctx context.Context, query string, embedding []float32, workspace, namespace string, limit int, edgeRepo *EdgeRepo) ([]models.SearchResult, error) {
-	if limit <= 0 || limit > 50 {
+	if limit <= 0 || limit > 100 {
 		limit = 10
 	}
 

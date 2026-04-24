@@ -72,6 +72,13 @@ func (h *SessionHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *SessionHandler) AddMessages(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "id")
 
+	// Validate session exists before inserting messages
+	_, err := h.repo.Get(r.Context(), sessionID)
+	if err != nil {
+		respondError(w, 404, "session not found")
+		return
+	}
+
 	var msgs []models.MessageCreate
 	if err := bindJSON(r, &msgs); err != nil {
 		respondError(w, 400, "invalid request: "+err.Error())
