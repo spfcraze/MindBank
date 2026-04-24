@@ -3,6 +3,8 @@ package handler
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,11 +17,28 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 )
 
 const githubRepo = "spfcraze/MindBank"
+
+// TrackedFiles are files we can selectively sync from GitHub
+var TrackedFiles = []string{
+	"web/dashboard/index.html",
+	"web/dashboard/graph.html",
+	"internal/handler/static/index.html",
+	"internal/handler/static/graph.html",
+	"plugins/memory/mindbank/__init__.py",
+	"scripts/update.sh",
+}
+
+// sha256Hex returns SHA256 hex of bytes
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
 
 // UpdateJob tracks a running update process.
 type UpdateJob struct {
@@ -55,6 +74,8 @@ func RegisterUpdateRoutes(r chi.Router, h *UpdateHandler) {
 	r.Post("/updates/run", h.RunUpdate)
 	r.Post("/updates/restart", h.RestartAPI)
 	r.Get("/updates/status/{jobID}", h.GetStatus)
+	r.Get("/updates/file-status", h.FileStatus)
+	r.Post("/updates/sync-file", h.SyncFile)
 }
 
 // GitHubRelease represents a GitHub release.
@@ -304,6 +325,163 @@ func (h *UpdateHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, 200, job)
+}
+
+// FileStatus represents the status of a tracked file.
+type FileStatus struct {
+	Path       string `json:"path"`
+	LocalHash  string `json:"local_hash"`
+	RemoteHash string `json:"remote_hash"`
+	Status     string `json:"status"` // same | changed | unknown | missing
+}
+
+// FileStatus handles GET /api/v1/updates/file-status.
+func (h *UpdateHandler) FileStatus(w http.ResponseWriter, r *http.Request) {
+	results := make([]FileStatus, 0, len(TrackedFiles))
+	for _, path := range TrackedFiles {
+		localPath := filepath.Join(h.installDir, path)
+		localHash := ""
+		status := "unknown"
+
+		// Read local file
+		localData, err := os.ReadFile(localPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				status = "missing"
+			}
+		} else {
+			localHash = sha256Hex(localData)
+		}
+
+		// Fetch remote from GitHub raw
+		remoteHash := ""
+		rawURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/master/%s", githubRepo, path)
+		resp, err := http.Get(rawURL)
+		if err == nil && resp.StatusCode == 200 {
+			data, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			remoteHash = sha256Hex(data)
+		} else if resp != nil {
+			resp.Body.Close()
+		}
+
+		if status == "unknown" {
+			if localHash == "" {
+				status = "missing"
+			} else if remoteHash == "" {
+				status = "unknown"
+			} else if localHash == remoteHash {
+				status = "same"
+			} else {
+				status = "changed"
+			}
+		}
+
+		results = append(results, FileStatus{
+			Path:       path,
+			LocalHash:  localHash,
+			RemoteHash: remoteHash,
+			Status:     status,
+		})
+	}
+
+	respondJSON(w, 200, map[string]interface{}{
+		"files":      results,
+		"checked_at": time.Now().Format(time.RFC3339),
+	})
+}
+
+// SyncFileRequest is the request body for sync-file.
+type SyncFileRequest struct {
+	Path string `json:"path"`
+}
+
+// SyncFileResponse is the response for sync-file.
+type SyncFileResponse struct {
+	Success    bool   `json:"success"`
+	Path       string `json:"path"`
+	BackedUpTo string `json:"backed_up_to"`
+	Message    string `json:"message"`
+}
+
+// SyncFile handles POST /api/v1/updates/sync-file.
+func (h *UpdateHandler) SyncFile(w http.ResponseWriter, r *http.Request) {
+	var req SyncFileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, 400, "invalid JSON: "+err.Error())
+		return
+	}
+
+	// Validate path is in tracked files
+	allowed := false
+	for _, tf := range TrackedFiles {
+		if tf == req.Path {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		respondError(w, 400, "path not in tracked files list")
+		return
+	}
+
+	// Safety: never overwrite .env
+	if strings.Contains(req.Path, ".env") {
+		respondError(w, 400, "refusing to sync .env")
+		return
+	}
+
+	localPath := filepath.Join(h.installDir, req.Path)
+
+	// Fetch remote
+	rawURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/master/%s", githubRepo, req.Path)
+	resp, err := http.Get(rawURL)
+	if err != nil {
+		respondError(w, 502, "failed to fetch from GitHub: "+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		respondError(w, 502, fmt.Sprintf("GitHub returned %d", resp.StatusCode))
+		return
+	}
+
+	remoteData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		respondError(w, 500, "failed to read remote content")
+		return
+	}
+
+	// Validate UTF-8
+	if !utf8.Valid(remoteData) {
+		respondError(w, 400, "remote content is not valid UTF-8")
+		return
+	}
+
+	// Backup old file if exists
+	backupDir := filepath.Join(os.Getenv("HOME"), ".mindbank", "backup", "files", time.Now().Format("20060102-150405"))
+	backedUpTo := ""
+	if _, err := os.Stat(localPath); err == nil {
+		backupPath := filepath.Join(backupDir, req.Path)
+		os.MkdirAll(filepath.Dir(backupPath), 0755)
+		oldData, _ := os.ReadFile(localPath)
+		os.WriteFile(backupPath, oldData, 0644)
+		backedUpTo = backupPath
+	}
+
+	// Write new file
+	os.MkdirAll(filepath.Dir(localPath), 0755)
+	if err := os.WriteFile(localPath, remoteData, 0644); err != nil {
+		respondError(w, 500, "failed to write file: "+err.Error())
+		return
+	}
+
+	respondJSON(w, 200, SyncFileResponse{
+		Success:    true,
+		Path:       req.Path,
+		BackedUpTo: backedUpTo,
+		Message:    "Synced from GitHub",
+	})
 }
 
 // RestartAPI handles POST /api/v1/updates/restart.

@@ -24,6 +24,7 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 @keyframes pulse-border{0%,100%{border-color:rgba(0,212,170,0.2)}50%{border-color:rgba(0,212,170,0.6)}}
 @keyframes scan{0%{transform:translateY(-100%)}100%{transform:translateY(100vh)}}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+@keyframes blink-update{0%,100%{color:var(--yellow);text-shadow:0 0 5px var(--yellow),0 0 10px rgba(245,197,24,0.3)}50%{color:#fff;text-shadow:0 0 15px var(--yellow),0 0 30px rgba(245,197,24,0.6)}}
 .scan-line{position:fixed;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,var(--cyan),transparent);opacity:0.5;animation:scan 6s linear infinite;pointer-events:none;z-index:100}
 .glitch{position:relative}
 .glitch::before,.glitch::after{content:attr(data-text);position:absolute;top:0;left:0;width:100%;height:100%;opacity:0}
@@ -50,6 +51,8 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 .nav-links a:hover::after{width:100%}
 .nav-links a.active{color:var(--cyan)}
 .nav-links a.active::after{width:100%}
+.nav-links a.blink-update{animation:blink-update 1.5s ease-in-out infinite;font-weight:700}
+.nav-links a.blink-update::after{background:var(--yellow)!important;width:100%!important}
 .nav-right{display:flex;align-items:center;gap:12px;margin-left:auto}
 .nav-status{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--text-faint);letter-spacing:0.06em}
 .status-dot{width:6px;height:6px;background:var(--green);border-radius:50%;animation:pulse-glow 2s infinite}
@@ -961,6 +964,17 @@ div.vis-tooltip{background:var(--bg-panel);border:1px solid var(--border);color:
       </div>
     </div>
 
+    <div class="panel" style="padding:24px;margin-bottom:24px">
+      <div class="panel-title">FILE SYNC</div>
+      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:16px">
+        <button class="btn" onclick="checkFileStatus()" id="up-file-check-btn">Check File Status</button>
+        <span id="up-file-status" style="font-size:12px;color:var(--text-dim);font-family:var(--font-mono)"></span>
+      </div>
+      <div id="up-file-sync" style="font-family:var(--font-mono);font-size:12px;color:var(--text-dim)">
+        <div style="color:var(--text-faint);padding:8px 0">Click "Check File Status" to compare local files with GitHub.</div>
+      </div>
+    </div>
+
     <div class="panel" style="padding:24px;margin-bottom:40px">
       <div class="panel-title">UPDATE LOG</div>
       <div id="up-log" style="font-family:var(--font-mono);font-size:12px;color:var(--text-dim);max-height:400px;overflow-y:auto">
@@ -1087,6 +1101,15 @@ async function refreshDashboard(){
   await loadNodes();
   await loadActivityFeed();
   btn.disabled=false;btn.textContent='REFRESH';
+}
+
+// === File Sync Background Polling ===
+let fileSyncBgIntervalId=null;
+function startFileSyncPolling(){
+  if(fileSyncBgIntervalId)return;
+  // Initial check after 10s, then every hour
+  setTimeout(checkFileStatus,10000);
+  fileSyncBgIntervalId=setInterval(checkFileStatus,3600000);
 }
 
 // === Stats ===
@@ -1847,7 +1870,7 @@ function initAutoSync(){
 }
 
 // === Init ===
-loadHealth();loadOllamaStats();updateLastSyncDisplay();initAutoSync();loadStats().then(()=>{lastDashNodeCount=parseInt(document.getElementById('statNodes').textContent)||0});
+loadHealth();loadOllamaStats();updateLastSyncDisplay();initAutoSync();startFileSyncPolling();loadStats().then(()=>{lastDashNodeCount=parseInt(document.getElementById('statNodes').textContent)||0});
 loadNodes();loadSnapshot();loadDQATrend();
 // Recalculate importance scores on first load (one-time)
 if(!sessionStorage.getItem('mb_recalc_done')){api('/nodes/recalculate',{method:'POST'}).then(r=>{if(r&&r.rows_updated){sessionStorage.setItem('mb_recalc_done','1');addFeed('recalc',r.rows_updated+' nodes scored');loadStats();loadNodes()}})}
@@ -3550,6 +3573,9 @@ document.addEventListener('keydown', function(e) {
 let upCheckInProgress=false;
 let upUpdateInProgress=false;
 let upInfo={local:'0.0.0',remote:'0.0.0',needsUpdate:false,date:'-',url:'-',changelog:''};
+let fileSyncState={files:[],lastCheck:null,hasChanges:false};
+let fileSyncIntervalId=null;
+const FILE_SYNC_INTERVAL_MS=3600000; // 1 hour
 
 function upLog(msg,type='info'){
   const el=document.getElementById('up-log');
@@ -3580,6 +3606,11 @@ async function initUpdateTab(){
   }catch(e){
     if(verEl)verEl.textContent='unknown';
     if(badgeEl)badgeEl.textContent='error';
+  }
+  // Start file sync polling
+  await checkFileStatus();
+  if(!fileSyncIntervalId){
+    fileSyncIntervalId=setInterval(checkFileStatus,FILE_SYNC_INTERVAL_MS);
   }
 }
 
@@ -3667,6 +3698,99 @@ async function runUpdate(){
     upUpdateInProgress=false;
     if(btn)btn.disabled=false;
   }
+}
+
+async function checkFileStatus(){
+  try{
+    const r=await fetch('/api/v1/updates/file-status');
+    if(!r.ok)return;
+    const data=await r.json();
+    fileSyncState.files=data.files||[];
+    fileSyncState.lastCheck=data.checked_at;
+    fileSyncState.hasChanges=fileSyncState.files.some(f=>f.status==='changed');
+    // Update blink on nav link
+    const updateLink=document.querySelector('.nav-links a[data-tab="update"]');
+    if(updateLink){
+      updateLink.classList.toggle('blink-update',fileSyncState.hasChanges);
+    }
+    // Update file status text
+    const statusEl=document.getElementById('up-file-status');
+    if(statusEl){
+      const changed=fileSyncState.files.filter(f=>f.status==='changed').length;
+      const missing=fileSyncState.files.filter(f=>f.status==='missing').length;
+      if(changed>0){
+        statusEl.innerHTML='<span style="color:var(--yellow)">'+changed+' file(s) changed</span>';
+      }else if(missing>0){
+        statusEl.innerHTML='<span style="color:var(--red)">'+missing+' file(s) missing</span>';
+      }else{
+        statusEl.innerHTML='<span style="color:var(--green)">All files up to date</span>';
+      }
+    }
+    // If on update tab, refresh the file sync panel
+    if(currentTab==='update'){
+      renderFileSyncPanel();
+    }
+  }catch(e){console.error('file-status check failed:',e)}
+}
+
+function renderFileSyncPanel(){
+  const panel=document.getElementById('up-file-sync');
+  if(!panel)return;
+  if(!fileSyncState.files.length){
+    panel.innerHTML='<div style="color:var(--text-faint);padding:8px 0">Click "Check File Status" to compare with GitHub.</div>';
+    return;
+  }
+  const changed=fileSyncState.files.filter(f=>f.status==='changed');
+  const same=fileSyncState.files.filter(f=>f.status==='same');
+  const missing=fileSyncState.files.filter(f=>f.status==='missing');
+  let html='<div style="margin-bottom:12px">';
+  html+='<span style="color:var(--green)">'+same.length+' same</span> · ';
+  html+='<span style="color:var(--yellow)">'+changed.length+' changed</span> · ';
+  html+='<span style="color:var(--red)">'+missing.length+' missing</span>';
+  if(fileSyncState.lastCheck){
+    html+=' <span style="color:var(--text-faint)">(checked '+timeAgo(new Date(fileSyncState.lastCheck))+')</span>';
+  }
+  html+='</div>';
+  if(changed.length>0){
+    html+='<div style="margin-bottom:12px"><button class="btn btn-cyber" onclick="syncAllFiles()">Accept All Changes</button></div>';
+    html+='<table style="width:100%;font-size:12px;font-family:var(--font-mono);border-collapse:collapse">';
+    html+='<tr style="color:var(--text-faint);text-align:left"><th>File</th><th>Status</th><th>Action</th></tr>';
+    for(const f of changed){
+      html+='<tr style="border-top:1px solid var(--border)">';
+      html+='<td style="padding:8px 4px">'+esc(f.path)+'</td>';
+      html+='<td style="padding:8px 4px;color:var(--yellow)">CHANGED</td>';
+      html+='<td style="padding:8px 4px"><button class="btn btn-sm" onclick="syncFile(\''+f.path+'\')">Accept</button></td>';
+      html+='</tr>';
+    }
+    html+='</table>';
+  }else{
+    html+='<div style="color:var(--green);padding:8px 0">All files up to date with GitHub.</div>';
+  }
+  panel.innerHTML=html;
+}
+
+async function syncFile(path){
+  if(!confirm('Sync '+path+' from GitHub?\n\nOld file will be backed up.'))return;
+  upLog('Syncing '+path+'...');
+  try{
+    const r=await fetch('/api/v1/updates/sync-file',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})});
+    const data=await r.json();
+    if(!r.ok)throw new Error(data.message||'Sync failed');
+    upLog('Synced: '+path+(data.backed_up_to?' (backed up to '+data.backed_up_to+')':''),'success');
+    await checkFileStatus();
+  }catch(e){
+    upLog('Sync failed: '+path+' — '+e.message,'error');
+  }
+}
+
+async function syncAllFiles(){
+  const changed=fileSyncState.files.filter(f=>f.status==='changed');
+  if(!changed.length)return;
+  if(!confirm('Sync '+changed.length+' changed files from GitHub?\n\nAll old files will be backed up.'))return;
+  for(const f of changed){
+    await syncFile(f.path);
+  }
+  upLog('All files synced.','success');
 }
 
   </script>
