@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -101,6 +102,35 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 
 		// Rate limiting: 100 requests per minute per IP
 		r.Use(NewRateLimiter(100, time.Minute).Middleware)
+
+		// Version
+		r.Get("/version", func(w http.ResponseWriter, r *http.Request) {
+			ver := getLocalVersion()
+			installDir, _ := os.Getwd()
+			gitCommit := ""
+			if data, err := os.ReadFile(".git/HEAD"); err == nil {
+				head := strings.TrimSpace(string(data))
+				if strings.HasPrefix(head, "ref: ") {
+					refPath := strings.TrimPrefix(head, "ref: ")
+					if data, err := os.ReadFile(filepath.Join(".git", refPath)); err == nil {
+						gitCommit = strings.TrimSpace(string(data))
+					}
+				} else {
+					gitCommit = head
+				}
+			}
+			respondJSON(w, 200, map[string]string{
+				"version":      ver,
+				"git_commit":   gitCommit,
+				"install_dir":  installDir,
+				"install_type": func() string {
+					if _, err := os.Stat(filepath.Join(installDir, ".git")); err == nil {
+						return "git"
+					}
+					return "tarball"
+				}(),
+			})
+		})
 
 		// Health
 		r.Get("/health", func(w http.ResponseWriter, r *http.Request) {

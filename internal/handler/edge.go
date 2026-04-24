@@ -70,7 +70,13 @@ func (h *EdgeHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	// Support count=true for accurate edge count in dashboard stats
 	if r.URL.Query().Get("count") == "true" {
-		count, err := h.repo.Count(r.Context())
+		var count int64
+		var err error
+		if edgeType != "" {
+			count, err = h.repo.CountByType(r.Context(), edgeType)
+		} else {
+			count, err = h.repo.Count(r.Context())
+		}
 		if err != nil {
 			slog.Error("count edges", "error", err)
 			respondError(w, 500, "failed to count edges")

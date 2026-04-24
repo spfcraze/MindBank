@@ -134,6 +134,12 @@ func (r *RuleBased) Extract(message string) []ExtractedNode {
 
 // ProcessAndStore extracts nodes from a message and creates them in the database.
 func (r *RuleBased) ProcessAndStore(ctx context.Context, sessionID, workspace, namespace string, message string) error {
+	// Verify session exists before linking — prevents FK violations on orphaned async jobs
+	var sessExists int
+	_ = r.pool.QueryRow(ctx, `SELECT 1 FROM sessions WHERE id = $1`, sessionID).Scan(&sessExists)
+	if sessExists != 1 {
+		return nil
+	}
 	extracted := r.Extract(message)
 	if len(extracted) == 0 {
 		return nil
@@ -196,10 +202,11 @@ func truncateLabel(s string, maxLen int) string {
 }
 
 func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
-	return s[:maxLen-3] + "..."
+	return string(runes[:maxLen-3]) + "..."
 }
 
 // LLMReasoner uses an LLM for more sophisticated extraction.
@@ -315,6 +322,12 @@ Return ONLY valid JSON, no other text.`
 
 // ProcessAndStoreLLM extracts nodes using LLM and stores them.
 func (l *LLMReasoner) ProcessAndStoreLLM(ctx context.Context, sessionID, workspace, namespace string, messages []string) error {
+	// Verify session exists before linking — prevents FK violations on orphaned async jobs
+	var sessExists int
+	_ = l.pool.QueryRow(ctx, `SELECT 1 FROM sessions WHERE id = $1`, sessionID).Scan(&sessExists)
+	if sessExists != 1 {
+		return nil
+	}
 	result, err := l.ExtractBatch(ctx, messages)
 	if err != nil {
 		return err

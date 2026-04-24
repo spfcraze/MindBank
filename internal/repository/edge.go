@@ -127,7 +127,7 @@ func (r *EdgeRepo) GetByNode(ctx context.Context, nodeID string) ([]models.Edge,
 
 // GetByType returns edges filtered by type.
 func (r *EdgeRepo) GetByType(ctx context.Context, edgeType models.EdgeType, limit, offset int) ([]models.Edge, error) {
-	if limit <= 0 || limit > 100 {
+	if limit <= 0 || limit > 1000 {
 		limit = 50
 	}
 	rows, err := r.pool.Query(ctx, `
@@ -390,6 +390,16 @@ func (r *EdgeRepo) Count(ctx context.Context) (int64, error) {
 	err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM edges`).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("count edges: %w", err)
+	}
+	return count, nil
+}
+
+// CountByType returns the number of edges of a given type.
+func (r *EdgeRepo) CountByType(ctx context.Context, edgeType models.EdgeType) (int64, error) {
+	var count int64
+	err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM edges WHERE edge_type = $1`, edgeType).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count edges by type: %w", err)
 	}
 	return count, nil
 }
