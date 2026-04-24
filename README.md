@@ -1,6 +1,6 @@
 <div align="center">
 
-![MindBank Header](docs/images/header.png)
+<img src="docs/images/header.png" alt="MindBank" width="100%" style="max-width: 1200px; border-radius: 12px; margin-bottom: 24px;">
 
 # MindBank
 
