@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"mindbank/internal/embedder"
 	"mindbank/internal/models"
@@ -68,9 +69,9 @@ type MCPError struct {
 // Run starts the MCP stdio server.
 func (s *Server) Run(ctx context.Context) {
 	slog.Info("mcp server started (stdio)")
-	reader := bufio.NewReader(os.Stdin)
-	encoder := json.NewEncoder(os.Stdout)
 
+	// Create a fresh stdin reader for each connection attempt
+	// This handles cases where the client reconnects
 	for {
 		select {
 		case <-ctx.Done():
@@ -78,13 +79,49 @@ func (s *Server) Run(ctx context.Context) {
 		default:
 		}
 
+		// Check if stdin is still readable
+		stat, err := os.Stdin.Stat()
+		if err != nil {
+			slog.Error("stdin stat error", "error", err)
+			// Wait a bit and retry — client may reconnect
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(100 * time.Millisecond):
+				continue
+			}
+		}
+
+		// If stdin is a pipe and has no data, wait for input
+		if stat.Mode()&os.ModeNamedPipe != 0 && stat.Size() == 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(50 * time.Millisecond):
+				continue
+			}
+		}
+
+		reader := bufio.NewReader(os.Stdin)
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
-				return
+				// EOF might mean client disconnected — wait and retry
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(100 * time.Millisecond):
+					continue
+				}
 			}
 			slog.Error("stdin read error", "error", err)
-			return
+			// On error, wait briefly then retry — client may reconnect
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(100 * time.Millisecond):
+				continue
+			}
 		}
 
 		line = strings.TrimSpace(line)
@@ -100,11 +137,33 @@ func (s *Server) Run(ctx context.Context) {
 
 		resp := s.handleRequest(ctx, &req)
 		if resp != nil {
-			if err := encoder.Encode(resp); err != nil {
-				slog.Error("encode response", "error", err)
-			}
+			s.writeResponse(resp)
 		}
 	}
+}
+
+// writeResponse writes a JSON-RPC response to stdout with proper locking and flushing.
+func (s *Server) writeResponse(resp *MCPResponse) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	data, err := json.Marshal(resp)
+	if err != nil {
+		slog.Error("marshal response", "error", err)
+		return
+	}
+
+	// Write raw bytes + newline, then flush
+	if _, err := os.Stdout.Write(data); err != nil {
+		slog.Error("write response", "error", err)
+		return
+	}
+	if _, err := os.Stdout.Write([]byte("\n")); err != nil {
+		slog.Error("write newline", "error", err)
+		return
+	}
+	// Flush stdout to ensure data is sent immediately
+	os.Stdout.Sync()
 }
 
 func (s *Server) handleRequest(ctx context.Context, req *MCPRequest) *MCPResponse {
@@ -197,10 +256,12 @@ func (s *Server) handleToolCall(ctx context.Context, req *MCPRequest) *MCPRespon
 		return s.error(req, -32000, err.Error())
 	}
 
+	// Return result in the proper MCP format
 	return s.reply(req, map[string]any{
 		"content": []map[string]any{
 			{"type": "text", "text": fmt.Sprintf("%v", result)},
 		},
+		"isError": false,
 	})
 }
 

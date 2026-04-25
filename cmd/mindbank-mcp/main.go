@@ -50,6 +50,49 @@ func main() {
 		cancel()
 	}()
 
-	// Run MCP server (blocks until stdin closes or context cancelled)
-	server.Run(ctx)
+	// Check transport mode
+	transport := os.Getenv("MCP_TRANSPORT")
+	if transport == "" {
+		// Check command line args
+		for i, arg := range os.Args {
+			if arg == "--transport" && i+1 < len(os.Args) {
+				transport = os.Args[i+1]
+				break
+			}
+			if arg == "--http" {
+				transport = "http"
+				break
+			}
+		}
+	}
+
+	if transport == "http" {
+		// HTTP transport mode
+		port := os.Getenv("MCP_HTTP_PORT")
+		if port == "" {
+			for i, arg := range os.Args {
+				if arg == "--http-port" && i+1 < len(os.Args) {
+					port = os.Args[i+1]
+					break
+				}
+			}
+		}
+		if port == "" {
+			port = "8096"
+		}
+
+		httpServer, err := mcpsrv.NewHTTPServer(server, port)
+		if err != nil {
+			slog.Error("failed to create http server", "error", err)
+			os.Exit(1)
+		}
+
+		if err := httpServer.Run(ctx); err != nil {
+			slog.Error("http server error", "error", err)
+			os.Exit(1)
+		}
+	} else {
+		// Stdio transport mode (default)
+		server.Run(ctx)
+	}
 }

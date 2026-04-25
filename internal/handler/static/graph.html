@@ -146,6 +146,8 @@ body.embed-mode .topbar{left:290px}
 .ph .tag{display:inline-block;padding:2px 8px;border-radius:var(--radius-sm);font-family:var(--font-sans);font-size:9px;font-weight:700;margin-bottom:var(--space-sm);text-transform:uppercase;letter-spacing:.5px}
 .ph h2{font-family:var(--font-sans);font-size:16px;font-weight:700;color:#fff;margin-bottom:3px;letter-spacing:-.2px}
 .ph .meta{font-family:var(--font-mono);color:var(--text-faint);font-size:9px;letter-spacing:.3px}
+.ph .del-btn{display:inline-block;margin-top:var(--space-sm);padding:3px 10px;border-radius:var(--radius-sm);border:1px solid var(--red);background:transparent;color:var(--red);font-family:var(--font-sans);font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;cursor:pointer;transition:all .15s}
+.ph .del-btn:hover{background:var(--red);color:#fff}
 .pb{padding:var(--space-lg)}
 .pb h3{font-family:var(--font-sans);font-size:8px;font-weight:600;color:var(--text-faint);text-transform:uppercase;letter-spacing:1px;margin:var(--space-md) 0 var(--space-xs)}
 .pb .c{color:var(--text-body);font-size:11px;line-height:1.6;word-break:break-word}
@@ -302,6 +304,7 @@ body.embed-mode .topbar{left:290px}
     <div class="tag" id="pt"></div>
     <h2 id="pl"></h2>
     <div class="meta" id="pm"></div>
+    <button class="del-btn" id="delBtn" style="display:none" onclick="deleteCurrentNode()">Delete Node</button>
   </div>
   <div class="pb">
     <div class="meta-grid" id="metaGrid"></div>
@@ -705,7 +708,7 @@ function drawNodes(cx,cy){
       const fontSize=Math.max(9,11*cam.z);
       ctx.font=`${fontSize}px var(--font-mono),monospace`;ctx.textAlign='center';
       ctx.fillStyle=isHov||isSel?'#fff':isHL?n.color:connectedSet&&!connectedSet.has(n.id)?'#333':'#666';
-      const lbl=n.label.length>24?n.label.substring(0,22)+'...':n.label;
+      const lbl=(n.label||'').length>24?(n.label||'').substring(0,22)+'...':(n.label||'');
       ctx.fillText(lbl,sx,sy+sz+fontSize+3);
       // Namespace prefix when zoomed in close
       if(cam.z>1.5&&n.ns){
@@ -929,8 +932,8 @@ async function pollHermesRecalls(){
               const delta=remote.access_count-local.acc;local.acc=remote.access_count;
               const tc=TC[local.type]||TC.concept;
               local.size=tc.s*Math.min(1.4,0.6+Math.min(local.imp||0.5,1)*0.4+Math.log2(1+Math.min(local.acc||0,100))*0.08);
-              addFeedItem('recall',`Recalled: ${local.label.substring(0,35)} (+${delta}x)`,[local.id]);
-              showRecallPopup(local.id,`${local.label.substring(0,25)}`,'recall');suppressSimRecall();
+              addFeedItem('recall',`Recalled: ${(local.label||'').substring(0,35)} (+${delta}x)`,[local.id]);
+              showRecallPopup(local.id,`${(local.label||'').substring(0,25)}`,'recall');suppressSimRecall();
             }
           }
         }
@@ -952,7 +955,7 @@ function simulateRecall(){
   const visNodes=nodes.filter(n=>n.visible);if(visNodes.length===0)return;
   const randomNode=visNodes[Math.floor(Math.random()*visNodes.length)];
   const types=['search','ask','recall'];const type=types[Math.floor(Math.random()*types.length)];
-  const texts={search:`Search: "${randomNode.label.substring(0,25)}"`,ask:`Query: "What about ${randomNode.label.substring(0,20)}?"`,recall:`Recalled: ${randomNode.label.substring(0,30)}`};
+  const texts={search:`Search: "${(randomNode.label||'').substring(0,25)}"`,ask:`Query: "What about ${(randomNode.label||'').substring(0,20)}?"`,recall:`Recalled: ${(randomNode.label||'').substring(0,30)}`};
   const connected=edges.filter(e=>(e.src===randomNode.id||e.dst===randomNode.id)).map(e=>e.src===randomNode.id?e.dst:e.src).filter(id=>{const nd=nodeMap.get(id);return nd&&nd.visible;}).slice(0,3);
   addFeedItem(type,texts[type],[randomNode.id,...connected]);showRecallPopup(randomNode.id,texts[type],type);
 }
@@ -1036,6 +1039,8 @@ async function showNodePanel(n){
   document.getElementById('pp').innerHTML='<div style="color:var(--text-faint);font-size:11px;padding:8px 0;font-family:var(--font-mono)">Loading...</div>';
   document.getElementById('connCount').textContent='';
   document.getElementById('connStats').innerHTML='';
+  document.getElementById('delBtn').style.display='inline-block';
+  document.getElementById('delBtn').dataset.nid=n.id;
 
   try{
     const nb=await(await fetch('/api/v1/nodes/'+n.id+'/neighbors')).json();
@@ -1068,6 +1073,28 @@ async function showNodePanel(n){
 }
 async function focusNode(id){
   const n=nodeMap.get(id);if(n){cam.x=n.x;cam.y=n.y;selected=n;showNodePanel(n);triggerBurst(n.id);}
+}
+async function deleteCurrentNode(){
+  const btn=document.getElementById('delBtn');
+  const id=btn.dataset.nid;if(!id)return;
+  const n=nodeMap.get(id);const label=n?n.label:id.substring(0,12);
+  if(!confirm(`Delete "${label}"? This cannot be undone.`))return;
+  btn.disabled=true;btn.textContent='Deleting...';
+  try{
+    const r=await fetch('/api/v1/nodes/'+id,{method:'DELETE'});
+    if(!r.ok){toast('Delete failed: '+r.status);btn.disabled=false;btn.textContent='Delete Node';return;}
+    // Remove from data structures
+    nodes=nodes.filter(x=>x.id!==id);
+    edges=edges.filter(e=>e.source!==id&&e.target!==id);
+    nodeMap.delete(id);
+    if(selectedNode===id){selectedNode=null;connectedSet=null;}
+    if(selected&&selected.id===id){selected=null;}
+    document.getElementById('pnl').classList.remove('open');
+    toast(`Deleted "${label}"`);
+  }catch(e){
+    toast('Delete error: '+e.message);
+    btn.disabled=false;btn.textContent='Delete Node';
+  }
 }
 function resetCam(){cam.x=0;cam.y=0;cam.z=1;camTargetZ=1;}
 function zoomFit(){
