@@ -429,7 +429,7 @@ function buildGraph(data){
       rgbaFull:`rgba(${tc.r[0]},${tc.r[1]},${tc.r[2]},1)`,
       size:tc.s*Math.min(1.4,0.6+Math.min(n.importance||0.5,1)*0.4+Math.log2(1+Math.min(n.access_count||0,100))*0.08),
       health:0,
-      icon:tc.icon,label:tc.label,
+      icon:tc.icon,typeLabel:tc.label,
       pulse:Math.random()*Math.PI*2,visible:true,highlighted:false,
       glowTrail:[]};
   });
