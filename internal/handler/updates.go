@@ -518,7 +518,7 @@ func (h *UpdateHandler) RestartAPI(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(2 * time.Second) // Give response time to flush
 
 		binPath := filepath.Join(h.installDir, "mindbank-api")
-		logPath := "/tmp/mindbank.log"
+		logPath := filepath.Join(h.installDir, "mindbank.log")
 		port := os.Getenv("MB_PORT")
 		if port == "" {
 			port = "8095"

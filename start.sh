@@ -19,7 +19,7 @@ err()  { echo -e "${RED}[mindbank]${NC} $1"; }
 MB_DSN="postgres://mindbank:mindbank_secret@localhost:5434/mindbank?sslmode=disable"
 MB_PORT=8095
 MB_PIDFILE="$DIR/.mindbank.pid"
-MB_LOGFILE="/tmp/mindbank.log"
+MB_LOGFILE="${DIR}/mindbank.log"
 
 # BUGFIX: Use PID file instead of pkill -f to avoid killing unrelated processes
 stop_mindbank() {

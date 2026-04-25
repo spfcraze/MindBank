@@ -64,7 +64,7 @@ test('JS block has no syntax errors (node --check)', () => {
   if (!match) return 'No script block';
   const js = match[1];
   // Write temp file and check
-  const tmpFile = '/tmp/_mindbank_graph_test.js';
+  const tmpFile = '/home/rat/mindbank/_test_graph_integrity.js';
   fs.writeFileSync(tmpFile, js);
   const { execSync } = require('child_process');
   try {

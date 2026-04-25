@@ -152,6 +152,10 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 			})
 		})
 
+		// Debug
+		dh := NewDebugHandler(pool, embClient)
+		RegisterDebugRoutes(r, dh)
+
 		// Prometheus metrics
 		r.Get("/metrics", func(w http.ResponseWriter, r *http.Request) {
 			// Node counts by namespace
@@ -188,6 +192,7 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 		r.Route("/nodes", func(r chi.Router) {
 			r.Post("/", nh.Create)
 			r.Get("/", nh.List)
+			r.Get("/sessions", nh.ListSessionNodes)
 			r.Post("/dedup", nh.Dedup)
 			r.Post("/recalculate", nh.Recalculate)
 			r.Get("/{id}", nh.Get)

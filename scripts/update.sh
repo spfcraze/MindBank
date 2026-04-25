@@ -396,14 +396,14 @@ if [ "$NO_RESTART" = false ] && [ "$PLUGIN_ONLY" = false ]; then
 
         # Start in background with proper env
         echo "  Starting new process..."
-        nohup ./mindbank-api >> /tmp/mindbank.log 2>&1 &
+        nohup ./mindbank-api >> "$MINDBANK_DIR/mindbank.log" 2>&1 &
         NEW_PID=$!
         sleep 3
 
         # Verify process is alive
         if ! kill -0 "$NEW_PID" 2>/dev/null; then
             echo "  ERROR: Process exited immediately."
-            echo "  Check logs: tail -n 50 /tmp/mindbank.log"
+            echo "  Check logs: tail -n 50 $MINDBANK_DIR/mindbank.log"
             echo "  Start manually: cd $MINDBANK_DIR && ./mindbank-api"
         else
             # Wait up to 10s for health endpoint
@@ -419,7 +419,7 @@ if [ "$NO_RESTART" = false ] && [ "$PLUGIN_ONLY" = false ]; then
 
             if [ "$restart_ok" = false ]; then
                 echo "  WARNING: Process started but health check failed after 10s."
-                echo "  Check logs: tail -n 50 /tmp/mindbank.log"
+                echo "  Check logs: tail -n 50 $MINDBANK_DIR/mindbank.log"
             fi
         fi
     fi
