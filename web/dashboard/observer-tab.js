@@ -163,13 +163,10 @@ class SessionNodesLoader {
 
   async load() {
     if (!this.container) return;
-    this.container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-dim);font-size:12px">Loading session nodes...</div>';
+    this.container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-dim);font-size:12px">Loading sessions...</div>';
 
     try {
-      // Get current profile from localStorage
-      const profile = localStorage.getItem('mindbank_profile') || '';
-      const profileParam = profile ? `&namespace=${encodeURIComponent(profile)}` : '';
-      const res = await fetch(`/api/v1/nodes/sessions?workspace=hermes&children=true&limit=20${profileParam}`);
+      const res = await fetch(`/api/v1/sessions?workspace=hermes&limit=20`);
       if (!res.ok) {
         this.container.innerHTML = `<div style="text-align:center;padding:40px;color:var(--red);font-size:12px">Failed to load sessions: ${res.status}</div>`;
         return;
@@ -183,48 +180,29 @@ class SessionNodesLoader {
 
   render(sessions) {
     if (!sessions || sessions.length === 0) {
-      this.container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-dim);font-size:12px">No session nodes found. Mine some Hermes sessions first.</div>';
+      this.container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-dim);font-size:12px">No sessions found. Sync sessions to populate.</div>';
       return;
     }
 
     this.container.innerHTML = sessions.map(sess => {
       const meta = sess.metadata || {};
-      const sessionId = meta.session_id || 'unknown';
-      const sessionFile = meta.session_file || '';
-      const minedAt = meta.mined_at ? new Date(meta.mined_at).toLocaleString() : '';
-      const createdAt = new Date(sess.created_at).toLocaleString();
+      const sessionId = sess.id || 'unknown';
+      const sessionName = sess.name || 'Unnamed Session';
+      const isActive = sess.is_active !== false;
+      const createdAt = sess.created_at ? new Date(sess.created_at).toLocaleString() : '';
+      const updatedAt = sess.updated_at ? new Date(sess.updated_at).toLocaleString() : '';
+      const ns = meta.namespace || sess.workspace_name || 'hermes';
 
-      const childrenHtml = (sess.children && sess.children.length > 0)
-        ? `<div style="margin-top:12px;padding-top:12px;border-top:1px dashed rgba(0,212,170,0.15)">
-            <div style="font-size:10px;color:var(--text-faint);letter-spacing:0.1em;margin-bottom:8px">PRODUCED ${sess.children.length} NODES</div>
-            ${sess.children.map(c => {
-              const typeColors = {
-                decision:   'background:rgba(57,255,20,0.1);color:#39FF14;border-color:rgba(57,255,20,0.3)',
-                fact:       'background:rgba(59,130,246,0.1);color:#3B82F6;border-color:rgba(59,130,246,0.3)',
-                problem:    'background:rgba(239,68,68,0.1);color:#EF4444;border-color:rgba(239,68,68,0.3)',
-                preference: 'background:rgba(245,197,24,0.1);color:#F5C518;border-color:rgba(245,197,24,0.3)',
-                advice:     'background:rgba(236,72,153,0.1);color:#EC4899;border-color:rgba(236,72,153,0.3)',
-                session:    'background:rgba(0,212,170,0.1);color:#00D4AA;border-color:rgba(0,212,170,0.3)'
-              };
-              const style = typeColors[c.node_type] || typeColors.fact;
-              return `<div style="display:flex;gap:8px;align-items:center;padding:4px 0;font-size:12px">
-                <span style="font-size:9px;text-transform:uppercase;padding:2px 6px;border-radius:2px;border:1px solid;${style}">${esc(c.node_type)}</span>
-                <span style="color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.label)}</span>
-              </div>`;
-            }).join('')}
-           </div>`
-        : '';
-
-      return `<div style="background:var(--bg-panel);border:1px solid var(--border);padding:16px;position:relative">
+      return `<div style="background:var(--bg-panel);border:1px solid var(--border);padding:16px;position:relative;margin-bottom:12px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
           <span style="font-size:10px;text-transform:uppercase;font-weight:700;color:var(--cyan);letter-spacing:0.1em">session</span>
-          <span style="font-size:10px;color:var(--text-faint)">${esc(createdAt)}</span>
+          <span style="font-size:10px;padding:2px 8px;border:1px solid ${isActive ? 'var(--green)' : 'var(--text-faint)'};color:${isActive ? 'var(--green)' : 'var(--text-faint)'};font-family:var(--font-mono)">${isActive ? 'ACTIVE' : 'CLOSED'}</span>
         </div>
-        <div style="font-weight:600;margin-bottom:8px;font-size:14px;color:var(--text);overflow:hidden;text-overflow:ellipsis">${esc(sess.label)}</div>
+        <div style="font-weight:600;margin-bottom:8px;font-size:14px;color:var(--text);overflow:hidden;text-overflow:ellipsis">${esc(sessionName)}</div>
         <div style="font-size:11px;color:var(--text-dim);margin-bottom:4px">ID: <code style="font-family:var(--font-mono);color:var(--text-faint)">${esc(sessionId)}</code></div>
-        ${sessionFile ? `<div style="font-size:10px;color:var(--text-faint);margin-bottom:8px">File: <code style="font-family:var(--font-mono)">${esc(sessionFile)}</code></div>` : ''}
-        ${minedAt ? `<div style="font-size:10px;color:var(--text-faint)">Mined: ${esc(minedAt)}</div>` : ''}
-        ${childrenHtml}
+        <div style="font-size:10px;color:var(--text-faint);margin-bottom:4px">Workspace: <span style="color:var(--text-dim)">${esc(ns)}</span></div>
+        ${createdAt ? `<div style="font-size:10px;color:var(--text-faint)">Created: ${esc(createdAt)}</div>` : ''}
+        ${updatedAt ? `<div style="font-size:10px;color:var(--text-faint)">Updated: ${esc(updatedAt)}</div>` : ''}
       </div>`;
     }).join('');
   }
