@@ -150,3 +150,94 @@ class ObserverTab {
 }
 
 window.observerTab = new ObserverTab();
+
+// --- Session Nodes Loader ---
+class SessionNodesLoader {
+  constructor() {
+    this.container = document.getElementById('observer-sessions');
+    this.btn = document.getElementById('observer-load-sessions-btn');
+    if (this.btn) {
+      this.btn.addEventListener('click', () => this.load());
+    }
+  }
+
+  async load() {
+    if (!this.container) return;
+    this.container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-dim);font-size:12px">Loading session nodes...</div>';
+
+    try {
+      // Get current profile from localStorage
+      const profile = localStorage.getItem('mindbank_profile') || '';
+      const profileParam = profile ? `&namespace=${encodeURIComponent(profile)}` : '';
+      const res = await fetch(`/api/v1/nodes/sessions?workspace=hermes&children=true&limit=20${profileParam}`);
+      if (!res.ok) {
+        this.container.innerHTML = `<div style="text-align:center;padding:40px;color:var(--red);font-size:12px">Failed to load sessions: ${res.status}</div>`;
+        return;
+      }
+      const sessions = await res.json();
+      this.render(sessions);
+    } catch (e) {
+      this.container.innerHTML = `<div style="text-align:center;padding:40px;color:var(--red);font-size:12px">Error: ${esc(e.message)}</div>`;
+    }
+  }
+
+  render(sessions) {
+    if (!sessions || sessions.length === 0) {
+      this.container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-dim);font-size:12px">No session nodes found. Mine some Hermes sessions first.</div>';
+      return;
+    }
+
+    this.container.innerHTML = sessions.map(sess => {
+      const meta = sess.metadata || {};
+      const sessionId = meta.session_id || 'unknown';
+      const sessionFile = meta.session_file || '';
+      const minedAt = meta.mined_at ? new Date(meta.mined_at).toLocaleString() : '';
+      const createdAt = new Date(sess.created_at).toLocaleString();
+
+      const childrenHtml = (sess.children && sess.children.length > 0)
+        ? `<div style="margin-top:12px;padding-top:12px;border-top:1px dashed rgba(0,212,170,0.15)">
+            <div style="font-size:10px;color:var(--text-faint);letter-spacing:0.1em;margin-bottom:8px">PRODUCED ${sess.children.length} NODES</div>
+            ${sess.children.map(c => {
+              const typeColors = {
+                decision:   'background:rgba(57,255,20,0.1);color:#39FF14;border-color:rgba(57,255,20,0.3)',
+                fact:       'background:rgba(59,130,246,0.1);color:#3B82F6;border-color:rgba(59,130,246,0.3)',
+                problem:    'background:rgba(239,68,68,0.1);color:#EF4444;border-color:rgba(239,68,68,0.3)',
+                preference: 'background:rgba(245,197,24,0.1);color:#F5C518;border-color:rgba(245,197,24,0.3)',
+                advice:     'background:rgba(236,72,153,0.1);color:#EC4899;border-color:rgba(236,72,153,0.3)',
+                session:    'background:rgba(0,212,170,0.1);color:#00D4AA;border-color:rgba(0,212,170,0.3)'
+              };
+              const style = typeColors[c.node_type] || typeColors.fact;
+              return `<div style="display:flex;gap:8px;align-items:center;padding:4px 0;font-size:12px">
+                <span style="font-size:9px;text-transform:uppercase;padding:2px 6px;border-radius:2px;border:1px solid;${style}">${esc(c.node_type)}</span>
+                <span style="color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.label)}</span>
+              </div>`;
+            }).join('')}
+           </div>`
+        : '';
+
+      return `<div style="background:var(--bg-panel);border:1px solid var(--border);padding:16px;position:relative">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <span style="font-size:10px;text-transform:uppercase;font-weight:700;color:var(--cyan);letter-spacing:0.1em">session</span>
+          <span style="font-size:10px;color:var(--text-faint)">${esc(createdAt)}</span>
+        </div>
+        <div style="font-weight:600;margin-bottom:8px;font-size:14px;color:var(--text);overflow:hidden;text-overflow:ellipsis">${esc(sess.label)}</div>
+        <div style="font-size:11px;color:var(--text-dim);margin-bottom:4px">ID: <code style="font-family:var(--font-mono);color:var(--text-faint)">${esc(sessionId)}</code></div>
+        ${sessionFile ? `<div style="font-size:10px;color:var(--text-faint);margin-bottom:8px">File: <code style="font-family:var(--font-mono)">${esc(sessionFile)}</code></div>` : ''}
+        ${minedAt ? `<div style="font-size:10px;color:var(--text-faint)">Mined: ${esc(minedAt)}</div>` : ''}
+        ${childrenHtml}
+      </div>`;
+    }).join('');
+  }
+}
+
+// Initialize session loader when DOM is ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => { window.sessionNodesLoader = new SessionNodesLoader(); });
+} else {
+  window.sessionNodesLoader = new SessionNodesLoader();
+}
+
+function esc(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}

@@ -304,15 +304,20 @@ if [ "$PLUGIN_ONLY" = false ]; then
 
         if [ -f "$MINDBANK_DIR/cmd/mindbank-mcp/main.go" ]; then
             echo "  Building MCP server..."
+            cd "$MINDBANK_DIR"
             go build -o mindbank-mcp ./cmd/mindbank-mcp
             echo "  Built: mindbank-mcp ✓"
+            echo ""
+            echo "  MCP Transport Modes:"
+            echo "    stdio (default): ./mindbank-mcp"
+            echo "    HTTP mode:       MCP_TRANSPORT=http ./mindbank-mcp --http --http-port 8096"
+            echo ""
         fi
     else
         echo "  WARNING: Go not found. Skipping binary rebuild."
         echo "  Install Go: https://go.dev/dl/"
     fi
 fi
-
 # ---- Update plugin ----
 echo ""
 echo "  Updating integrations..."
