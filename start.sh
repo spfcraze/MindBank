@@ -45,10 +45,39 @@ stop_mindbank() {
     fi
 }
 
-# Check if binary exists, build if not
+# Sync dashboard files to embedded static dir before building
+sync_static() {
+    log "Syncing web/dashboard/ to internal/handler/static/..."
+    local files=("index.html" "graph.html" "observer-tab.js")
+    local copied=0
+    for f in "${files[@]}"; do
+        if [ -f "web/dashboard/$f" ]; then
+            cp "web/dashboard/$f" "internal/handler/static/$f"
+            copied=$((copied + 1))
+        fi
+    done
+    log "Synced $copied file(s)."
+}
+
+# Check if binary exists or web/dashboard is newer, build if needed
+needs_build=false
 if [ ! -f ./mindbank-api ]; then
+    needs_build=true
+else
+    for f in web/dashboard/index.html web/dashboard/graph.html web/dashboard/observer-tab.js; do
+        if [ -f "$f" ] && [ "$f" -nt ./mindbank-api ]; then
+            needs_build=true
+            break
+        fi
+    done
+fi
+
+if [ "$needs_build" = true ]; then
+    sync_static
     log "Building mindbank-api binary..."
     go build -o mindbank-api ./cmd/mindbank
+else
+    log "Binary is up to date."
 fi
 
 # Start Postgres via Docker

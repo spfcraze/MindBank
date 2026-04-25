@@ -128,6 +128,11 @@ if [ "$HAS_GO" = true ] && [ -f "$MINDBANK_DIR/cmd/mindbank-mcp/main.go" ]; then
     cd "$MINDBANK_DIR"
     go build -o mindbank-mcp ./cmd/mindbank-mcp
     echo "  Built: $MINDBANK_DIR/mindbank-mcp"
+    echo ""
+    echo "  MCP Transport Modes:"
+    echo "    stdio (default): ./mindbank-mcp"
+    echo "    HTTP mode:       MCP_TRANSPORT=http ./mindbank-mcp --http --http-port 8096"
+    echo ""
 fi
 
 # Run install-plugin.sh if it exists (shows interactive menu)
