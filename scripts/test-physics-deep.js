@@ -32,9 +32,9 @@ try {
     if(!isFinite(nodes[0].x)&&!isFinite(nodes[0].y)) { console.log('FAIL: NaN'); process.exit(1); }
     console.log('OK: single node stable at ('+nodes[0].x.toFixed(1)+','+nodes[0].y.toFixed(1)+')');
   `;
-  fs.writeFileSync('/tmp/_phys1.js', test1);
+  fs.writeFileSync('/home/rat/mindbank/_test_phys1.js', test1);
   const { execSync } = require('child_process');
-  const r = execSync('node /tmp/_phys1.js', { timeout: 5000 }).toString().trim();
+  const r = execSync('node /home/rat/mindbank/_test_phys1.js', { timeout: 5000 }).toString().trim();
   pass('1 node: ' + r);
 } catch(e) { fail('1 node crash: ' + (e.stderr?.toString().trim() || e.message)); }
 
@@ -56,9 +56,9 @@ try {
     console.log('OK: 1000 nodes, 200 frames in '+ms+'ms ('+(ms/200).toFixed(2)+'ms/frame)');
     if(ms/200>10) console.log('WARN: slow');
   `;
-  fs.writeFileSync('/tmp/_phys1k.js', test1k);
+  fs.writeFileSync('/home/rat/mindbank/_test_phys1k.js', test1k);
   const { execSync } = require('child_process');
-  const r = execSync('node /tmp/_phys1k.js', { timeout: 30000 }).toString().trim();
+  const r = execSync('node /home/rat/mindbank/_test_phys1k.js', { timeout: 30000 }).toString().trim();
   if (r.includes('OK:')) pass(r.split('OK: ')[1]);
   if (r.includes('WARN:')) warn(r);
 } catch(e) { fail('1000 nodes: ' + (e.stderr?.toString().trim() || e.message)); }

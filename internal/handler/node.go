@@ -1,17 +1,20 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"mindbank/internal/embedder"
 	"mindbank/internal/models"
 	"mindbank/internal/repository"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -382,6 +385,115 @@ func (h *NodeHandler) Recalculate(w http.ResponseWriter, r *http.Request) {
 		"status":       "ok",
 		"rows_updated": rows,
 	})
+}
+
+// ListSessionNodes returns session-type nodes with their children (mined knowledge).
+func (h *NodeHandler) ListSessionNodes(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	workspace := r.URL.Query().Get("workspace")
+	ns := r.URL.Query().Get("namespace")
+	children := r.URL.Query().Get("children") == "true"
+
+	// Query session nodes
+	ctx := r.Context()
+	var rows pgx.Rows
+	var err error
+
+	if ns != "" {
+		rows, err = h.pool.Query(ctx, `
+			SELECT id, label, node_type, namespace, content, summary, importance, access_count, metadata, created_at
+			FROM nodes
+			WHERE valid_to IS NULL AND node_type = 'session' AND workspace_name = $1 AND namespace = $2
+			ORDER BY created_at DESC
+			LIMIT $3
+		`, workspace, ns, limit)
+	} else {
+		rows, err = h.pool.Query(ctx, `
+			SELECT id, label, node_type, namespace, content, summary, importance, access_count, metadata, created_at
+			FROM nodes
+			WHERE valid_to IS NULL AND node_type = 'session' AND workspace_name = $1
+			ORDER BY created_at DESC
+			LIMIT $2
+		`, workspace, limit)
+	}
+	if err != nil {
+		slog.Error("list session nodes", "error", err)
+		respondError(w, 500, "failed to list session nodes")
+		return
+	}
+	defer rows.Close()
+
+	type sessionNode struct {
+		ID        string                 `json:"id"`
+		Label     string                 `json:"label"`
+		NodeType  string                 `json:"node_type"`
+		Namespace string                 `json:"namespace"`
+		Content   string                 `json:"content"`
+		Summary   string                 `json:"summary"`
+		Importance float64               `json:"importance"`
+		AccessCount int                  `json:"access_count"`
+		Metadata  map[string]interface{} `json:"metadata"`
+		CreatedAt time.Time              `json:"created_at"`
+		Children  []map[string]interface{} `json:"children,omitempty"`
+	}
+
+	sessions := []sessionNode{}
+	for rows.Next() {
+		var s sessionNode
+		var metaJSON []byte
+		err := rows.Scan(&s.ID, &s.Label, &s.NodeType, &s.Namespace, &s.Content, &s.Summary, &s.Importance, &s.AccessCount, &metaJSON, &s.CreatedAt)
+		if err != nil {
+			continue
+		}
+		if len(metaJSON) > 0 {
+			json.Unmarshal(metaJSON, &s.Metadata)
+		}
+		sessions = append(sessions, s)
+	}
+	rows.Close()
+
+	// If children requested, fetch related nodes via edges
+	if children && len(sessions) > 0 {
+		for i := range sessions {
+			childRows, err := h.pool.Query(ctx, `
+				SELECT n.id, n.label, n.node_type, n.namespace, n.content, n.summary, n.importance, n.access_count, n.created_at
+				FROM nodes n
+				JOIN edges e ON (e.source_id = $1 AND e.target_id = n.id) OR (e.target_id = $1 AND e.source_id = n.id)
+				WHERE n.valid_to IS NULL
+				ORDER BY n.importance DESC
+				LIMIT 50
+			`, sessions[i].ID)
+			if err != nil {
+				continue
+			}
+			for childRows.Next() {
+				var child map[string]interface{}
+				var cID, cLabel, cNodeType, cNamespace, cContent, cSummary string
+				var cImportance float64
+				var cAccessCount int
+				var cCreatedAt time.Time
+				childRows.Scan(&cID, &cLabel, &cNodeType, &cNamespace, &cContent, &cSummary, &cImportance, &cAccessCount, &cCreatedAt)
+				child = map[string]interface{}{
+					"id":           cID,
+					"label":        cLabel,
+					"node_type":    cNodeType,
+					"namespace":    cNamespace,
+					"content":      cContent,
+					"summary":      cSummary,
+					"importance":   cImportance,
+					"access_count": cAccessCount,
+					"created_at":   cCreatedAt,
+				}
+				sessions[i].Children = append(sessions[i].Children, child)
+			}
+			childRows.Close()
+		}
+	}
+
+	respondJSON(w, 200, sessions)
 }
 
 // nodeTypeList returns a formatted list of valid node types for error messages.
