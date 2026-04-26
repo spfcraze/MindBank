@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# mindbank-mcp-starter — Hermes-safe MCP server launcher
+# Avoids `&` backgrounding inside bash -c (which Hermes terminal rejects)
+# Usage: ./mindbank-mcp-starter [port]
+# Then: curl http://localhost:8096/health
+#
+# v2: PID validation — if PID file exists but process is dead or wrong, restart.
+
+set -euo pipefail
+
+PORT="${1:-8096}"
+LOGFILE="${2:-mindbank-mcp.log}"
+MBDIR="/home/rat/mindbank"
+PIDFILE="/tmp/mindbank-mcp.pid"
+
+cd "$MBDIR"
+
+# === PID validation: check if existing process is actually mindbank-mcp ===
+is_mcp_running() {
+    local pid="$1"
+    # Check process exists
+    if ! kill -0 "$pid" 2>/dev/null; then
+        return 1
+    fi
+    # Check it's actually mindbank-mcp (not a stale PID reused by another process)
+    local cmdline
+    cmdline=$(cat "/proc/$pid/cmdline" 2>/dev/null | tr '\0' ' ' || true)
+    if [[ "$cmdline" == *"mindbank-mcp"* ]]; then
+        return 0
+    fi
+    return 1
+}
+
+# === Check port health first (independent of PID file) ===
+if curl -s --max-time 1 "http://localhost:$PORT/health" >/dev/null 2>&1; then
+    # Port is alive — find which PID owns it
+    for pid in $(pgrep -f "mindbank-mcp --http --http-port $PORT" 2>/dev/null || true); do
+        if [ "$pid" != "$$" ] && is_mcp_running "$pid"; then
+            # Update PID file to match reality
+            echo "$pid" > "$PIDFILE"
+            echo "MCP server already running on PID $pid"
+            echo "Port: $PORT"
+            echo "Health: http://localhost:$PORT/health"
+            exit 0
+        fi
+    done
+    # Port responds but no mindbank-mcp process found — something else is using it
+    echo "ERROR: Port $PORT is in use by another process"
+    exit 1
+fi
+
+# Port not responding — check PID file for stale entry
+if [ -f "$PIDFILE" ]; then
+    OLD_PID=$(cat "$PIDFILE" 2>/dev/null || true)
+    if [ -n "$OLD_PID" ] && is_mcp_running "$OLD_PID"; then
+        # Process exists but not responding — stale, kill it
+        echo "Stale MCP process $OLD_PID found (not responding), terminating..."
+        kill "$OLD_PID" 2>/dev/null || true
+        sleep 0.5
+    fi
+fi
+
+# Clean up any other stale mindbank-mcp processes on the same port
+for pid in $(pgrep -f "mindbank-mcp --http --http-port $PORT" 2>/dev/null || true); do
+    if [ "$pid" = "$$" ]; then
+        continue
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+        continue
+    fi
+    echo "Cleaning up stale MCP process $pid"
+    kill "$pid" 2>/dev/null || true
+    sleep 0.5
+done
+
+# Start server in background via subshell + disown (no `&` in foreground)
+(
+    export MCP_TRANSPORT=http
+    exec ./mindbank-mcp --http --http-port "$PORT" >> "$LOGFILE" 2>&1
+) &
+PID=$!
+
+# Save PID immediately
+echo "$PID" > "$PIDFILE"
+
+# Wait for health endpoint
+for i in $(seq 1 15); do
+    if curl -s --max-time 1 "http://localhost:$PORT/health" >/dev/null 2>&1; then
+        # Double-check PID still matches (race condition safety)
+        if is_mcp_running "$PID"; then
+            echo "MCP_PID=$PID"
+            echo "Health OK: http://localhost:$PORT/health"
+            exit 0
+        fi
+    fi
+    sleep 0.5
+done
+
+echo "MCP_PID=$PID"
+echo "WARNING: Health check did not respond within 7.5s"
+echo "Check logs: $MBDIR/$LOGFILE"
+exit 1
