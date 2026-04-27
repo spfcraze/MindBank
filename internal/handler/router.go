@@ -249,6 +249,15 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 		// Updates
 		RegisterUpdateRoutes(r, uh)
 
+		// Compression Settings
+		settingsRepo := repository.NewSettingsRepo(pool)
+		compSettingsHandler := NewCompressionSettingsHandler(settingsRepo, cfg.OllamaURL)
+		r.Route("/settings/compression", func(r chi.Router) {
+			r.Get("/", compSettingsHandler.GetSettings)
+			r.Post("/", compSettingsHandler.UpdateSettings)
+			r.Post("/setup", compSettingsHandler.Setup)
+		})
+
 		// Import (Obsidian)
 		ih := NewImportHandler()
 		RegisterImportRoutes(r, ih)
