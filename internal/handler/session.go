@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"mindbank/internal/embedder"
 	"mindbank/internal/models"
@@ -18,11 +19,12 @@ import (
 type SessionHandler struct {
 	repo      *repository.SessionRepo
 	nodeRepo  *repository.NodeRepo
+	edgeRepo  *repository.EdgeRepo
 	ruleBased *reasoner.RuleBased
 }
 
-func NewSessionHandler(repo *repository.SessionRepo, nodeRepo *repository.NodeRepo, rb *reasoner.RuleBased) *SessionHandler {
-	return &SessionHandler{repo: repo, nodeRepo: nodeRepo, ruleBased: rb}
+func NewSessionHandler(repo *repository.SessionRepo, nodeRepo *repository.NodeRepo, edgeRepo *repository.EdgeRepo, rb *reasoner.RuleBased) *SessionHandler {
+	return &SessionHandler{repo: repo, nodeRepo: nodeRepo, edgeRepo: edgeRepo, ruleBased: rb}
 }
 
 func (h *SessionHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -63,10 +65,60 @@ func (h *SessionHandler) List(w http.ResponseWriter, r *http.Request) {
 		respondError(w, 500, "failed to list sessions")
 		return
 	}
+	// Fallback: if legacy sessions table is empty, return session-type graph nodes
+	if len(sessions) == 0 {
+		graphSessions, err := h.listGraphSessions(r.Context(), workspace, limit, offset)
+		if err != nil {
+			slog.Error("list graph sessions", "error", err)
+			respondError(w, 500, "failed to list sessions")
+			return
+		}
+		sessions = graphSessions
+	}
 	if sessions == nil {
 		sessions = []models.Session{}
 	}
 	respondJSON(w, 200, sessions)
+}
+
+// listGraphSessions queries nodes with node_type='session' and transforms them to models.Session.
+func (h *SessionHandler) listGraphSessions(ctx context.Context, workspace string, limit, offset int) ([]models.Session, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	rows, err := h.nodeRepo.Pool.Query(ctx, `
+		SELECT id, label, namespace, content, summary, metadata, created_at
+		FROM nodes
+		WHERE valid_to IS NULL AND node_type = 'session' AND workspace_name = $1
+		ORDER BY created_at DESC
+		LIMIT $2 OFFSET $3
+	`, workspace, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sessions []models.Session
+	for rows.Next() {
+		var id, label, ns, content, summary string
+		var metaJSON []byte
+		var createdAt time.Time
+		if err := rows.Scan(&id, &label, &ns, &content, &summary, &metaJSON, &createdAt); err != nil {
+			slog.Warn("scan graph session", "error", err)
+			continue
+		}
+		sessions = append(sessions, models.Session{
+			ID:            id,
+			WorkspaceName: ns,
+			Name:          label,
+			IsActive:      true,
+			Metadata:      metaJSON,
+			Summary:       summary,
+			CreatedAt:     createdAt,
+			UpdatedAt:     createdAt,
+		})
+	}
+	return sessions, nil
 }
 
 func (h *SessionHandler) AddMessages(w http.ResponseWriter, r *http.Request) {
@@ -226,6 +278,117 @@ func (h *SessionHandler) Sync(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *SessionHandler) GetContent(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	// Get session node
+	session, err := h.nodeRepo.Get(r.Context(), id)
+	if err != nil {
+		respondError(w, 404, "session not found")
+		return
+	}
+
+	// Get produced edges
+	edges, err := h.edgeRepo.ListBySource(r.Context(), id, "produced")
+	if err != nil {
+		slog.Error("list produced edges", "error", err)
+		respondError(w, 500, "failed to list edges")
+		return
+	}
+
+	// Get all target nodes
+	var knowledgeNodes []models.Node
+	for _, edge := range edges {
+		node, err := h.nodeRepo.Get(r.Context(), edge.TargetID)
+		if err == nil {
+			knowledgeNodes = append(knowledgeNodes, *node)
+		}
+	}
+
+	respondJSON(w, 200, map[string]any{
+		"session":         session,
+		"knowledge_nodes": knowledgeNodes,
+		"node_count":      len(knowledgeNodes),
+	})
+}
+
+// GetReplay returns full session timeline with messages for replay.
+func (h *SessionHandler) GetReplay(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	// Get session node
+	session, err := h.nodeRepo.Get(r.Context(), id)
+	if err != nil {
+		respondError(w, 404, "session not found")
+		return
+	}
+
+	// Get messages from session_messages table
+	messages, err := h.getSessionMessages(r.Context(), id)
+	if err != nil {
+		slog.Error("get session messages", "error", err)
+		respondError(w, 500, "failed to load messages")
+		return
+	}
+
+	// Get produced nodes (children via produced edges)
+	edges, err := h.edgeRepo.ListBySource(r.Context(), id, "produced")
+	if err != nil {
+		slog.Error("list produced edges", "error", err)
+		respondError(w, 500, "failed to list edges")
+		return
+	}
+
+	var children []models.Node
+	for _, edge := range edges {
+		node, err := h.nodeRepo.Get(r.Context(), edge.TargetID)
+		if err == nil {
+			children = append(children, *node)
+		}
+	}
+
+	respondJSON(w, 200, map[string]any{
+		"session":  session,
+		"messages": messages,
+		"children": children,
+	})
+}
+
+func (h *SessionHandler) getSessionMessages(ctx context.Context, sessionID string) ([]map[string]any, error) {
+	rows, err := h.nodeRepo.Pool.Query(ctx, `
+		SELECT role, content, timestamp, metadata
+		FROM session_messages
+		WHERE session_id = $1
+		ORDER BY timestamp
+	`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messages []map[string]any
+	for rows.Next() {
+		var role, content string
+		var timestamp time.Time
+		var metadata []byte
+		if err := rows.Scan(&role, &content, &timestamp, &metadata); err != nil {
+			continue
+		}
+		msg := map[string]any{
+			"role":      role,
+			"content":   content,
+			"timestamp": timestamp.Format(time.RFC3339),
+		}
+		if len(metadata) > 0 {
+			var meta map[string]any
+			json.Unmarshal(metadata, &meta)
+			msg["metadata"] = meta
+		}
+		messages = append(messages, msg)
+	}
+	return messages, rows.Err()
+}
+
 // RegisterSessionRoutes adds session endpoints to the router.
 func RegisterSessionRoutes(r chi.Router, sh *SessionHandler) {
 	r.Route("/sessions", func(r chi.Router) {
@@ -234,6 +397,8 @@ func RegisterSessionRoutes(r chi.Router, sh *SessionHandler) {
 		r.Get("/{id}", sh.Get)
 		r.Post("/{id}/messages", sh.AddMessages)
 		r.Get("/{id}/context", sh.GetContext)
+		r.Get("/{id}/content", sh.GetContent)
+		r.Get("/{id}/replay", sh.GetReplay)
 		r.Post("/{id}/close", sh.Close)
 		r.Post("/sync", sh.Sync)
 	})

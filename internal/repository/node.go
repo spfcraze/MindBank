@@ -13,16 +13,16 @@ import (
 )
 
 type NodeRepo struct {
-	pool *pgxpool.Pool
+	Pool *pgxpool.Pool
 }
 
 func NewNodeRepo(pool *pgxpool.Pool) *NodeRepo {
-	return &NodeRepo{pool: pool}
+	return &NodeRepo{Pool: pool}
 }
 
 // SaveDQASnapshot stores a DQA score for trend tracking.
 func (r *NodeRepo) SaveDQASnapshot(ctx context.Context, score, totalNodes, issuesCount int) error {
-	_, err := r.pool.Exec(ctx, `
+	_, err := r.Pool.Exec(ctx, `
 		INSERT INTO dqa_snapshots (score, total_nodes, issues_count)
 		VALUES ($1, $2, $3)
 	`, score, totalNodes, issuesCount)
@@ -42,7 +42,7 @@ func (r *NodeRepo) GetDQATrend(ctx context.Context, days int) ([]struct {
 	if days <= 0 {
 		days = 30
 	}
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.Pool.Query(ctx, `
 		SELECT score, total_nodes, issues_count, created_at
 		FROM dqa_snapshots
 		WHERE created_at > now() - make_interval(days => $1)
@@ -78,7 +78,7 @@ func (r *NodeRepo) GetDQATrend(ctx context.Context, days int) ([]struct {
 func (r *NodeRepo) Create(ctx context.Context, req models.NodeCreate) (*models.Node, error) {
 	ws := req.WorkspaceName
 	if ws == "" {
-		ws = "hermes"
+		ws = "default"
 	}
 	ns := req.Namespace
 	if ns == "" {
@@ -94,7 +94,7 @@ func (r *NodeRepo) Create(ctx context.Context, req models.NodeCreate) (*models.N
 	}
 
 	n := &models.Node{}
-	err := r.pool.QueryRow(ctx, `
+	err := r.Pool.QueryRow(ctx, `
 		INSERT INTO nodes (workspace_name, namespace, label, node_type, content, summary, metadata, importance, materialized_path)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '/' || gen_random_uuid()::text)
 		RETURNING id, workspace_name, namespace, label, node_type, content, summary, metadata,
@@ -110,7 +110,7 @@ func (r *NodeRepo) Create(ctx context.Context, req models.NodeCreate) (*models.N
 	}
 
 	// Set materialized path to /{id}
-	_, _ = r.pool.Exec(ctx, `UPDATE nodes SET materialized_path = '/' || $1 WHERE id = $1`, n.ID)
+	_, _ = r.Pool.Exec(ctx, `UPDATE nodes SET materialized_path = '/' || $1 WHERE id = $1`, n.ID)
 
 	return n, nil
 }
@@ -118,7 +118,7 @@ func (r *NodeRepo) Create(ctx context.Context, req models.NodeCreate) (*models.N
 // UpdatePath sets a node's materialized path based on its parent's path.
 func (r *NodeRepo) UpdatePath(ctx context.Context, childID, parentPath string) error {
 	newPath := parentPath + "/" + childID
-	_, err := r.pool.Exec(ctx, `
+	_, err := r.Pool.Exec(ctx, `
 		UPDATE nodes SET materialized_path = $1 WHERE id = $2 AND valid_to IS NULL
 	`, newPath, childID)
 	return err
@@ -139,7 +139,7 @@ func (r *NodeRepo) FindSimilarNodes(ctx context.Context, nodeID string, threshol
 		threshold = 0.70
 	}
 
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.Pool.Query(ctx, `
 		SELECT n.id, n.label, n.node_type::text, n.namespace, 1 - (ne.embedding <=> target.embedding) AS similarity
 		FROM node_embeddings ne
 		JOIN nodes n ON n.id = ne.node_id AND n.valid_to IS NULL
@@ -187,7 +187,7 @@ func (r *NodeRepo) FindSimilarNodes(ctx context.Context, nodeID string, threshol
 // GetPath returns a node's materialized path.
 func (r *NodeRepo) GetPath(ctx context.Context, nodeID string) (string, error) {
 	var path string
-	err := r.pool.QueryRow(ctx, `SELECT materialized_path FROM nodes WHERE id = $1 AND valid_to IS NULL`, nodeID).Scan(&path)
+	err := r.Pool.QueryRow(ctx, `SELECT materialized_path FROM nodes WHERE id = $1 AND valid_to IS NULL`, nodeID).Scan(&path)
 	return path, err
 }
 
@@ -198,7 +198,7 @@ func (r *NodeRepo) GetAncestors(ctx context.Context, nodeID string) ([]models.No
 		return nil, err
 	}
 
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.Pool.Query(ctx, `
 		SELECT id, workspace_name, namespace, label, node_type::text, content, summary, metadata,
 		       importance, access_count, last_accessed, valid_from, valid_to, version,
 		       predecessor_id, created_at, updated_at
@@ -234,7 +234,7 @@ func (r *NodeRepo) GetDescendants(ctx context.Context, nodeID string) ([]models.
 		return nil, err
 	}
 
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.Pool.Query(ctx, `
 		SELECT id, workspace_name, namespace, label, node_type::text, content, summary, metadata,
 		       importance, access_count, last_accessed, valid_from, valid_to, version,
 		       predecessor_id, created_at, updated_at
@@ -265,7 +265,7 @@ func (r *NodeRepo) GetDescendants(ctx context.Context, nodeID string) ([]models.
 // Get retrieves a current node by ID and bumps access count.
 func (r *NodeRepo) Get(ctx context.Context, id string) (*models.Node, error) {
 	n := &models.Node{}
-	err := r.pool.QueryRow(ctx, `
+	err := r.Pool.QueryRow(ctx, `
 		UPDATE nodes SET access_count = access_count + 1, last_accessed = now()
 		WHERE id = $1 AND valid_to IS NULL
 		RETURNING id, workspace_name, namespace, label, node_type, content, summary, metadata,
@@ -287,7 +287,7 @@ func (r *NodeRepo) Get(ctx context.Context, id string) (*models.Node, error) {
 // Update creates a new version of a node (temporal update).
 // The old node is invalidated, a new version is created with predecessor link.
 func (r *NodeRepo) Update(ctx context.Context, id string, req models.NodeUpdate) (*models.Node, error) {
-	tx, err := r.pool.Begin(ctx)
+	tx, err := r.Pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
 	}
@@ -376,7 +376,7 @@ func (r *NodeRepo) Update(ctx context.Context, id string, req models.NodeUpdate)
 
 // Delete soft-deletes a node and cleans up all connected records in a transaction.
 func (r *NodeRepo) Delete(ctx context.Context, id string) (bool, error) {
-	tx, err := r.pool.Begin(ctx)
+	tx, err := r.Pool.Begin(ctx)
 	if err != nil {
 		return false, fmt.Errorf("begin delete tx: %w", err)
 	}
@@ -417,7 +417,7 @@ func (r *NodeRepo) Delete(ctx context.Context, id string) (bool, error) {
 
 // PurgeOldVersions hard-deletes soft-deleted temporal versions older than N days.
 func (r *NodeRepo) PurgeOldVersions(ctx context.Context, olderThanDays int) (int64, error) {
-	tx, err := r.pool.Begin(ctx)
+	tx, err := r.Pool.Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("begin purge tx: %w", err)
 	}
@@ -454,7 +454,7 @@ func (r *NodeRepo) PurgeOldVersions(ctx context.Context, olderThanDays int) (int
 
 // CompactNodeVersions hard-deletes all old temporal versions of a node chain except the current one.
 func (r *NodeRepo) CompactNodeVersions(ctx context.Context, currentID string) (int64, error) {
-	tx, err := r.pool.Begin(ctx)
+	tx, err := r.Pool.Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("begin compact tx: %w", err)
 	}
@@ -515,7 +515,7 @@ func (r *NodeRepo) FindSimilarAcrossNamespaces(ctx context.Context, sourceNS, ta
 		threshold = 0.70
 	}
 
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.Pool.Query(ctx, `
 		SELECT 
 			s.node_id AS source_id,
 			sn.label AS source_label,
@@ -565,7 +565,7 @@ func (r *NodeRepo) FindSimilarAcrossNamespaces(ctx context.Context, sourceNS, ta
 }
 
 // List returns current nodes with optional filters.
-func (r *NodeRepo) List(ctx context.Context, workspace, namespace string, nodeType models.NodeType, limit, offset int) ([]models.Node, error) {
+func (r *NodeRepo) List(ctx context.Context, workspace, namespace string, nodeType models.NodeType, skill string, limit, offset int) ([]models.Node, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 50
 	}
@@ -598,11 +598,16 @@ func (r *NodeRepo) List(ctx context.Context, workspace, namespace string, nodeTy
 		args = append(args, nodeType)
 		argN++
 	}
+	if skill != "" {
+		query += fmt.Sprintf(" AND metadata->'skills' ? $%d", argN)
+		args = append(args, skill)
+		argN++
+	}
 
 	query += fmt.Sprintf(" ORDER BY updated_at DESC LIMIT $%d OFFSET $%d", argN, argN+1)
 	args = append(args, limit, offset)
 
-	rows, err := r.pool.Query(ctx, query, args...)
+	rows, err := r.Pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list nodes: %w", err)
 	}
@@ -625,7 +630,7 @@ func (r *NodeRepo) List(ctx context.Context, workspace, namespace string, nodeTy
 
 // GetHistory returns all versions of a node (temporal history) using recursive CTE.
 func (r *NodeRepo) GetHistory(ctx context.Context, id string) ([]models.NodeHistoryEntry, error) {
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.Pool.Query(ctx, `
 		WITH RECURSIVE version_chain AS (
 			-- Start from the given node
 			SELECT id, label, content, version, valid_from, valid_to, predecessor_id
@@ -676,7 +681,7 @@ func (r *NodeRepo) GetHistory(ctx context.Context, id string) ([]models.NodeHist
 // RecalculateImportance updates the importance column for all current nodes
 // using the same scoring formula as the snapshot: recency, frequency, connectivity, type weight.
 func (r *NodeRepo) RecalculateImportance(ctx context.Context) (int64, error) {
-	tag, err := r.pool.Exec(ctx, `
+	tag, err := r.Pool.Exec(ctx, `
 		UPDATE nodes SET importance = sub.score
 		FROM (
 			SELECT n.id,
@@ -713,7 +718,7 @@ func (r *NodeRepo) RecalculateImportance(ctx context.Context) (int64, error) {
 // CountNodes returns the number of active (non-deleted) nodes.
 func (r *NodeRepo) CountNodes(ctx context.Context) (int, error) {
 	var count int
-	err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM nodes WHERE valid_to IS NULL`).Scan(&count)
+	err := r.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM nodes WHERE valid_to IS NULL`).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("count nodes: %w", err)
 	}

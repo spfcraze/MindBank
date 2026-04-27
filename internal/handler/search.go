@@ -8,6 +8,7 @@ import (
 	"mindbank/internal/embedder"
 	"mindbank/internal/models"
 	"mindbank/internal/repository"
+	"mindbank/internal/utils"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -95,6 +96,7 @@ func (h *SearchHandler) Hybrid(w http.ResponseWriter, r *http.Request) {
 		Workspace           string `json:"workspace,omitempty"`
 		Namespace           string `json:"namespace,omitempty"`
 		Limit               int    `json:"limit,omitempty"`
+		TokenBudget         int    `json:"token_budget,omitempty"`
 		DependenceExpansion bool   `json:"dependence_expansion,omitempty"`
 	}
 	if err := bindJSON(r, &req); err != nil {
@@ -123,29 +125,32 @@ func (h *SearchHandler) Hybrid(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Dependence-aware expansion: trace backward from top result to find supporting evidence
-	if req.DependenceExpansion && len(results) > 0 && h.depRepo != nil {
-		topResult := results[0]
-		precursors, err := h.depRepo.DependenceExpand(r.Context(), topResult.NodeID, req.Limit/4)
-		if err == nil && len(precursors) > 0 {
-			// Build existing set to avoid duplicates
-			existing := make(map[string]bool)
-			for _, r := range results {
-				existing[r.NodeID] = true
-			}
-			for _, p := range precursors {
-				if !existing[p.NodeID] {
-					results = append(results, p)
-					existing[p.NodeID] = true
-				}
-			}
-		}
+	// Token budget limiting
+	tokenBudget := req.TokenBudget
+	if tokenBudget <= 0 {
+		tokenBudget = 2000 // default
 	}
 
-	if results == nil {
-		results = []models.SearchResult{}
+	var filtered []models.SearchResult
+	var totalTokens int
+	var budgetExceeded bool
+
+	for _, res := range results {
+		nodeTokens := utils.EstimateNodeTokens(res.Label, res.Content, res.Content)
+		if totalTokens+nodeTokens > tokenBudget && len(filtered) > 0 {
+			budgetExceeded = true
+			break
+		}
+		filtered = append(filtered, res)
+		totalTokens += nodeTokens
 	}
-	respondJSON(w, 200, results)
+
+	respondJSON(w, 200, map[string]any{
+		"nodes":           filtered,
+		"total_tokens":    totalTokens,
+		"budget_exceeded": budgetExceeded,
+		"total_available": len(results),
+	})
 }
 
 // Embed generates an embedding for the given text.

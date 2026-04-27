@@ -15,6 +15,7 @@ import (
 	"mindbank/internal/embedder"
 	"mindbank/internal/handler"
 	"mindbank/internal/repository"
+	"mindbank/internal/capture"
 )
 
 func main() {
@@ -75,6 +76,14 @@ func main() {
 
 	// Setup router
 	router := handler.NewRouter(pool, cfg)
+
+	// Start auto-capture service
+	capSvc := capture.NewService(pool, "~/.hermes/sessions", fmt.Sprintf("http://localhost:%d", cfg.Port))
+	if err := capSvc.Start(context.Background()); err != nil {
+		slog.Warn("failed to start auto-capture", "error", err)
+	} else {
+		slog.Info("auto-capture service started")
+	}
 
 	// HTTP server
 	addr := fmt.Sprintf(":%d", cfg.Port)

@@ -371,6 +371,58 @@ func (r *EdgeRepo) FindPath(ctx context.Context, sourceID, targetID string, maxD
 	return path, nil
 }
 
+// ListBySource returns edges where source_id matches the given node and optionally edge_type.
+func (r *EdgeRepo) ListBySource(ctx context.Context, sourceID string, edgeType string) ([]models.Edge, error) {
+	var rows pgx.Rows
+	var err error
+	if edgeType != "" {
+		rows, err = r.pool.Query(ctx, `
+			SELECT id, workspace_name, source_id, target_id, edge_type, weight, metadata, created_at
+			FROM edges
+			WHERE source_id = $1 AND edge_type = $2
+			ORDER BY created_at DESC
+		`, sourceID, edgeType)
+	} else {
+		rows, err = r.pool.Query(ctx, `
+			SELECT id, workspace_name, source_id, target_id, edge_type, weight, metadata, created_at
+			FROM edges
+			WHERE source_id = $1
+			ORDER BY created_at DESC
+		`, sourceID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list edges by source: %w", err)
+	}
+	defer rows.Close()
+	return scanEdges(rows)
+}
+
+// ListByTarget returns edges where target_id matches the given node and optionally edge_type.
+func (r *EdgeRepo) ListByTarget(ctx context.Context, targetID string, edgeType string) ([]models.Edge, error) {
+	var rows pgx.Rows
+	var err error
+	if edgeType != "" {
+		rows, err = r.pool.Query(ctx, `
+			SELECT id, workspace_name, source_id, target_id, edge_type, weight, metadata, created_at
+			FROM edges
+			WHERE target_id = $1 AND edge_type = $2
+			ORDER BY created_at DESC
+		`, targetID, edgeType)
+	} else {
+		rows, err = r.pool.Query(ctx, `
+			SELECT id, workspace_name, source_id, target_id, edge_type, weight, metadata, created_at
+			FROM edges
+			WHERE target_id = $1
+			ORDER BY created_at DESC
+		`, targetID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list edges by target: %w", err)
+	}
+	defer rows.Close()
+	return scanEdges(rows)
+}
+
 func scanEdges(rows pgx.Rows) ([]models.Edge, error) {
 	var edges []models.Edge
 	for rows.Next() {

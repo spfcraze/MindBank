@@ -557,12 +557,13 @@ function physics(){
 }
 
 // === Render loop control ===
-function wakeRender(){physicsSettled=false;settleCounter=0;renderIdle=false;if(renderRunning)requestAnimationFrame(render);}
+function wakeRender(){physicsSettled=false;settleCounter=0;renderIdle=false;if(renderRunning){if(animFrameId)cancelAnimationFrame(animFrameId);animFrameId=requestAnimationFrame(render);}}
 function rebuildVisCache(){visNodesCache.length=0;for(const n of nodes){if(n.visible)visNodesCache.push(n);}}
 
 // === Render ===
 let frameCount=0,lastFps=performance.now(),renderRunning=true,simTimer=null;
 let renderIdle=false;
+let animFrameId=null;
 const PROF={frames:0,totalMs:0,nodeMs:0,edgeMs:0,partMs:0,burstMs:0,gridMs:0,nodesDrawn:0,edgesDrawn:0,particlesDrawn:0,lastLog:0};
 function logProf(){
   const f=PROF.frames||1;
@@ -594,7 +595,7 @@ function render(){
     const zr=document.getElementById('zoomReadout');if(zr)zr.textContent=cam.z.toFixed(2)+'x';
     const cr=document.getElementById('coordReadout');if(cr)cr.textContent=Math.round(cam.x)+','+Math.round(cam.y);
   }catch(e){console.error('Render error:',e);}
-  requestAnimationFrame(render);
+  if(renderRunning) animFrameId=requestAnimationFrame(render);
 }
 
 function drawGrid(cx,cy){
@@ -992,9 +993,9 @@ function filterNodes(q){
 function toggleRotate(){autoR=!autoR;document.getElementById('btnRotate').classList.toggle('active',autoR);}
 
 // === Interaction ===
-canvas.onmousedown=e=>{if(renderIdle&&renderRunning){renderIdle=false;requestAnimationFrame(render);}const r=canvas.getBoundingClientRect();drag=true;dragStart={x:e.clientX-r.left,y:e.clientY-r.top};camStart={x:cam.x,y:cam.y};};
+canvas.onmousedown=e=>{if(renderIdle&&renderRunning){renderIdle=false;if(animFrameId)cancelAnimationFrame(animFrameId);animFrameId=requestAnimationFrame(render);}const r=canvas.getBoundingClientRect();drag=true;dragStart={x:e.clientX-r.left,y:e.clientY-r.top};camStart={x:cam.x,y:cam.y};};
 canvas.onmousemove=e=>{
-  if(renderIdle&&renderRunning){renderIdle=false;requestAnimationFrame(render);}
+  if(renderIdle&&renderRunning){renderIdle=false;if(animFrameId)cancelAnimationFrame(animFrameId);animFrameId=requestAnimationFrame(render);}
   const rect=canvas.getBoundingClientRect();const mx=e.clientX-rect.left,my=e.clientY-rect.top;
   if(drag){cam.x=camStart.x-(mx-dragStart.x)/cam.z;cam.y=camStart.y-(my-dragStart.y)/cam.z;}
   const cx=W/2,cy=H/2;hovered=null;
@@ -1136,8 +1137,8 @@ setTimeout(scheduleSim,12000);
 
 // Pause rendering when tab is hidden
 document.addEventListener('visibilitychange',()=>{
-  if(document.hidden){renderRunning=false;if(simTimer){clearTimeout(simTimer);simTimer=null;}}
-  else{if(!renderRunning){renderRunning=true;render();}if(!simTimer)scheduleSim();}
+  if(document.hidden){renderRunning=false;if(animFrameId){cancelAnimationFrame(animFrameId);animFrameId=null;}if(simTimer){clearTimeout(simTimer);simTimer=null;}}
+  else{if(!renderRunning){renderRunning=true;if(animFrameId){cancelAnimationFrame(animFrameId);}animFrameId=requestAnimationFrame(render);}if(!simTimer)scheduleSim();}
 });
 </script>
 </body>

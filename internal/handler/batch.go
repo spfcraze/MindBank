@@ -138,7 +138,7 @@ func (h *BatchHandler) AutoConnect(w http.ResponseWriter, r *http.Request) {
 	ns := r.URL.Query().Get("namespace")
 	workspace := "hermes"
 
-	nodes, err := h.nodeRepo.List(r.Context(), workspace, ns, "", 500, 0)
+	nodes, err := h.nodeRepo.List(r.Context(), workspace, ns, "", "", 500, 0)
 	if err != nil {
 		respondError(w, 500, "failed to list nodes")
 		return
@@ -239,7 +239,7 @@ func (h *BatchHandler) PurgeSoftDeleted(w http.ResponseWriter, r *http.Request) 
 func (h *BatchHandler) Export(w http.ResponseWriter, r *http.Request) {
 	ns := r.URL.Query().Get("namespace")
 
-	nodes, err := h.nodeRepo.List(r.Context(), "", ns, "", 10000, 0)
+	nodes, err := h.nodeRepo.List(r.Context(), "", ns, "", "", 10000, 0)
 	if err != nil {
 		slog.Error("export nodes", "error", err)
 		respondError(w, 500, "export failed")

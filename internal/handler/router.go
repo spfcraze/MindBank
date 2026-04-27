@@ -68,7 +68,7 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 	nh := &NodeHandler{repo: nodeRepo, pool: pool}
 	eh := &EdgeHandler{repo: edgeRepo, nodeRepo: nodeRepo}
 	sh := NewSearchHandler(searchRepo, embClient, edgeRepo, depRepo)
-	sessH := NewSessionHandler(sessionRepo, nodeRepo, ruleBased)
+	sessH := NewSessionHandler(sessionRepo, nodeRepo, edgeRepo, ruleBased)
 	askH := NewAskHandler(searchRepo, snapshotRepo, edgeRepo, embClient)
 	bh := NewBatchHandler(nodeRepo, edgeRepo)
 	uh := NewUpdateHandler()
