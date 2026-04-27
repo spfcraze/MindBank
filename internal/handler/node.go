@@ -128,6 +128,7 @@ func (h *NodeHandler) List(w http.ResponseWriter, r *http.Request) {
 	workspace := r.URL.Query().Get("workspace")
 	namespace := r.URL.Query().Get("namespace")
 	nodeType := models.NodeType(r.URL.Query().Get("type"))
+	skill := r.URL.Query().Get("skill")
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 
@@ -187,7 +188,7 @@ func (h *NodeHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	nodes, err := h.repo.List(r.Context(), workspace, namespace, nodeType, limit, offset)
+	nodes, err := h.repo.List(r.Context(), workspace, namespace, nodeType, skill, limit, offset)
 	if err != nil {
 		slog.Error("list nodes", "error", err)
 		respondError(w, 500, "failed to list nodes")

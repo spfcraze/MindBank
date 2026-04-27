@@ -304,6 +304,34 @@ bash scripts/install-plugin.sh --claude-desktop --hermes
 
 ---
 
+## Unified Mining Pipeline
+
+MindBank automatically mines knowledge from your Hermes sessions and `.md` cron logs:
+
+```bash
+# Run full pipeline (called automatically by update.sh)
+python3 scripts/unified_scheduler.py
+
+# Or run individual miners:
+python3 scripts/md_miner.py --dry-run        # Preview .md log mining
+python3 scripts/session_miner.py --mine-all  # Mine sessions + MEMORY.md
+python3 scripts/node_fixer.py --dry-run    # Preview node repairs
+```
+
+### .md Log Mining
+
+Hermes cron jobs generate `.md` logs at `~/.hermes/cron/output/`. The `md_miner.py` extracts only the `## Response` section, ignoring injected skill dumps. Each response is classified (decision/fact/problem/advice/preference/project) and stored as a MindBank node with skill provenance metadata.
+
+### Skill Query
+
+Query nodes by the skill that produced them:
+
+```bash
+curl "http://127.0.0.1:8095/api/v1/nodes?skill=gap-analysis&limit=5"
+```
+
+---
+
 ## API Overview
 
 ### Nodes
@@ -315,6 +343,9 @@ POST /api/v1/nodes
 
 # List (with filters)
 GET /api/v1/nodes?namespace=my-project&type=decision&limit=50
+
+# List by skill (skill provenance)
+GET /api/v1/nodes?skill=gap-analysis&limit=5
 
 # Get (bumps access count)
 GET /api/v1/nodes/{id}

@@ -21,6 +21,7 @@ const (
 	NodeProblem    NodeType = "problem"
 	NodeConcept    NodeType = "concept"
 	NodeQuestion   NodeType = "question"
+	NodeSession    NodeType = "session"
 )
 
 // IsValid checks if the NodeType is a valid enum value.
@@ -28,7 +29,7 @@ func (nt NodeType) IsValid() bool {
 	switch nt {
 	case NodePerson, NodeAgent, NodeProject, NodeTopic, NodeDecision,
 		NodeFact, NodeEvent, NodePreference, NodeAdvice, NodeProblem,
-		NodeConcept, NodeQuestion:
+		NodeConcept, NodeQuestion, NodeSession:
 		return true
 	default:
 		return false
@@ -40,7 +41,7 @@ func AllNodeTypes() []NodeType {
 	return []NodeType{
 		NodePerson, NodeAgent, NodeProject, NodeTopic, NodeDecision,
 		NodeFact, NodeEvent, NodePreference, NodeAdvice, NodeProblem,
-		NodeConcept, NodeQuestion,
+		NodeConcept, NodeQuestion, NodeSession,
 	}
 }
 

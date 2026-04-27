@@ -564,7 +564,7 @@ func (s *Server) tools() []map[string]any {
 				"type": "object",
 				"properties": map[string]any{
 					"label":     map[string]string{"type": "string", "description": "Node label/name"},
-					"type":      map[string]string{"type": "string", "description": "Node type: person, agent, project, topic, decision, fact, event, preference, advice, problem, concept"},
+					"type":      map[string]string{"type": "string", "description": "Node type: person, agent, project, topic, decision, fact, event, preference, advice, problem, concept, question, session"},
 					"content":   map[string]string{"type": "string", "description": "Full content"},
 					"summary":   map[string]string{"type": "string", "description": "Short summary"},
 					"workspace": map[string]string{"type": "string", "description": "Workspace name (default: hermes)"},
