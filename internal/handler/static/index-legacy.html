@@ -30,7 +30,7 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 .glitch::before,.glitch::after{content:attr(data-text);position:absolute;top:0;left:0;width:100%;height:100%;opacity:0}
 .glitch:hover::before{opacity:0.8;color:var(--magenta);animation:glitch 0.3s infinite linear alternate-reverse;z-index:-1}
 .glitch:hover::after{opacity:0.8;color:var(--cyan);animation:glitch 0.3s infinite linear alternate;z-index:-2}
-.container{max-width:1400px;margin:0 auto;padding:0 32px;position:relative;z-index:2}
+.container{max-width:100%;margin:0 auto;padding:0 32px;position:relative;z-index:2}
 .corner-deco{position:fixed;width:100px;height:100px;pointer-events:none;z-index:0;opacity:0.3}
 .corner-deco.tl{top:0;left:0;border-top:1px solid var(--cyan);border-left:1px solid var(--cyan)}
 .corner-deco.tr{top:0;right:0;border-top:1px solid var(--cyan);border-right:1px solid var(--cyan)}
@@ -373,9 +373,9 @@ div.vis-tooltip{background:var(--bg-panel);border:1px solid var(--border);color:
       </div>
       <span id="lastSyncInfo"></span>
       <div class="auto-capture-wrap" title="Auto-capture: mines Hermes sessions automatically">
-        <span id="autoCaptureIndicator" style="font-size:9px;color:var(--text-dim)">🤖 Auto OFF</span>
+        <span id="autoCaptureIndicator" style="font-size:9px;color:var(--green);text-shadow:0 0 5px var(--green)">🤖 Auto ON</span>
       </div>
-      <button type="button" class="btn-replay" id="replayBtn" onclick="showSessionReplayModal()" title="Session Replay">Replay</button>
+      <button type="button" class="btn-replay" id="replayBtn" onclick="showSessionReplayModal()" title="Session Replay" style="background:var(--cyan);color:#000;border:1px solid var(--cyan);padding:4px 12px;border-radius:4px;font-family:var(--font-mono);font-size:11px;cursor:pointer;text-shadow:none;box-shadow:0 0 8px rgba(0,212,170,0.3)">Replay</button>
     </div>
     <div class="nav-status">
       <div class="status-dot" id="statusDot"></div>
