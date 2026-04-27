@@ -11,6 +11,7 @@ import (
 
 	"mindbank/internal/embedder"
 	"mindbank/internal/models"
+	"mindbank/internal/privacy"
 	"mindbank/internal/repository"
 
 	"github.com/go-chi/chi/v5"
@@ -53,6 +54,9 @@ func (h *NodeHandler) Create(w http.ResponseWriter, r *http.Request) {
 		respondError(w, 400, "summary too long (max 1000 chars)")
 		return
 	}
+
+	// Privacy filter: strip secrets from user-provided text fields
+	req.Label, req.Content, req.Summary = privacy.FilterNode(req.Label, req.Content, req.Summary)
 
 	node, err := h.repo.Create(r.Context(), req)
 	if err != nil {

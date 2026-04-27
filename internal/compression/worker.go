@@ -12,25 +12,28 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"mindbank/internal/repository"
 )
 
 // Worker compresses raw text into structured facts using Ollama.
 type Worker struct {
-	pool     *pgxpool.Pool
-	ollamaURL string
-	model    string
-	interval time.Duration
-	httpClient *http.Client
+	pool         *pgxpool.Pool
+	settingsRepo *repository.SettingsRepo
+	ollamaURL    string
+	model        string
+	interval     time.Duration
+	httpClient   *http.Client
 }
 
 // NewWorker creates a new compression worker.
-func NewWorker(pool *pgxpool.Pool, ollamaURL, model string) *Worker {
+func NewWorker(pool *pgxpool.Pool, settingsRepo *repository.SettingsRepo, ollamaURL, model string) *Worker {
 	return &Worker{
-		pool:       pool,
-		ollamaURL:  ollamaURL,
-		model:      model,
-		interval:   30 * time.Second,
-		httpClient: &http.Client{Timeout: 60 * time.Second},
+		pool:         pool,
+		settingsRepo: settingsRepo,
+		ollamaURL:    ollamaURL,
+		model:        model,
+		interval:     30 * time.Second,
+		httpClient:   &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
@@ -50,6 +53,44 @@ func (w *Worker) Start(ctx context.Context) {
 }
 
 func (w *Worker) processBatch(ctx context.Context) {
+	// Check if compression is enabled
+	if w.settingsRepo == nil {
+		slog.Debug("compression: no settings repo, skipping")
+		return
+	}
+
+	enabled := w.settingsRepo.GetBool(ctx, "compression_enabled")
+	if !enabled {
+		slog.Debug("compression: disabled, skipping")
+		return
+	}
+
+	setupComplete := w.settingsRepo.GetBool(ctx, "compression_setup_complete")
+	if !setupComplete {
+		slog.Debug("compression: setup not complete, skipping")
+		return
+	}
+
+	// Use configured model
+	model, _ := w.settingsRepo.Get(ctx, "compression_model")
+	if model == "" {
+		model = "phi4-mini"
+	}
+
+	// Check model availability
+	if !w.modelAvailable(model) {
+		// Try fallback
+		fallback := "llama3.2"
+		if !w.modelAvailable(fallback) {
+			slog.Error("compression: neither primary nor fallback model available",
+				"primary", model,
+				"fallback", fallback)
+			return
+		}
+		model = fallback
+	}
+
+	// Process queue with selected model
 	rows, err := w.pool.Query(ctx, `
 		SELECT id, label, content, summary 
 		FROM nodes 
@@ -72,14 +113,39 @@ func (w *Worker) processBatch(ctx context.Context) {
 			continue
 		}
 
-		if err := w.compressNode(ctx, id, label, content, summary); err != nil {
+		if err := w.compressNode(ctx, id, label, content, summary, model); err != nil {
 			slog.Error("compress node", "id", id, "error", err)
 			w.markFailed(ctx, id, err.Error())
 		}
 	}
 }
 
-func (w *Worker) compressNode(ctx context.Context, id, label, content, summary string) error {
+func (w *Worker) modelAvailable(model string) bool {
+	resp, err := w.httpClient.Get(w.ollamaURL + "/api/tags")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return false
+	}
+
+	for _, m := range result.Models {
+		if strings.Contains(m.Name, model) {
+			return true
+		}
+	}
+	return false
+}
+
+func (w *Worker) compressNode(ctx context.Context, id, label, content, summary, model string) error {
 	text := label + "\n" + summary + "\n" + content
 	if len(text) > 8000 {
 		text = text[:8000]
@@ -96,7 +162,7 @@ func (w *Worker) compressNode(ctx context.Context, id, label, content, summary s
 Text:
 %s`, text)
 
-	resp, err := w.generate(ctx, prompt)
+	resp, err := w.generate(ctx, prompt, model)
 	if err != nil {
 		return fmt.Errorf("ollama generate: %w", err)
 	}
@@ -124,9 +190,9 @@ Text:
 	return nil
 }
 
-func (w *Worker) generate(ctx context.Context, prompt string) (string, error) {
+func (w *Worker) generate(ctx context.Context, prompt, model string) (string, error) {
 	body, _ := json.Marshal(map[string]string{
-		"model":  w.model,
+		"model":  model,
 		"prompt": prompt,
 		"stream": "false",
 	})

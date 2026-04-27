@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
+	"mindbank/internal/dedup"
 	"mindbank/internal/models"
 
 	"github.com/jackc/pgx/v5"
@@ -93,8 +95,28 @@ func (r *NodeRepo) Create(ctx context.Context, req models.NodeCreate) (*models.N
 		imp = *req.Importance
 	}
 
+	// Deduplication: compute hash and check for existing node
+	hash := dedup.ComputeHash(req.Label, req.Content, req.Summary)
+	existingID, err := dedup.CheckDuplicate(ctx, r.Pool, hash)
+	if err != nil {
+		return nil, fmt.Errorf("dedup check: %w", err)
+	}
+	if existingID != "" {
+		existing, err := r.Get(ctx, existingID)
+		if err != nil {
+			return nil, fmt.Errorf("fetch duplicate: %w", err)
+		}
+		if existing == nil {
+			// Stale hash reference — proceed with insert and update hash mapping
+			slog.Warn("dedup stale hash", "hash", hash, "node_id", existingID)
+		} else {
+			existing.Deduplicated = true
+			return existing, nil
+		}
+	}
+
 	n := &models.Node{}
-	err := r.Pool.QueryRow(ctx, `
+	err = r.Pool.QueryRow(ctx, `
 		INSERT INTO nodes (workspace_name, namespace, label, node_type, content, summary, metadata, importance, materialized_path)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '/' || gen_random_uuid()::text)
 		RETURNING id, workspace_name, namespace, label, node_type, content, summary, metadata,
@@ -111,6 +133,11 @@ func (r *NodeRepo) Create(ctx context.Context, req models.NodeCreate) (*models.N
 
 	// Set materialized path to /{id}
 	_, _ = r.Pool.Exec(ctx, `UPDATE nodes SET materialized_path = '/' || $1 WHERE id = $1`, n.ID)
+
+	// Store dedup hash (best-effort)
+	if err := dedup.StoreHash(ctx, r.Pool, hash, n.ID); err != nil {
+		slog.Warn("failed to store dedup hash", "error", err, "node_id", n.ID)
+	}
 
 	return n, nil
 }
