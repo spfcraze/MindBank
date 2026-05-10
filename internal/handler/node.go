@@ -66,7 +66,9 @@ func (h *NodeHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Enqueue for embedding (best-effort, non-blocking)
-	_ = embedder.EnqueueNode(r.Context(), h.pool, node.ID)
+	if err := embedder.EnqueueNode(r.Context(), h.pool, node.ID); err != nil {
+		slog.Error("enqueue node for embedding", "node_id", node.ID, "error", err)
+	}
 
 	respondJSON(w, 201, node)
 }
@@ -107,7 +109,10 @@ func (h *NodeHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	// Re-enqueue for embedding if content or summary changed
 	if req.Content != nil || req.Summary != nil {
-		_ = embedder.EnqueueNode(r.Context(), h.pool, node.ID)
+		// Enqueue for embedding
+		if err := embedder.EnqueueNode(r.Context(), h.pool, node.ID); err != nil {
+			slog.Error("enqueue node for embedding", "node_id", node.ID, "error", err)
+		}
 	}
 
 	respondJSON(w, 200, node)

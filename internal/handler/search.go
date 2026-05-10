@@ -14,14 +14,15 @@ import (
 )
 
 type SearchHandler struct {
-	searchRepo *repository.SearchRepo
-	embedder   *embedder.Client
-	edgeRepo   *repository.EdgeRepo
-	depRepo    *repository.DependenceRepo
+	searchRepo   *repository.SearchRepo
+	embedder     *embedder.Client
+	edgeRepo     *repository.EdgeRepo
+	depRepo      *repository.DependenceRepo
+	profileRepo  *repository.ProfileRepo
 }
 
-func NewSearchHandler(searchRepo *repository.SearchRepo, emb *embedder.Client, edgeRepo *repository.EdgeRepo, depRepo *repository.DependenceRepo) *SearchHandler {
-	return &SearchHandler{searchRepo: searchRepo, embedder: emb, edgeRepo: edgeRepo, depRepo: depRepo}
+func NewSearchHandler(searchRepo *repository.SearchRepo, emb *embedder.Client, edgeRepo *repository.EdgeRepo, depRepo *repository.DependenceRepo, profileRepo *repository.ProfileRepo) *SearchHandler {
+	return &SearchHandler{searchRepo: searchRepo, embedder: emb, edgeRepo: edgeRepo, depRepo: depRepo, profileRepo: profileRepo}
 }
 
 // FTS handles GET /api/v1/search?q=...
@@ -109,6 +110,15 @@ func (h *SearchHandler) Hybrid(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Limit <= 0 || req.Limit > 100 {
 		req.Limit = 10
+	}
+
+	// Profile augmentation: prepend user context to query
+	if h.profileRepo != nil {
+		profileCtx, err := h.profileRepo.GetContextForQuery(r.Context(), req.Query)
+		if err == nil && profileCtx != "" {
+			req.Query = profileCtx + "\nQuery: " + req.Query
+			slog.Debug("search augmented with profile context", "context_len", len(profileCtx))
+		}
 	}
 
 	// Use cached embedding

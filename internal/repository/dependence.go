@@ -53,6 +53,10 @@ func (r *DependenceRepo) GetDependenceGraph(ctx context.Context, seedID string, 
 		"contains": true, "relates_to": true, "depends_on": true, "decided_by": true,
 		"participated_in": true, "produced": true, "contradicts": true, "supports": true,
 		"temporal_next": true, "mentions": true, "learned_from": true,
+		"tested_by": true, "invalidated_by": true, "derived_from": true, "assumed": true,
+		"superseded_by": true, "refined_by": true, "merged_into": true,
+		"created_by": true, "reviewed_by": true, "executed_by": true,
+		"failed_due_to": true, "incompatible_with": true, "precondition_for": true,
 	}
 	var cleanTypes []string
 	for _, et := range edgeTypes {
@@ -61,7 +65,9 @@ func (r *DependenceRepo) GetDependenceGraph(ctx context.Context, seedID string, 
 		}
 	}
 	if len(cleanTypes) == 0 {
-		cleanTypes = []string{"depends_on", "learned_from", "decided_by", "produced", "supports"}
+		cleanTypes = []string{"depends_on", "learned_from", "decided_by", "produced", "supports",
+			"tested_by", "invalidated_by", "derived_from", "assumed",
+			"superseded_by", "refined_by", "failed_due_to", "precondition_for"}
 	}
 
 	edgeTypeStr := "'" + strings.Join(cleanTypes, "','") + "'"
@@ -214,7 +220,7 @@ func (r *DependenceRepo) GetDependenceGraph(ctx context.Context, seedID string, 
 				// Check if there's a supporting edge that resolves it
 				var resolved bool
 				_ = r.pool.QueryRow(ctx, `
-					SELECT EXISTS(SELECT 1 FROM edges WHERE target_id = $1 AND edge_type = 'supports' AND source_id = $2)
+					SELECT EXISTS(SELECT 1 FROM edges WHERE target_id = $1 AND edge_type IN ('supports', 'tested_by', 'refined_by') AND source_id = $2)
 				`, seedID, id).Scan(&resolved)
 				if !resolved {
 					blindSpots = append(blindSpots, BlindSpot{
@@ -439,7 +445,9 @@ func (r *DependenceRepo) GetObservability(ctx context.Context, namespace string,
 // It runs a shallow backward BFS and returns influence-ranked precursors.
 func (r *DependenceRepo) DependenceExpand(ctx context.Context, seedID string, limit int) ([]models.SearchResult, error) {
 	_, _, modes, _, _, _, err := r.GetDependenceGraph(ctx, seedID,
-		[]string{"depends_on", "learned_from", "decided_by", "produced", "supports"},
+		[]string{"depends_on", "learned_from", "decided_by", "produced", "supports",
+			"tested_by", "invalidated_by", "derived_from", "assumed",
+			"superseded_by", "refined_by", "failed_due_to", "precondition_for"},
 		2, // shallow: 2 hops max
 		0.1,
 	)

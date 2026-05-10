@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -196,7 +197,7 @@ func (h *AskHandler) Graph(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build query for nodes
-	query := `SELECT id, namespace, label, node_type::text, content, summary, importance, access_count
+	query := `SELECT id, namespace, label, node_type::text, content, summary, importance, access_count, metadata
 		FROM nodes WHERE valid_to IS NULL`
 	args := []any{}
 	argN := 1
@@ -222,21 +223,42 @@ func (h *AskHandler) Graph(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type graphNode struct {
-		ID       string  `json:"id"`
-		Label    string  `json:"label"`
-		NodeType string  `json:"node_type"`
-		Summary  string  `json:"summary"`
-		NS       string  `json:"namespace"`
-		Importance float32 `json:"importance"`
-		AccessCount int    `json:"access_count"`
+		ID          string          `json:"id"`
+		Label       string          `json:"label"`
+		NodeType    string          `json:"node_type"`
+		Summary     string          `json:"summary"`
+		NS          string          `json:"namespace"`
+		Importance  float32         `json:"importance"`
+		AccessCount int             `json:"access_count"`
+		Metadata    json.RawMessage `json:"metadata,omitempty"`
+		// Event-specific fields (omitted for non-event nodes)
+		SessionID string `json:"session_id,omitempty"`
+		EventType string `json:"event_type,omitempty"`
+		Sequence  int    `json:"sequence,omitempty"`
 	}
 	var nodes []graphNode
 	nodeIDs := []any{}
 	for rows.Next() {
 		var n graphNode
 		var content string
-		if err := rows.Scan(&n.ID, &n.NS, &n.Label, &n.NodeType, &content, &n.Summary, &n.Importance, &n.AccessCount); err != nil {
+		var metadata json.RawMessage
+		if err := rows.Scan(&n.ID, &n.NS, &n.Label, &n.NodeType, &content, &n.Summary, &n.Importance, &n.AccessCount, &metadata); err != nil {
 			continue
+		}
+		n.Metadata = metadata
+
+		// Extract event-specific fields from metadata if this is an event node
+		if n.NodeType == "event" && len(metadata) > 0 {
+			var eventMeta struct {
+				SessionID string `json:"session_id"`
+				EventType string `json:"event_type"`
+				Sequence  int    `json:"sequence"`
+			}
+			if err := json.Unmarshal(metadata, &eventMeta); err == nil {
+				n.SessionID = eventMeta.SessionID
+				n.EventType = eventMeta.EventType
+				n.Sequence = eventMeta.Sequence
+			}
 		}
 		nodes = append(nodes, n)
 		nodeIDs = append(nodeIDs, n.ID)
@@ -246,7 +268,7 @@ func (h *AskHandler) Graph(w http.ResponseWriter, r *http.Request) {
 		nodes = []graphNode{}
 	}
 
-	// Get edges between these nodes
+	// Get edges connected to these nodes (at least one endpoint in the node set)
 	type graphEdge struct {
 		ID       string  `json:"id"`
 		Source   string  `json:"source"`
@@ -258,25 +280,22 @@ func (h *AskHandler) Graph(w http.ResponseWriter, r *http.Request) {
 
 	if len(nodeIDs) > 0 {
 		n := len(nodeIDs)
-		placeholders1 := ""
-		placeholders2 := ""
+		placeholders := ""
 		for i := 0; i < n; i++ {
 			if i > 0 {
-				placeholders1 += ","
-				placeholders2 += ","
+				placeholders += ","
 			}
-			placeholders1 += fmt.Sprintf("$%d", i+1)
-			placeholders2 += fmt.Sprintf("$%d", n+i+1)
+			placeholders += fmt.Sprintf("$%d", i+1)
 		}
 		edgeQuery := fmt.Sprintf(`
 			SELECT id, source_id, target_id, edge_type::text, weight
 			FROM edges
-			WHERE source_id IN (%s) AND target_id IN (%s)
+			WHERE source_id IN (%s) OR target_id IN (%s)
 			ORDER BY weight DESC
-		`, placeholders1, placeholders2)
+			LIMIT 1000
+		`, placeholders, placeholders)
 
-		edgeArgs := append(nodeIDs, nodeIDs...)
-		edgeRows, err := h.snapshotRepo.Pool().Query(r.Context(), edgeQuery, edgeArgs...)
+		edgeRows, err := h.snapshotRepo.Pool().Query(r.Context(), edgeQuery, nodeIDs...)
 		if err == nil {
 			defer edgeRows.Close()
 			for edgeRows.Next() {

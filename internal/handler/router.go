@@ -16,6 +16,7 @@ import (
 
 	"mindbank/internal/config"
 	"mindbank/internal/embedder"
+	"mindbank/internal/forgetting"
 	"mindbank/internal/reasoner"
 	"mindbank/internal/repository"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"strconv"
 )
 
 //go:embed static/*
@@ -38,7 +40,7 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 	r.Use(middleware.Compress(5, "application/json", "text/html", "text/css", "application/javascript", "image/svg+xml"))
 	r.Use(middleware.Timeout(30 * 1e9)) // 30s
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:*", "http://127.0.0.1:*", "https://*.mindbank.local"},
+		AllowedOrigins:   cfg.CORSOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
 		ExposedHeaders:   []string{"Link"},
@@ -50,6 +52,8 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 	nodeRepo := repository.NewNodeRepo(pool)
 	edgeRepo := repository.NewEdgeRepo(pool)
 	searchRepo := repository.NewSearchRepo(pool)
+	// Link node repo to search repo for cache invalidation on writes
+	nodeRepo.SetSearchRepo(searchRepo)
 	sessionRepo := repository.NewSessionRepo(pool)
 	snapshotRepo := repository.NewSnapshotRepo(pool)
 	depRepo := repository.NewDependenceRepo(pool)
@@ -67,11 +71,22 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 	// Handlers
 	nh := &NodeHandler{repo: nodeRepo, pool: pool}
 	eh := &EdgeHandler{repo: edgeRepo, nodeRepo: nodeRepo}
-	sh := NewSearchHandler(searchRepo, embClient, edgeRepo, depRepo)
+	profileRepo := &repository.ProfileRepo{Pool: pool}
+	sh := NewSearchHandler(searchRepo, embClient, edgeRepo, depRepo, profileRepo)
 	sessH := NewSessionHandler(sessionRepo, nodeRepo, edgeRepo, ruleBased)
 	askH := NewAskHandler(searchRepo, snapshotRepo, edgeRepo, embClient)
 	bh := NewBatchHandler(nodeRepo, edgeRepo)
 	uh := NewUpdateHandler()
+
+	// MCP health probe endpoint — lightweight, no auth, for self-healing discovery
+	r.Get("/mcp/health", func(w http.ResponseWriter, r *http.Request) {
+		respondJSON(w, 200, map[string]string{
+			"status":   "ok",
+			"service":  "mindbank-mcp",
+			"version":  getLocalVersion(),
+			"pid":      fmt.Sprintf("%d", os.Getpid()),
+		})
+	})
 
 	// Web UI — serve index.html at root, graph.html at /graph
 	r.Get("/graph-view", func(w http.ResponseWriter, r *http.Request) {
@@ -87,6 +102,11 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 	r.Get("/updates", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		data, _ := staticFS.ReadFile("static/updates.html")
+		w.Write(data)
+	})
+	r.Get("/brain-3d", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		data, _ := staticFS.ReadFile("static/brain3d.html")
 		w.Write(data)
 	})
 	staticSub, _ := fs.Sub(staticFS, "static")
@@ -258,9 +278,34 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 			r.Post("/setup", compSettingsHandler.Setup)
 		})
 
-		// Import (Obsidian)
-		ih := NewImportHandler()
-		RegisterImportRoutes(r, ih)
+		// Profile routes
+		profileRepo := &repository.ProfileRepo{Pool: pool}
+		ph := NewProfileHandler(profileRepo)
+		RegisterProfileRoutes(r, ph)
+
+		// Forgetting routes
+		forgetSvc := forgetting.NewService(pool)
+		r.Post("/admin/forgetting/run", func(w http.ResponseWriter, r *http.Request) {
+			stats, err := forgetSvc.RunDaily(r.Context())
+			if err != nil {
+				respondError(w, 500, err.Error())
+				return
+			}
+			respondJSON(w, 200, stats)
+		})
+		r.Get("/admin/forgetting/expiring", func(w http.ResponseWriter, r *http.Request) {
+			daysStr := r.URL.Query().Get("days")
+			days := 7
+			if d, _ := strconv.Atoi(daysStr); d > 0 {
+				days = d
+			}
+			nodes, err := forgetSvc.GetExpiringSoon(r.Context(), days)
+			if err != nil {
+				respondError(w, 500, err.Error())
+				return
+			}
+			respondJSON(w, 200, nodes)
+		})
 	})
 
 	return r

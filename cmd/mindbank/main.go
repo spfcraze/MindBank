@@ -10,12 +10,12 @@ import (
 	"syscall"
 	"time"
 
+	"mindbank/internal/autocapture"
 	"mindbank/internal/config"
 	"mindbank/internal/db"
 	"mindbank/internal/embedder"
 	"mindbank/internal/handler"
 	"mindbank/internal/repository"
-	"mindbank/internal/capture"
 )
 
 func main() {
@@ -36,6 +36,11 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 
 	slog.Info("mindbank starting", "port", cfg.Port)
+
+	// Security warning: auth disabled by default
+	if os.Getenv("MB_API_KEY") == "" {
+		slog.Warn("API authentication is disabled — set MB_API_KEY to enable auth in production")
+	}
 
 	// Connect to database
 	pool, err := db.Connect(cfg.DBDSN)
@@ -77,12 +82,20 @@ func main() {
 	// Setup router
 	router := handler.NewRouter(pool, cfg)
 
-	// Start auto-capture service
-	capSvc := capture.NewService(pool, "~/.hermes/sessions", fmt.Sprintf("http://localhost:%d", cfg.Port))
-	if err := capSvc.Start(context.Background()); err != nil {
-		slog.Warn("failed to start auto-capture", "error", err)
+	// Start namespace-aware auto-capture watcher
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		slog.Warn("failed to get home dir for auto-capture", "error", err)
 	} else {
-		slog.Info("auto-capture service started")
+		watchPath := homeDir + "/.hermes/sessions"
+		watcher := autocapture.NewWatcher(nodeRepo, watchPath)
+		if err := watcher.Start(context.Background()); err != nil {
+			slog.Warn("failed to start auto-capture watcher", "error", err)
+		} else {
+			slog.Info("auto-capture watcher started", "path", watchPath)
+			// Start background scanning for new files
+			go watcher.Watch(context.Background())
+		}
 	}
 
 	// HTTP server

@@ -1,0 +1,2777 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MindBank — Neural Memory</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0a0a0f;--surface:#0c0c12;--border:#16162a;--text:#e0e0e0;--text-dim:#888;
+  --accent:#0088ff;--green:#00ff88;--red:#ff4444;--yellow:#ffaa00;
+}
+body{font-family:'SF Mono','Fira Code','Cascadia Code',monospace;background:#08080d;color:#e0e0e0;overflow-x:hidden}
+.header{background:#0c0c12;border-bottom:1px solid #16162a;padding:10px 20px;display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:10;backdrop-filter:blur(10px)}
+.header h1{font-size:16px;color:#00ff88;letter-spacing:3px;text-shadow:0 0 15px #00ff8830}
+.header .live{width:6px;height:6px;border-radius:50%;background:#00ff88;box-shadow:0 0 8px #00ff88;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.tabs{display:flex;gap:0;margin-left:20px}
+.tab{padding:6px 16px;cursor:pointer;font-family:inherit;font-size:12px;color:#555;background:transparent;border:none;border-bottom:2px solid transparent;transition:all .2s}
+.tab:hover{color:#888}.tab.active{color:#00ff88;border-bottom-color:#00ff88}
+.status{font-size:11px;color:#666;margin-left:auto}.status .ok{color:#00ff88}.status .err{color:#ff4444}
+.container{max-width:1400px;margin:0 auto;padding:20px}
+.tab-content{display:none}.tab-content.active{display:block}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+.card{background:#0c0c12;border:1px solid #16162a;border-radius:6px;padding:14px}
+.card h3{font-size:10px;color:#555;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
+.card .val{font-size:28px;color:#00ff88;font-weight:bold;text-shadow:0 0 10px #00ff8820}
+.card .sub{font-size:10px;color:#444;margin-top:4px}
+.section{background:#0c0c12;border:1px solid #16162a;border-radius:6px;margin-bottom:12px}
+.section-hdr{padding:10px 14px;border-bottom:1px solid #16162a;display:flex;justify-content:space-between;align-items:center}
+.section-hdr h2{font-size:12px;color:#888}
+.btn{background:#00ff8818;color:#00ff88;border:1px solid #00ff8830;padding:5px 10px;border-radius:4px;cursor:pointer;font-family:inherit;font-size:11px;transition:all .2s}
+.btn:hover{background:#00ff8830}
+.btn-red{background:#ff444418;color:#ff4444;border-color:#ff444430}.btn-red:hover{background:#ff444430}
+.btn-blue{background:#0088ff18;color:#0088ff;border-color:#0088ff30}.btn-blue:hover{background:#0088ff30}
+.btn-sm{padding:3px 8px;font-size:10px}
+.btn.active{background:#00ff8830;color:#00ff88;border-color:#00ff8850}
+.btn[disabled]{opacity:.4;cursor:not-allowed}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;padding:6px 14px;font-size:10px;color:#555;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #16162a}
+td{padding:6px 14px;font-size:12px;border-bottom:1px solid #ffffff06}
+tr:hover td{background:#ffffff04}
+input,textarea,select{background:#ffffff06;border:1px solid #ffffff10;color:#e0e0e0;padding:6px 10px;border-radius:4px;font-family:inherit;font-size:12px;width:100%}
+input:focus,textarea:focus,select:focus{outline:none;border-color:#00ff8830}
+textarea{resize:vertical;min-height:50px}
+.form-row{display:flex;gap:8px;margin-bottom:6px}.form-row input,.form-row select{flex:1}
+.snapshot{white-space:pre-wrap;font-size:12px;line-height:1.5;color:#aaa;padding:12px;max-height:280px;overflow-y:auto}
+.snapshot::-webkit-scrollbar{width:4px}.snapshot::-webkit-scrollbar-thumb{background:#222}
+.modal{position:fixed;top:0;left:0;right:0;bottom:0;background:#000000bb;z-index:50;display:none;align-items:center;justify-content:center}
+.modal.show{display:flex}
+.modal-box{background:#0c0c12;border:1px solid #16162a;border-radius:8px;width:700px;max-height:80vh;overflow-y:auto}
+.modal-box::-webkit-scrollbar{width:4px}.modal-box::-webkit-scrollbar-thumb{background:#222}
+.toast{position:fixed;bottom:16px;right:16px;background:#00ff8818;color:#00ff88;border:1px solid #00ff8830;padding:10px 18px;border-radius:6px;font-size:12px;z-index:100;opacity:0;transition:opacity .3s;pointer-events:none}
+.toast.show{opacity:1}.toast.err{background:#ff444418;color:#ff4444;border-color:#ff444430}
+.feed{max-height:200px;overflow-y:auto;padding:4px 0}
+.feed::-webkit-scrollbar{width:3px}.feed::-webkit-scrollbar-thumb{background:#222}
+.feed-item{padding:5px 14px;border-bottom:1px solid #ffffff04;font-size:11px;display:flex;gap:8px;align-items:center}
+.feed-item .fi-badge{font-size:9px;padding:1px 5px;border-radius:3px;font-weight:bold;text-transform:uppercase}
+.feed-item .fi-text{color:#888;flex:1}.feed-item .fi-time{font-size:9px;color:#333}
+.ns-bars{padding:12px}
+.ns-bar{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.ns-bar .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.ns-bar .name{font-size:11px;color:#aaa;width:100px}
+.ns-bar .bar-bg{flex:1;height:4px;background:#ffffff06;border-radius:2px;overflow:hidden}
+.ns-bar .bar-fill{height:100%;border-radius:2px;transition:width .6s}
+.ns-bar .cnt{font-size:10px;color:#555;min-width:24px;text-align:right}
+.highlight{background:#00ff8830;color:#00ff88;padding:0 2px;border-radius:2px}
+.hidden{display:none!important}
+.toolbar{padding:10px 14px;border-bottom:1px solid #16162a;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.progress{height:4px;background:#ffffff06;border-radius:2px;margin-top:8px;overflow:hidden}
+.progress-bar{height:100%;background:#00ff88;border-radius:2px;transition:width .3s}
+.dqa-category{background:#0a0a0f;border:1px solid #16162a;border-radius:6px;margin-bottom:8px;overflow:hidden}
+.dqa-category-header{padding:10px 14px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none}
+.dqa-category-header:hover{background:#ffffff06}
+.dqa-category-body{display:none;padding:0 14px 10px}
+.dqa-category-body.open{display:block}
+.dqa-item{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #ffffff06;font-size:12px}
+.dqa-item:last-child{border-bottom:none}
+.dqa-item-label{flex:1;color:#ccc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dqa-item-meta{font-size:10px;color:#555;white-space:nowrap}
+.badge{display:inline-block;font-size:9px;padding:1px 5px;border-radius:3px;font-weight:bold;text-transform:uppercase;background:#00ff8818;color:#00ff88;border:1px solid #00ff8830}
+.badge.warn{background:#ffaa0018;color:#ffaa00;border-color:#ffaa0030}
+.dropdown-results{display:none;position:absolute;background:#0c0c12;border:1px solid #16162a;border-radius:4px;max-height:200px;overflow-y:auto;z-index:20;width:100%;margin-top:2px}
+.dropdown-results.visible{display:block}
+.dropdown-item{padding:6px 10px;font-size:12px;color:#ccc;cursor:pointer;display:flex;align-items:center;gap:6px}
+.dropdown-item:hover{background:#ffffff0a}
+.dn-type{display:inline-block;font-size:9px;padding:1px 4px;border-radius:2px;font-weight:bold;text-transform:uppercase;flex-shrink:0}
+.tree-node .tree-toggle:hover { background: var(--surface); }
+.tree-children { transition: all 0.2s ease; }
+.tree-arrow { transition: transform 0.15s ease; }
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="live"></div><h1>MINDBANK</h1>
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('dashboard')">Dashboard</button>
+    <button class="tab" onclick="switchTab('questions')">Questions</button>
+    <button class="tab" onclick="switchTab('edges')">Edges</button>
+    <button class="tab" onclick="switchTab('tools')">Tools</button>
+    <button class="tab" onclick="switchTab('graph')">Graph 2D</button>
+    <button class="tab" onclick="switchTab('brain')">Brain 3D</button>
+    <button class="tab" onclick="switchTab('observer')">Observer</button>
+    <a href="/updates" class="tab" style="text-decoration:none">Updates ↗</a>
+  </div>
+  <div class="ollama-stats" id="ollamaStats" style="display:flex;gap:10px;font-size:10px;color:#555;align-items:center">
+    <span id="ollamaQueue" title="Embedding queue">q:—</span>
+    <span id="ollamaActive" title="Active embeddings">act:—</span>
+    <span id="ollamaPending" title="Nodes without embeddings" style="display:none">pend:—</span>
+    <span id="ollamaLatency" title="Avg latency">lat:—ms</span>
+    <button id="ollamaEnqueueBtn" onclick="enqueueAllNodes()" style="display:none;background:#ff880018;color:#ff8800;border:1px solid #ff880030;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:9px;font-family:inherit">Enqueue</button>
+  </div>
+  <div class="status" id="healthStatus">checking...</div>
+</div>
+
+<!-- DASHBOARD TAB -->
+<div class="container tab-content active" id="tab-dashboard">
+  <div class="grid">
+    <div class="card"><h3>Nodes</h3><div class="val" id="statNodes">-</div><div class="sub" id="statNodesSub"></div></div>
+    <div class="card"><h3>Edges</h3><div class="val" id="statEdges">-</div><div class="sub" id="statEdgesSub"></div></div>
+    <div class="card"><h3>Namespaces</h3><div class="val" id="statNS">-</div><div class="sub" id="statNSSub"></div></div>
+    <div class="card"><h3>Latency</h3><div class="val" id="statLat">-</div><div class="sub">avg ms</div></div>
+  </div>
+  <div class="section"><div class="section-hdr"><h2>Namespaces</h2></div><div class="ns-bars" id="nsBars"></div></div>
+  <div class="section">
+    <div class="section-hdr"><h2>Graph Health Trend</h2><span style="font-size:11px;color:var(--text-dim)" id="dqa-trend-info"></span></div>
+    <div style="padding:14px">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+        <div style="font-size:32px;font-weight:700" id="dqa-trend-current">-</div>
+        <div id="dqa-trend-arrow" style="font-size:16px"></div>
+        <div style="font-size:11px;color:var(--text-dim)" id="dqa-trend-prev">No previous data</div>
+      </div>
+      <div style="display:flex;align-items:flex-end;gap:2px;height:40px" id="dqa-trend-sparkline"></div>
+    </div>
+  </div>
+  <div class="section"><div class="section-hdr"><h2>Activity Feed</h2><span style="font-size:10px;color:#444" id="feedCount"></span></div><div class="feed" id="activityFeed"></div></div>
+  <div class="section"><div class="section-hdr"><h2>Create Node</h2></div><div style="padding:12px">
+    <div class="form-row"><input id="nodeLabel" placeholder="Label"><select id="nodeType"><option value="decision">Decision</option><option value="fact">Fact</option><option value="preference">Preference</option><option value="problem">Problem</option><option value="advice">Advice</option><option value="project">Project</option><option value="question">Question</option><option value="topic">Topic</option><option value="concept">Concept</option></select><input id="nodeNamespace" placeholder="Namespace" value="hermes" style="max-width:120px"></div>
+    <div class="form-row"><textarea id="nodeContent" placeholder="Content"></textarea></div>
+    <div class="form-row"><input id="nodeSummary" placeholder="Summary"><button class="btn" onclick="createNode()">Create</button></div>
+  </div></div>
+  <div class="section"><div class="section-hdr"><h2>Search</h2><button class="btn btn-sm" onclick="toggleSearchMode()">Mode: <span id="searchModeLabel">Hybrid</span></button></div>
+    <div style="padding:12px"><input id="searchQuery" placeholder="Search nodes... (Ctrl+K or /)" onkeyup="if(event.key==='Enter')doSearch()"></div>
+    <div id="searchResults"></div></div>
+  <div class="section"><div class="section-hdr"><h2>Nodes</h2><div style="display:flex;gap:6px">
+    <select id="filterNS" onchange="loadNodes()" style="width:auto;padding:3px 6px"><option value="">All NS</option></select>
+    <select id="filterType" onchange="loadNodes()" style="width:auto;padding:3px 6px"><option value="">All Types</option><option value="decision">Decision</option><option value="fact">Fact</option><option value="project">Project</option><option value="problem">Problem</option><option value="question">Question</option></select>
+    <button class="btn btn-sm" onclick="loadNodes()">Refresh</button></div></div>
+    <table><thead><tr><th>Type</th><th>Label</th><th>NS</th><th>Summary</th><th>Ver</th><th>Imp</th><th>Acc</th><th>Actions</th></tr></thead>
+    <tbody id="nodesTable"></tbody></table>
+    <div style="padding:8px 14px;text-align:center"><button class="btn btn-sm" id="loadMoreBtn" onclick="loadMoreNodes()" style="display:none">Load More</button></div>
+  </div>
+  <div class="section"><div class="section-hdr"><h2>Snapshot</h2><div style="display:flex;gap:6px"><select id="snapNS" style="width:auto;padding:3px 6px" onchange="loadSnapshot()"><option value="">All</option></select><button class="btn btn-sm" onclick="rebuildSnapshot()">Rebuild</button></div></div>
+    <div class="snapshot" id="snapshotContent">Loading...</div></div>
+</div>
+
+<!-- QUESTIONS TAB -->
+<div class="container tab-content" id="tab-questions">
+  <div class="section"><div class="section-hdr"><h2>Unanswered Questions</h2><span id="qCount" style="font-size:10px;color:#444"></span></div>
+    <div style="padding:4px 14px;font-size:10px;color:#555;margin-bottom:4px">Searches that returned no results — stored for future reference when answers exist.</div>
+    <table><thead><tr><th>Question</th><th>Namespace</th><th>Asked</th><th>Actions</th></tr></thead>
+    <tbody id="questionsTable"></tbody></table></div>
+</div>
+
+<!-- EDGES TAB -->
+<div class="container tab-content" id="tab-edges">
+  <div class="toolbar">
+    <select id="edgeNSFilter" onchange="loadEdges()" style="width:auto;padding:3px 6px"><option value="">All NS</option></select>
+    <select id="edgeTypeFilter" onchange="loadEdges()" style="width:auto;padding:3px 6px">
+      <option value="">All Types</option><option value="contains">contains</option><option value="relates_to">relates_to</option>
+      <option value="supports">supports</option><option value="contradicts">contradicts</option><option value="decided_by">decided_by</option>
+      <option value="depends_on">depends_on</option></select>
+    <button class="btn btn-sm" onclick="loadEdges()">Refresh</button>
+    <span style="margin-left:auto;font-size:10px;color:#444" id="edgeCount"></span>
+  </div>
+  <table><thead><tr><th>Type</th><th>Source</th><th>Target</th><th>Weight</th><th>Actions</th></tr></thead>
+  <tbody id="edgesTable"></tbody></table>
+  <div style="padding:8px 14px;text-align:center"><button class="btn btn-sm" id="edgeLoadMore" onclick="loadMoreEdges()" style="display:none">Load More</button></div>
+</div>
+
+<!-- TOOLS TAB -->
+<div class="container tab-content" id="tab-tools">
+  <style>
+    .tools-group { margin-bottom: 20px; }
+    .tools-group-hdr { font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--text-dim); margin-bottom: 10px; letter-spacing: 0.5px; }
+    .tool-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+    .tool-card-hdr { font-size: 14px; font-weight: 600; margin-bottom: 6px; color: var(--text); }
+    .tool-card-desc { font-size: 12px; color: var(--text-dim); margin-bottom: 12px; line-height: 1.4; }
+    .dqa-score-big { font-size: 36px; font-weight: 700; line-height: 1; }
+    .dqa-score-ok { color: var(--green); }
+    .dqa-score-warn { color: var(--yellow); }
+    .dqa-score-bad { color: var(--red); }
+    .dqa-bar-bg { height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; margin-top: 8px; }
+    .dqa-bar-fill { height: 100%; border-radius: 4px; transition: width 0.6s ease; }
+    .dqa-cat-ok { border-left: 3px solid var(--green); }
+    .dqa-cat-warn { border-left: 3px solid var(--yellow); }
+    .dqa-cat-bad { border-left: 3px solid var(--red); }
+    .dqa-item-row { padding: 6px 10px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--border); font-size: 12px; }
+    .dqa-item-row:last-child { border-bottom: none; }
+    .dqa-cb { width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent); }
+    .dqa-show-more { padding: 6px 10px; font-size: 11px; color: var(--accent); cursor: pointer; text-align: center; border-top: 1px solid var(--border); }
+    .dqa-show-more:hover { text-decoration: underline; }
+    .tool-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .badge-pill { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500; }
+  </style>
+
+  <!-- MAINTENANCE -->
+  <div class="tools-group">
+    <div class="tools-group-hdr">Maintenance</div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">Clean Orphan Edges</div>
+      <div class="tool-card-desc">Delete edges referencing nodes that no longer exist (from temporal version updates).</div>
+      <div class="tool-actions">
+        <button class="btn btn-red" onclick="cleanupEdges()" style="background:var(--red);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Clean Orphan Edges</button>
+        <span id="cleanupResult" style="font-size:12px;color:var(--text-dim)"></span>
+      </div>
+    </div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">Purge Old Versions</div>
+      <div class="tool-card-desc">Hard-delete temporal versions older than N days. Reduces database overhead.</div>
+      <div class="tool-actions">
+        <input id="purgeDays" type="number" value="7" min="1" max="365" style="width:70px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px">
+        <span style="font-size:12px;color:var(--text-dim)">days</span>
+        <button class="btn btn-red" onclick="purgeVersions()" style="background:var(--red);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Purge</button>
+        <span id="purgeResult" style="font-size:12px;color:var(--text-dim)"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- IMPORT / EXPORT -->
+  <div class="tools-group">
+    <div class="tools-group-hdr">Import & Export</div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">Export Graph</div>
+      <div class="tool-card-desc">Download graph as JSON for backup or migration.</div>
+      <div class="tool-actions">
+        <select id="exportNS" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px;min-width:160px"><option value="">All Namespaces</option></select>
+        <button class="btn" onclick="exportGraph()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Export JSON</button>
+      </div>
+    </div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">Import JSON</div>
+      <div class="tool-card-desc">Paste a JSON export to import nodes and edges.</div>
+      <textarea id="importJSON" placeholder='{"nodes":[...],"edges":[...]}' style="width:100%;height:80px;font-size:11px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:6px;margin-bottom:8px"></textarea>
+      <div class="tool-actions">
+        <button class="btn" onclick="importGraph()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Import</button>
+        <span id="importResult" style="font-size:12px;color:var(--text-dim)"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ANALYSIS -->
+  <div class="tools-group">
+    <div class="tools-group-hdr">Analysis</div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">Graph Analytics</div>
+      <div class="tool-card-desc">Topology metrics: hub nodes, bridge nodes, density, and connected components.</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;min-width:90px;flex:1;text-align:center">
+          <div style="font-size:11px;color:var(--text-dim)">Nodes</div>
+          <div style="font-size:18px;font-weight:600;color:var(--accent)" id="ga-nodes">-</div>
+        </div>
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;min-width:90px;flex:1;text-align:center">
+          <div style="font-size:11px;color:var(--text-dim)">Edges</div>
+          <div style="font-size:18px;font-weight:600;color:var(--accent)" id="ga-edges">-</div>
+        </div>
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;min-width:90px;flex:1;text-align:center">
+          <div style="font-size:11px;color:var(--text-dim)">Density</div>
+          <div style="font-size:18px;font-weight:600;color:var(--green)" id="ga-density">-</div>
+        </div>
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;min-width:90px;flex:1;text-align:center">
+          <div style="font-size:11px;color:var(--text-dim)">Avg Conn</div>
+          <div style="font-size:18px;font-weight:600;color:var(--yellow)" id="ga-avg">-</div>
+        </div>
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;min-width:90px;flex:1;text-align:center">
+          <div style="font-size:11px;color:var(--text-dim)">Clusters</div>
+          <div style="font-size:18px;font-weight:600;color:var(--red)" id="ga-clusters">-</div>
+        </div>
+      </div>
+      <div style="margin-bottom:10px">
+        <div style="font-size:12px;font-weight:500;margin-bottom:4px;color:var(--accent)">Hub Nodes</div>
+        <div id="ga-hubs" style="font-size:11px;color:var(--text-dim)">Click Load to see hub nodes</div>
+      </div>
+      <div style="margin-bottom:10px">
+        <div style="font-size:12px;font-weight:500;margin-bottom:4px;color:var(--accent)">Bridge Nodes</div>
+        <div id="ga-bridges" style="font-size:11px;color:var(--text-dim)">Click Load to see bridge nodes</div>
+      </div>
+      <button class="btn" onclick="loadGraphAnalytics()" style="background:var(--accent);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Load Analytics</button>
+    </div>
+  </div>
+
+  <!-- BATCH OPERATIONS -->
+  <div class="tools-group">
+    <div class="tools-group-hdr">Batch Operations</div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">Batch Node Manager</div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px">
+        <div style="font-size:13px;font-weight:500;margin-bottom:8px;color:var(--green)">Bulk Create</div>
+        <div style="font-size:11px;color:var(--text-dim);margin-bottom:6px">CSV: label,type,namespace,summary,content</div>
+        <textarea id="batch-csv" rows="4" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:12px;font-family:monospace;resize:vertical;margin-bottom:6px" placeholder="My Node,fact,global,Summary,Content&#10;Another Node,decision,project-x,Summary,Details"></textarea>
+        <div class="tool-actions">
+          <input type="text" id="batch-default-ns" value="global" style="width:120px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px">
+          <button onclick="bulkCreatePreview()" style="background:var(--accent);color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Preview</button>
+          <button onclick="bulkCreateAll()" style="background:transparent;border:1px solid var(--green);color:var(--green);padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Create All</button>
+          <span id="batch-create-status" style="font-size:11px;color:var(--text-dim)"></span>
+        </div>
+        <div id="batch-create-preview" style="margin-top:8px;font-size:11px;color:var(--text-dim);display:none"></div>
+        <div id="batch-create-progress" style="margin-top:6px;display:none">
+          <div style="background:var(--border);border-radius:4px;height:5px;overflow:hidden">
+            <div id="batch-create-bar" style="background:var(--green);height:100%;width:0%;transition:width 0.2s"></div>
+          </div>
+          <div id="batch-create-progress-text" style="font-size:10px;color:var(--text-dim);margin-top:3px"></div>
+        </div>
+      </div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:14px">
+        <div style="font-size:13px;font-weight:500;margin-bottom:8px;color:var(--red)">Bulk Delete</div>
+        <div class="tool-actions" style="margin-bottom:6px">
+          <input type="text" id="batch-del-ns" placeholder="Namespace" style="width:130px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px">
+          <select id="batch-del-type" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px">
+            <option value="">All types</option><option value="project">Project</option><option value="decision">Decision</option><option value="fact">Fact</option><option value="preference">Preference</option><option value="problem">Problem</option><option value="advice">Advice</option><option value="person">Person</option><option value="topic">Topic</option><option value="event">Event</option><option value="concept">Concept</option>
+          </select>
+        </div>
+        <div class="tool-actions">
+          <button onclick="bulkDeletePreview()" style="background:var(--accent);color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Preview</button>
+          <button onclick="bulkDeleteAll()" style="background:transparent;border:1px solid var(--red);color:var(--red);padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Delete All</button>
+          <span id="batch-del-status" style="font-size:11px;color:var(--text-dim)"></span>
+        </div>
+        <div id="batch-del-preview" style="margin-top:8px;font-size:11px;color:var(--text-dim);display:none"></div>
+        <div id="batch-del-progress" style="margin-top:6px;display:none">
+          <div style="background:var(--border);border-radius:4px;height:5px;overflow:hidden">
+            <div id="batch-del-bar" style="background:var(--red);height:100%;width:0%;transition:width 0.2s"></div>
+          </div>
+          <div id="batch-del-progress-text" style="font-size:10px;color:var(--text-dim);margin-top:3px"></div>
+        </div>
+      </div>
+    </div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">Edge Creator</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <div style="flex:1;min-width:200px">
+          <label style="font-size:11px;color:var(--text-dim)">Source</label>
+          <input type="text" id="ec-source-search" placeholder="Search source..." oninput="searchSourceNodes()" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px">
+          <input type="hidden" id="ec-source-id">
+          <div class="dropdown-results" id="ec-source-results"></div>
+        </div>
+        <div style="flex:1;min-width:200px">
+          <label style="font-size:11px;color:var(--text-dim)">Target</label>
+          <input type="text" id="ec-target-search" placeholder="Search target..." oninput="searchTargetNodes()" style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px">
+          <input type="hidden" id="ec-target-id">
+          <div class="dropdown-results" id="ec-target-results"></div>
+        </div>
+      </div>
+      <div class="tool-actions">
+        <select id="ec-edge-type" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px">
+          <option value="contains">contains</option><option value="relates_to">relates_to</option><option value="supports">supports</option><option value="contradicts">contradicts</option><option value="decided_by">decided_by</option><option value="depends_on">depends_on</option><option value="mentions">mentions</option>
+        </select>
+        <label style="font-size:12px;color:var(--text-dim)">Weight: <span id="ec-weight-val">1.0</span></label>
+        <input type="range" id="ec-weight" min="0" max="10" step="0.5" value="1" oninput="document.getElementById('ec-weight-val').textContent=this.value" style="width:100px">
+        <button class="btn" onclick="createEdge()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Create Edge</button>
+      </div>
+      <div class="activity-feed" id="ec-activity"></div>
+    </div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">Bulk Edge Manager</div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:10px">
+        <div style="font-size:13px;font-weight:500;margin-bottom:6px;color:var(--red)">Delete by Type</div>
+        <div class="tool-actions">
+          <select id="bulk-edge-type" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px"><option value="">Select type...</option><option value="contains">contains</option><option value="relates_to">relates_to</option><option value="supports">supports</option><option value="contradicts">contradicts</option><option value="decided_by">decided_by</option><option value="depends_on">depends_on</option><option value="mentions">mentions</option></select>
+          <button onclick="bulkDeleteEdgePreview()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px">Preview</button>
+          <button onclick="bulkDeleteEdges()" style="background:var(--red);color:#fff;border:none;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px">Delete All</button>
+        </div>
+        <div id="bulk-edge-preview" style="margin-top:6px;font-size:11px;color:var(--text-dim)"></div>
+      </div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:14px">
+        <div style="font-size:13px;font-weight:500;margin-bottom:6px;color:var(--green)">Connect Namespaces</div>
+        <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">Create semantic edges between nodes in two namespaces using embedding similarity.</div>
+        <div class="tool-actions" style="margin-bottom:8px">
+          <select id="bulk-connect-source" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px"><option value="">Source NS...</option></select>
+          <span style="font-size:12px;color:var(--text-dim)">→</span>
+          <select id="bulk-connect-target" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px"><option value="">Target NS...</option></select>
+        </div>
+        <div class="tool-actions" style="margin-bottom:8px">
+          <label style="font-size:11px;color:var(--text-dim)">Top matches:</label>
+          <input type="number" id="bulk-connect-limit" value="3" min="1" max="10" style="width:45px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px 6px;border-radius:6px;font-size:12px">
+          <label style="font-size:11px;color:var(--text-dim)">Threshold:</label>
+          <input type="number" id="bulk-connect-threshold" value="0.70" min="0.1" max="1.0" step="0.05" style="width:55px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px 6px;border-radius:6px;font-size:12px">
+        </div>
+        <div class="tool-actions">
+          <button onclick="connectNamespacesPreview()" style="background:var(--accent);color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Preview</button>
+          <button onclick="connectNamespacesRun()" style="background:var(--green);color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Connect</button>
+          <span id="bulk-connect-status" style="font-size:11px;color:var(--text-dim)"></span>
+        </div>
+        <div id="bulk-connect-preview" style="margin-top:8px;font-size:11px;color:var(--text-dim);display:none"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DATA QUALITY -->
+  <div class="tools-group">
+    <div class="tools-group-hdr">Data Quality</div>
+    <div class="tool-card">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">
+        <div class="tool-card-hdr" style="margin-bottom:0">Data Quality Analyzer</div>
+        <div style="margin-left:auto">
+          <button onclick="runQualityAnalysis()" style="background:var(--accent);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px" id="dqa-run-btn">Run Analysis</button>
+        </div>
+      </div>
+
+      <div id="dqa-progress" style="display:none;margin-bottom:12px;">
+        <div style="display:flex;align-items:center;gap:8px;color:var(--text-dim);font-size:13px;">
+          <span style="display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:dqa-spin 0.8s linear infinite;"></span>
+          <span id="dqa-progress-text">Scanning graph...</span>
+        </div>
+      </div>
+
+      <div id="dqa-score" style="display:none;margin-bottom:16px;">
+        <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+          <div>
+            <div class="dqa-score-big dqa-score-bad" id="dqa-score-value">24%</div>
+            <div style="font-size:12px;color:var(--text-dim);margin-top:4px" id="dqa-score-label">Quality Score</div>
+          </div>
+          <div style="flex:1;min-width:200px">
+            <div class="dqa-bar-bg"><div class="dqa-bar-fill" id="dqa-score-bar"></div></div>
+            <div style="font-size:12px;color:var(--text-dim);margin-top:6px" id="dqa-score-detail"></div>
+          </div>
+          <div>
+            <button onclick="dqaQuickFix()" style="background:var(--green);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;margin-bottom:6px;display:block;width:100%">Quick Fix All</button>
+            <button onclick="fixSelected()" style="background:var(--red);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;display:none;width:100%" id="dqa-fix-btn">Fix Selected (0)</button>
+            <button onclick="dqaSelectAll()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;margin-top:6px;display:none;width:100%" id="dqa-selectall-btn">Select All</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="dqa-results" style="display:none;"></div>
+    </div>
+  </div>
+
+  <!-- NAMESPACE MANAGER -->
+  <div class="tools-group">
+    <div class="tools-group-hdr">Namespace Manager</div>
+    <div class="tool-card">
+      <div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border);">
+        <div style="font-size:13px;font-weight:500;margin-bottom:6px;">Rename Namespace</div>
+        <div class="tool-actions">
+          <select id="ns-rename-source" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px;min-width:140px"><option value="">Select namespace...</option></select>
+          <input type="text" id="ns-rename-new" placeholder="New name" style="flex:1;min-width:120px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px">
+          <button onclick="renameNamespace()" style="background:var(--accent);color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Rename</button>
+        </div>
+        <div id="ns-rename-status" style="margin-top:4px;font-size:11px;color:var(--text-dim)"></div>
+      </div>
+      <div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border);">
+        <div style="font-size:13px;font-weight:500;margin-bottom:6px;">Move Nodes</div>
+        <div class="tool-actions" style="margin-bottom:6px">
+          <select id="ns-move-source" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px;min-width:120px"><option value="">Namespace...</option></select>
+          <select id="ns-move-type" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px;min-width:100px"><option value="">All types</option><option value="project">Project</option><option value="decision">Decision</option><option value="fact">Fact</option><option value="preference">Preference</option><option value="problem">Problem</option><option value="advice">Advice</option><option value="person">Person</option><option value="topic">Topic</option><option value="event">Event</option><option value="concept">Concept</option></select>
+          <input type="text" id="ns-move-target" placeholder="Target namespace" style="flex:1;min-width:120px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px">
+        </div>
+        <div class="tool-actions">
+          <button onclick="moveNodesPreview()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px">Preview</button>
+          <button onclick="moveNodesAll()" id="ns-move-btn" disabled style="background:var(--accent);color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px;opacity:0.5">Move All</button>
+        </div>
+        <div id="ns-move-status" style="margin-top:4px;font-size:11px;color:var(--text-dim)"></div>
+      </div>
+      <div>
+        <div style="font-size:13px;font-weight:500;margin-bottom:6px;">Merge Namespaces</div>
+        <div class="tool-actions" style="margin-bottom:6px">
+          <select id="ns-merge-a" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px;min-width:120px"><option value="">Namespace A...</option></select>
+          <select id="ns-merge-b" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px;min-width:120px"><option value="">Namespace B...</option></select>
+          <input type="text" id="ns-merge-target" placeholder="Merged name" style="flex:1;min-width:120px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px">
+        </div>
+        <div class="tool-actions">
+          <button onclick="mergeNamespacesPreview()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px">Preview</button>
+          <button onclick="mergeNamespaces()" id="ns-merge-btn" disabled style="background:var(--accent);color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px;opacity:0.5">Merge</button>
+        </div>
+        <div id="ns-merge-status" style="margin-top:4px;font-size:11px;color:var(--text-dim)"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- VERSION MANAGER -->
+  <div class="tools-group">
+    <div class="tools-group-hdr">Version Manager</div>
+    <div class="tool-card">
+      <div style="margin-bottom:16px">
+        <div style="font-size:13px;font-weight:500;margin-bottom:8px;color:var(--accent)">Version Browser</div>
+        <div class="tool-actions" style="margin-bottom:10px">
+          <input type="text" id="vm-search-input" placeholder="Search node by label..." style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:12px" onkeydown="if(event.key==='Enter')searchNodeForVersions()">
+          <button onclick="searchNodeForVersions()" style="background:var(--accent);color:#fff;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px">Search</button>
+        </div>
+        <div id="vm-search-results" style="margin-bottom:10px"></div>
+        <div id="vm-node-info" style="display:none;margin-bottom:10px;padding:10px;background:var(--bg);border-radius:6px;font-size:12px">
+          <strong id="vm-node-label"></strong>
+          <span id="vm-node-type" class="tag" style="margin-left:6px;font-size:10px"></span>
+          <span id="vm-node-ns" style="margin-left:6px;color:var(--text-dim);font-size:11px"></span>
+        </div>
+        <div id="vm-history" style="margin-bottom:10px"></div>
+        <div id="vm-diff-panel" style="display:none;margin-top:10px">
+          <div style="font-size:12px;font-weight:500;margin-bottom:6px;color:var(--text-dim)">Content Diff</div>
+          <div style="display:flex;gap:6px">
+            <div style="flex:1">
+              <div style="font-size:10px;color:var(--text-dim);margin-bottom:3px" id="vm-diff-left-label">Previous</div>
+              <pre id="vm-diff-left" style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:11px;white-space:pre-wrap;max-height:250px;overflow-y:auto;min-height:50px"></pre>
+            </div>
+            <div style="flex:1">
+              <div style="font-size:10px;color:var(--text-dim);margin-bottom:3px" id="vm-diff-right-label">Current</div>
+              <pre id="vm-diff-right" style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:11px;white-space:pre-wrap;max-height:250px;overflow-y:auto;min-height:50px"></pre>
+            </div>
+          </div>
+          <div id="vm-diff-highlighted" style="margin-top:6px"></div>
+        </div>
+      </div>
+      <div style="border-top:1px solid var(--border);padding-top:14px">
+        <div style="font-size:13px;font-weight:500;margin-bottom:8px;color:var(--accent)">Bulk Version Operations</div>
+        <div class="tool-actions" style="margin-bottom:10px">
+          <button onclick="findStaleNodes()" style="background:var(--accent);color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Find Stale Nodes (version > 5)</button>
+        </div>
+        <div id="vm-stale-results" style="margin-bottom:10px"></div>
+        <div id="vm-stale-actions" style="display:none;margin-bottom:10px">
+          <button onclick="compactSelectedStale()" style="background:var(--red);color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Compact Selected</button>
+          <span id="vm-stale-count" style="margin-left:6px;font-size:11px;color:var(--text-dim)"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SYSTEM -->
+  <div class="tools-group">
+    <div class="tools-group-hdr">System</div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">System Health</div>
+      <div id="healthDetail" style="font-size:12px;color:var(--text-dim)"></div>
+    </div>
+  </div>
+</div>
+
+<!-- GRAPH TAB -->
+<div class="container tab-content" id="tab-graph">
+  <div class="section" style="margin:0"><div style="padding:10px 14px;border-bottom:1px solid #16162a;display:flex;gap:10px;align-items:center">
+    <label style="font-size:11px;color:#666">NS:</label>
+    <select id="graphNS" onchange="loadGraph()" style="width:auto;padding:3px 6px"><option value="">All</option></select>
+    <button class="btn btn-sm" onclick="loadGraph()">Refresh</button>
+    <button class="btn btn-sm" onclick="graphFit()">Fit</button>
+    <span style="color:#444;font-size:10px;margin-left:auto" id="graphInfo">Loading...</span>
+  </div><div style="position:relative"><div id="graphContainer" style="width:100%;height:calc(100vh - 140px);min-height:400px;background:#08080d"></div></div></div>
+</div>
+
+<!-- BRAIN 3D TAB -->
+<div class="tab-content" id="tab-brain" style="padding:0;margin:0">
+  <iframe id="brainFrame" src="" style="width:100%;height:calc(100vh - 50px);border:none;border-radius:6px;display:block"></iframe>
+</div>
+
+<!-- OBSERVER TAB -->
+<div class="container tab-content" id="tab-observer">
+  <div class="section"><div class="section-hdr"><h2>Causal Trace</h2></div>
+    <div style="padding:12px">
+      <div class="form-row">
+        <input type="text" id="observer-seed" placeholder="Node ID or search query...">
+        <button class="btn" id="observer-trace-btn">Trace Dependence</button>
+      </div>
+    </div>
+  </div>
+  <div id="observer-stats"></div>
+  <div class="section" style="padding:14px">
+    <div id="observer-graph" style="width:100%;height:500px;background:#08080d;border-radius:6px;border:1px solid #16162a"></div>
+  </div>
+  <div id="observer-blindspots"></div>
+</div>
+
+<!-- Modals -->
+<div id="nodeDetail" class="modal"><div class="modal-box">
+  <div style="padding:14px;border-bottom:1px solid #16162a;display:flex;justify-content:space-between;align-items:center">
+    <h2 id="detailLabel" style="font-size:15px;color:#00ff88"></h2>
+    <button class="btn btn-red btn-sm" onclick="closeDetail()">Close</button></div>
+  <div style="padding:14px"><div id="detailMeta" style="margin-bottom:12px;font-size:12px"></div><div id="detailContent" style="margin-bottom:12px;font-size:12px;line-height:1.5;color:#aaa"></div>
+    <h3 style="font-size:10px;color:#555;text-transform:uppercase;margin-bottom:6px">Connections</h3><div id="detailNeighbors"></div>
+    <h3 style="font-size:10px;color:#555;text-transform:uppercase;margin:12px 0 6px">Suggested Edges</h3><div id="detailSuggestions"></div>
+    <h3 style="font-size:10px;color:#555;text-transform:uppercase;margin:12px 0 6px">History</h3><div id="detailHistory"></div></div>
+</div></div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+const API='/api/v1';
+let searchMode='hybrid',graphNetwork=null,graphData={nodes:[],edges:[]},nodesOffset=0,edgesOffset=0,activityLog=[];
+let visLoaded=false,lastDashNodeCount=0;
+let pollHealthId=null,pollOllamaId=null,pollNodeCountId=null;
+
+const TC={project:{bg:'#00ff88',bd:'#00cc66'},decision:{bg:'#0088ff',bd:'#0066cc'},fact:{bg:'#ffaa00',bd:'#cc8800'},preference:{bg:'#ff00ff',bd:'#cc00cc'},problem:{bg:'#ff4444',bd:'#cc2222'},advice:{bg:'#88ff00',bd:'#66cc00'},topic:{bg:'#8888ff',bd:'#6666cc'},person:{bg:'#ff8800',bd:'#cc6600'},event:{bg:'#00ffff',bd:'#00cccc'},concept:{bg:'#aaaaaa',bd:'#888888'},agent:{bg:'#ff88cc',bd:'#cc66aa'},question:{bg:'#ffaa44',bd:'#cc8800'}};
+const NS_COLORS=['#00ff88','#0088ff','#ffaa00','#ff00ff','#ff4444','#88ff00','#00ffff','#ff8800'];
+
+async function api(path,opts={}){try{const r=await fetch(API+path,{headers:{'Content-Type':'application/json',...opts.headers},...opts});if(!r.ok){console.error('API',r.status,path);return null}return await r.json()}catch(e){console.error('API error:',path,e.message);return null}}
+function tagCls(t){return'tag tag-'+(t in TC?t:'default')}
+function esc(s){return s?s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'):''}
+function tagBg(t){return(TC[t]||TC.concept).bg}
+function hl(text,query){if(!query||!text)return esc(text);const q=query.toLowerCase();const idx=text.toLowerCase().indexOf(q);if(idx<0)return esc(text);return esc(text.substring(0,idx))+'<span class="highlight">'+esc(text.substring(idx,idx+q.length))+'</span>'+esc(text.substring(idx+q.length))}
+
+// === Tabs ===
+let tabLoaded = { dashboard: true, questions: false, edges: false, tools: true, graph: false, brain: false, observer: false };
+function switchTab(name){
+  document.querySelectorAll('.tab').forEach((t,i)=>{t.classList.toggle('active',['dashboard','questions','edges','tools','graph','brain','observer'][i]===name)});
+  document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  // Unified lazy-load: load once on first switch
+  if(!tabLoaded[name]){
+    tabLoaded[name]=true;
+    if(name==='graph')loadGraph();
+    if(name==='brain'){const f=document.getElementById('brainFrame');if(!f.dataset.loaded){f.src='/graph-view?embed=1';f.dataset.loaded='1'}f.style.width='100%';f.style.height=(window.innerHeight-60)+'px';}
+    if(name==='questions')loadQuestions();
+    if(name==='edges')loadEdges();
+  }
+}
+
+// === Health ===
+async function loadHealth(){
+  const h=await api('/health');if(!h)return;
+  document.getElementById('healthStatus').innerHTML=`<span class="${h.postgres==='connected'?'ok':'err'}">PG</span> | <span class="${h.ollama==='connected'?'ok':'err'}">Ollama</span> | v${h.version}`;
+  document.getElementById('healthDetail').innerHTML=`Postgres: <span class="${h.postgres==='connected'?'ok':'err'}">${h.postgres}</span><br>Ollama: <span class="${h.ollama==='connected'?'ok':'err'}">${h.ollama}</span> (${h.embedding_model})<br>Version: ${h.version}`;
+}
+
+// === Ollama Stats ===
+async function loadOllamaStats(){
+  try{
+    const s=await api('/embeddings/stats');
+    if(!s)return;
+    const q=document.getElementById('ollamaQueue');
+    const a=document.getElementById('ollamaActive');
+    const p=document.getElementById('ollamaPending');
+    const l=document.getElementById('ollamaLatency');
+    const btn=document.getElementById('ollamaEnqueueBtn');
+    q.textContent=`q:${s.queued}`;
+    a.textContent=`act:${s.active}`;
+    l.textContent=`lat:${Math.round(s.avg_latency_ms)}ms`;
+    // Show pending nodes count if there are nodes without embeddings
+    if(s.pending_nodes > 0){
+      p.style.display='inline';
+      p.textContent=`pend:${s.pending_nodes}`;
+      btn.style.display='inline-block';
+    } else {
+      p.style.display='none';
+      btn.style.display='none';
+    }
+    // Color code: green if healthy, yellow if queued, red if pending nodes or errors
+    const color = s.pending_nodes > 0 ? '#ff8800' : s.queued > 3 ? '#ff8800' : s.active > 0 ? '#00ff88' : '#555';
+    q.style.color=color; a.style.color=color; p.style.color='#ff8800'; l.style.color=s.avg_latency_ms > 500 ? '#ff4444' : '#555';
+  }catch(e){}
+}
+
+async function enqueueAllNodes(){
+  const btn=document.getElementById('ollamaEnqueueBtn');
+  btn.textContent='...';
+  btn.disabled=true;
+  try{
+    const r=await api('/embeddings/enqueue-all',{method:'POST'});
+    if(r){
+      toast(`Enqueued ${r.enqueued} nodes for embedding`);
+      loadOllamaStats();
+    }else{
+      toast('Failed to enqueue nodes',true);
+    }
+  }catch(e){
+    toast('Error: '+e.message,true);
+  }finally{
+    btn.textContent='Enqueue';
+    btn.disabled=false;
+  }
+}
+
+// === Stats ===
+async function loadStats(){
+  const t0=performance.now();
+  // Accurate counts via dedicated endpoints (not capped at 50/200)
+  const [countData, edgeCountData] = await Promise.all([
+    api('/nodes?count=true'),
+    api('/edges?count=true')
+  ]);
+  const totalNodes=countData&&typeof countData.count==='number'?countData.count:0;
+  const totalEdges=edgeCountData&&typeof edgeCountData.count==='number'?edgeCountData.count:0;
+  // Namespace distribution from graph (top 200 nodes by importance)
+  const g=await api('/graph');
+  const lat=Math.round(performance.now()-t0);
+  document.getElementById('statLat').textContent=lat;
+  if(!g)return;
+  const nsMap={};(g.nodes||[]).forEach(n=>{nsMap[n.namespace]=(nsMap[n.namespace]||0)+1});
+  document.getElementById('statNodes').textContent=totalNodes;
+  document.getElementById('statNodesSub').textContent=totalNodes>g.nodes.length?`top ${g.nodes.length} shown`:'';
+  document.getElementById('statEdges').textContent=totalEdges;
+  document.getElementById('statEdgesSub').textContent=totalEdges>(g.edges||[]).length?`top ${(g.edges||[]).length} shown`:'';
+  document.getElementById('statNS').textContent=Object.keys(nsMap).length;
+  const maxN=Math.max(...Object.values(nsMap),1);
+  const nsColors={};Object.keys(nsMap).forEach((ns,i)=>{nsColors[ns]=NS_COLORS[i%NS_COLORS.length]});
+  document.getElementById('nsBars').innerHTML=Object.entries(nsMap).sort((a,b)=>b[1]-a[1]).map(([ns,cnt])=>{
+    const c=nsColors[ns];const pct=(cnt/maxN*100).toFixed(0);
+    return`<div class="ns-bar"><div class="dot" style="background:${c};box-shadow:0 0 6px ${c}"></div><div class="name">${esc(ns)}</div><div class="bar-bg"><div class="bar-fill" style="width:${pct}%;background:${c}"></div></div><div class="cnt">${cnt}</div></div>`
+  }).join('');
+  ['filterNS','graphNS','snapNS','connectNS','exportNS','edgeNSFilter','bulk-connect-source','bulk-connect-target'].forEach(id=>{
+    const el=document.getElementById(id);if(!el)return;const cur=el.value;
+    el.innerHTML='<option value="">All</option>';
+    Object.keys(nsMap).forEach(ns=>{el.innerHTML+=`<option value="${ns}"${ns===cur?' selected':''}>${ns}</option>`})
+  });
+}
+
+// === Activity Feed ===
+function addFeed(type,text){
+  const now=new Date().toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  activityLog.unshift({time:now,type,text});if(activityLog.length>30)activityLog.pop();
+  const colors={create:'#88ff00',delete:'#ff4444',search:'#ffaa00',ask:'#0088ff',snapshot:'#ff00ff',connect:'#0088ff',purge:'#ff4444',export:'#00ffff',import:'#ffaa00'};
+  const c=colors[type]||'#666';
+  document.getElementById('activityFeed').innerHTML=activityLog.map(i=>{const cc=colors[i.type]||'#666';return`<div class="feed-item"><span class="fi-badge" style="background:${cc}18;color:${cc}">${i.type}</span><span class="fi-text">${esc(i.text)}</span><span class="fi-time">${i.time}</span></div>`}).join('');
+  document.getElementById('feedCount').textContent=activityLog.length+' events';
+}
+
+// === Nodes Table ===
+async function loadNodes(reset=true){
+  if(reset)nodesOffset=0;
+  const ns=document.getElementById('filterNS').value;
+  const type=document.getElementById('filterType').value;
+  let url=`/nodes?limit=50&offset=${nodesOffset}`;
+  if(ns)url+=`&namespace=${ns}`;if(type)url+=`&type=${type}`;
+  const nodes=await api(url);
+  const tbody=document.getElementById('nodesTable');
+  if(!nodes||!nodes.length){tbody.innerHTML='<tr><td colspan="8" style="color:#444;text-align:center">No nodes</td></tr>';document.getElementById('loadMoreBtn').style.display='none';return}
+  if(reset)tbody.innerHTML='';
+  tbody.innerHTML+=nodes.map(n=>`<tr>
+    <td><span style="background:${tagBg(n.node_type)}18;color:${tagBg(n.node_type)};padding:1px 6px;border-radius:3px;font-size:10px">${n.node_type}</span></td>
+    <td><a href="#" onclick="showDetail('${n.id}');return false" style="color:#00ff88;text-decoration:none">${esc(n.label)}</a></td>
+    <td style="color:#555">${esc(n.namespace)}</td>
+    <td style="color:#888;font-size:11px">${esc((n.summary||n.content||'').substring(0,40))}</td>
+    <td style="color:#444">v${n.version}</td>
+    <td style="color:#444">${n.importance.toFixed(2)}</td>
+    <td style="color:#444">${n.access_count}</td>
+    <td><button class="btn btn-red btn-sm" onclick="deleteNode('${n.id}')">Del</button></td>
+  </tr>`).join('');
+  document.getElementById('loadMoreBtn').style.display=nodes.length>=50?'inline-block':'none';
+}
+function loadMoreNodes(){nodesOffset+=50;loadNodes(false)}
+
+async function createNode(){
+  const label=document.getElementById('nodeLabel').value.trim();
+  if(!label){toast('Label required',true);return}
+  const body={label,node_type:document.getElementById('nodeType').value,namespace:document.getElementById('nodeNamespace').value||'hermes',content:document.getElementById('nodeContent').value,summary:document.getElementById('nodeSummary').value};
+  const n=await api('/nodes',{method:'POST',body:JSON.stringify(body)});
+  if(n){toast('Created: '+n.label);addFeed('create',n.label);document.getElementById('nodeLabel').value='';document.getElementById('nodeContent').value='';document.getElementById('nodeSummary').value='';loadNodes();loadStats()}
+}
+async function deleteNode(id){
+  if(!confirm('Soft-delete?'))return;
+  await api('/nodes/'+id,{method:'DELETE'});toast('Deleted');addFeed('delete',id.substring(0,8));loadNodes();loadStats()
+}
+
+// === Search with highlighting ===
+let lastQuery='';
+function toggleSearchMode(){searchMode=searchMode==='hybrid'?'fts':'hybrid';document.getElementById('searchModeLabel').textContent=searchMode.toUpperCase()}
+async function doSearch(){
+  const q=document.getElementById('searchQuery').value.trim();if(!q)return;lastQuery=q;
+  addFeed('search',q.substring(0,30));
+  const results=searchMode==='fts'?await api('/search?q='+encodeURIComponent(q)):await api('/search/hybrid',{method:'POST',body:JSON.stringify({query:q,limit:10})});
+  const el=document.getElementById('searchResults');
+  if(!results||!results.length){el.innerHTML='<div style="padding:12px;color:#444">No results</div>';return}
+  el.innerHTML=results.map(r=>`<div style="padding:6px 14px;border-bottom:1px solid #ffffff06">
+    <span style="background:${tagBg(r.node_type)}18;color:${tagBg(r.node_type)};padding:1px 6px;border-radius:3px;font-size:10px">${r.node_type}</span>
+    <a href="#" onclick="showDetail('${r.node_id}');return false" style="color:#00ff88;text-decoration:none;margin-left:6px">${hl(r.label,q)}</a>
+    <span style="color:#444;margin-left:6px;font-size:10px">${((r.rrf_score||r.fts_score)||0).toFixed(3)}</span>
+    <span style="color:#555;margin-left:6px;font-size:10px">[${r.namespace||'?'}]</span>
+    <div style="color:#666;font-size:11px;margin-top:2px">${hl((r.content||'').substring(0,100),q)}</div>
+  </div>`).join('');
+}
+
+// === Snapshot ===
+async function loadSnapshot(){
+  const ns=document.getElementById('snapNS').value;
+  let url='/snapshot';if(ns)url+='?namespace='+ns;
+  const s=await api(url);
+  const el=document.getElementById('snapshotContent');
+  if(s&&s.content){let c=s.content;if(c.length>5000)c=c.substring(0,5000)+'\n... [truncated]';el.textContent=c+'\n\n('+s.token_count+' tokens)'}else el.textContent='No snapshot yet.'
+}
+async function rebuildSnapshot(){
+  const r=await api('/snapshot/rebuild',{method:'POST',body:'{}'});
+  if(r){toast('Snapshot rebuilt');addFeed('snapshot','Rebuilt: '+r.token_count+' tokens');loadSnapshot()}
+}
+
+// === Node Detail ===
+async function showDetail(id){
+  const n=await api('/nodes/'+id);if(!n)return;
+  document.getElementById('detailLabel').textContent=n.label;
+  document.getElementById('detailMeta').innerHTML=`<span style="background:${tagBg(n.node_type)}18;color:${tagBg(n.node_type)};padding:1px 6px;border-radius:3px;font-size:10px">${n.node_type}</span> <span style="color:#555">${n.namespace}</span> <span style="color:#555">v${n.version}</span> <span style="color:#444">| imp:${n.importance.toFixed(2)} | accessed ${n.access_count}x</span> <span style="color:#333">| ${n.created_at}</span>`;
+  document.getElementById('detailContent').textContent=n.content||'No content';
+  const nb=await api('/nodes/'+id+'/neighbors');
+  document.getElementById('detailNeighbors').innerHTML=nb&&nb.length?nb.map(x=>`<div style="padding:4px 0;border-bottom:1px solid #ffffff06;font-size:11px"><span style="color:#555">${x.edge_type}</span> → <a href="#" onclick="showDetail('${x.id}');return false" style="color:#00ff88;text-decoration:none"><span style="background:${tagBg(x.node_type)}18;color:${tagBg(x.node_type)};padding:1px 4px;border-radius:2px;font-size:9px">${x.node_type}</span> ${esc(x.label)}</a></div>`).join(''):'<div style="color:#444;font-size:11px">No connections</div>';
+  // Load suggestions
+  const suggestions = await api('/nodes/' + id + '/suggestions?limit=10');
+  const sugEl = document.getElementById('detailSuggestions');
+  if (suggestions && suggestions.length > 0) {
+    sugEl.innerHTML = suggestions.map(s => `
+      <div style="padding:4px 0;border-bottom:1px solid #ffffff06;font-size:11px;display:flex;align-items:center;gap:8px">
+        <a href="#" onclick="showDetail('${s.id}');return false" style="color:#00ff88;text-decoration:none;flex:1">
+          <span style="background:${tagBg(s.node_type)}18;color:${tagBg(s.node_type)};padding:1px 4px;border-radius:2px;font-size:9px">${s.node_type}</span>
+          ${esc(s.label)} <span style="color:#555;font-size:10px">${esc(s.namespace)}</span>
+        </a>
+        <span style="color:#444;font-size:10px">${(s.similarity * 100).toFixed(0)}%</span>
+        <button class="btn btn-sm" onclick="createSuggestionEdge('${id}', '${s.id}');return false" style="padding:2px 8px;font-size:10px;background:var(--green);color:#fff;border:none;border-radius:4px;cursor:pointer">+Edge</button>
+      </div>
+    `).join('');
+  } else {
+    sugEl.innerHTML = '<div style="color:#444;font-size:11px">No suggestions (embeddings may be pending)</div>';
+  }
+  const hist=await api('/nodes/'+id+'/history');
+  document.getElementById('detailHistory').innerHTML=hist&&hist.length>1?hist.map(h=>`<div style="padding:3px 0;font-size:11px;border-bottom:1px solid #ffffff06">v${h.version}: ${esc((h.content||'').substring(0,50))} <span style="color:#444">${h.valid_to?'superseded':'current'}</span></div>`).join(''):'<div style="color:#444;font-size:11px">v1 only</div>';
+  document.getElementById('nodeDetail').classList.add('show');
+}
+
+async function createSuggestionEdge(sourceId, targetId) {
+  try {
+    const r = await fetch(API + '/edges', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ source_id: sourceId, target_id: targetId, edge_type: 'relates_to', weight: 1.0 })
+    });
+    if (r.ok) {
+      toast('Edge created', 'success');
+      showDetail(sourceId); // refresh to update suggestions
+    } else {
+      toast('Failed to create edge', 'error');
+    }
+  } catch(e) {
+    toast('Error: ' + e.message, 'error');
+  }
+}
+function closeDetail(){document.getElementById('nodeDetail').classList.remove('show')}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDetail()});
+
+// === Questions Tab ===
+async function loadQuestions(){
+  const nodes=await api('/nodes?type=question&limit=100');
+  const tbody=document.getElementById('questionsTable');
+  if(!nodes||!nodes.length){tbody.innerHTML='<tr><td colspan="4" style="color:#444;text-align:center">No unanswered questions</td></tr>';document.getElementById('qCount').textContent='0';return}
+  document.getElementById('qCount').textContent=nodes.length;
+  tbody.innerHTML=nodes.map(n=>`<tr>
+    <td style="color:#aaa">${esc((n.content||'').substring(0,80))}</td>
+    <td style="color:#555">${esc(n.namespace)}</td>
+    <td style="color:#333;font-size:10px">${n.created_at}</td>
+    <td><button class="btn btn-sm" onclick="retrySearch('${esc(n.label.replace('Unanswered: ',''))}')">Retry</button> <button class="btn btn-red btn-sm" onclick="deleteNode('${n.id}');loadQuestions()">Del</button></td>
+  </tr>`).join('');
+}
+async function retrySearch(q){
+  document.getElementById('searchQuery').value=q;
+  switchTab('dashboard');doSearch();
+}
+
+// === Edges Tab ===
+async function loadEdges(reset=true){
+  if(reset)edgesOffset=0;
+  // Load all nodes first for label lookup — include ALL versions via graph
+  const g=await api('/graph');
+  if(!g)return;
+  const nodeMap={};(g.nodes||[]).forEach(n=>{nodeMap[n.id]=n});
+  let edges=g.edges||[];
+  const nsFilter=document.getElementById('edgeNSFilter').value;
+  const typeFilter=document.getElementById('edgeTypeFilter').value;
+  if(typeFilter)edges=edges.filter(e=>e.edge_type===typeFilter);
+  if(nsFilter){
+    const nsNodes=new Set((g.nodes||[]).filter(n=>n.namespace===nsFilter).map(n=>n.id));
+    edges=edges.filter(e=>nsNodes.has(e.source)||nsNodes.has(e.target));
+  }
+  document.getElementById('edgeCount').textContent=edges.length+' edges';
+  const page=edges.slice(edgesOffset,edgesOffset+100);
+  const tbody=document.getElementById('edgesTable');
+  if(reset)tbody.innerHTML='';
+  // Process edges with fallback label lookup
+  for(const e of page){
+    let src=nodeMap[e.source];
+    let tgt=nodeMap[e.target];
+    // Fallback: fetch from API if not in graph
+    if(!src){try{src=await api('/nodes/'+e.source)}catch{}}
+    if(!tgt){try{tgt=await api('/nodes/'+e.target)}catch{}}
+    const srcLabel=src?(src.label||'?').substring(0,30):'[deleted]';
+    const srcNS=src?(src.namespace||'?'):'—';
+    const tgtLabel=tgt?(tgt.label||'?').substring(0,30):'[deleted]';
+    const tgtNS=tgt?(tgt.namespace||'?'):'—';
+    tbody.innerHTML+=`<tr>
+      <td><span style="background:${tagBg('concept')}18;color:#888;padding:1px 6px;border-radius:3px;font-size:10px">${e.edge_type}</span></td>
+      <td><a href="#" onclick="showDetail('${e.source}');return false" style="color:${src?'#00ff88':'#666'};text-decoration:none">${esc(srcLabel)}</a> <span style="color:#444;font-size:10px">${esc(srcNS)}</span></td>
+      <td><a href="#" onclick="showDetail('${e.target}');return false" style="color:${tgt?'#00ff88':'#666'};text-decoration:none">${esc(tgtLabel)}</a> <span style="color:#444;font-size:10px">${esc(tgtNS)}</span></td>
+      <td style="color:#555">${e.weight}</td>
+      <td><button class="btn btn-red btn-sm" onclick="deleteEdge('${e.id}')">Del</button></td>
+    </tr>`;
+  }
+  document.getElementById('edgeLoadMore').style.display=edges.length>edgesOffset+100?'inline-block':'none';
+}
+function loadMoreEdges(){edgesOffset+=100;loadEdges(false)}
+async function deleteEdge(id){if(!confirm('Delete this edge?'))return;await api('/edges/'+id,{method:'DELETE'});toast('Edge deleted');loadEdges()}
+
+// === Tools Tab ===
+async function autoConnect(){
+  const ns=document.getElementById('connectNS').value;
+  document.getElementById('connectResult').innerHTML='<span style="color:#ffaa00">Running...</span>';
+  const r=await api('/nodes/auto-connect?namespace='+ns,{method:'POST'});
+  if(r){
+    document.getElementById('connectResult').innerHTML=`<span style="color:#00ff88">Created ${r.edges_created} edges from ${r.nodes_processed} nodes</span>`;
+    addFeed('connect',`${r.edges_created} new edges`);
+    loadStats();
+  }else{document.getElementById('connectResult').innerHTML='<span style="color:#ff4444">Failed</span>'}
+}
+async function cleanupEdges(){
+  document.getElementById('cleanupResult').innerHTML='<span style="color:#ffaa00">Cleaning...</span>';
+  const r=await api('/edges/cleanup',{method:'POST'});
+  if(r){
+    document.getElementById('cleanupResult').innerHTML=`<span style="color:#00ff88">Deleted ${r.deleted} orphan edges</span>`;
+    addFeed('purge',`${r.deleted} orphan edges removed`);
+    loadStats();
+  }else{document.getElementById('cleanupResult').innerHTML='<span style="color:#ff4444">Failed</span>'}
+}
+async function purgeVersions(){
+  const days=document.getElementById('purgeDays').value||7;
+  document.getElementById('purgeResult').innerHTML='<span style="color:#ffaa00">Purging...</span>';
+  const r=await api('/nodes/purge?older_than_days='+days,{method:'DELETE'});
+  if(r){
+    document.getElementById('purgeResult').innerHTML=`<span style="color:#00ff88">Purged ${r.purged} old versions (>${r.days} days)</span>`;
+    addFeed('purge',`${r.purged} versions purged`);
+    loadStats();
+  }else{document.getElementById('purgeResult').innerHTML='<span style="color:#ff4444">Failed</span>'}
+}
+async function exportGraph(){
+  const ns=document.getElementById('exportNS').value;
+  const r=await api('/export?namespace='+ns);
+  if(r){
+    const blob=new Blob([JSON.stringify(r,null,2)],{type:'application/json'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');a.href=url;a.download='mindbank-export.json';document.body.appendChild(a);a.click();document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    addFeed('export',`${r.nodes.length} nodes, ${r.edges.length} edges`);
+    toast('Exported!');
+  }else toast('Export failed',true);
+}
+async function importGraph(){
+  const raw=document.getElementById('importJSON').value.trim();
+  if(!raw){toast('Paste JSON first',true);return}
+  try{
+    const data=JSON.parse(raw);
+    const r=await api('/import',{method:'POST',body:JSON.stringify(data)});
+    if(r){
+      document.getElementById('importResult').innerHTML=`<span style="color:#00ff88">Imported ${r.nodes_imported} nodes, ${r.edges_imported} edges</span>`;
+      addFeed('import',`${r.nodes_imported} nodes, ${r.edges_imported} edges`);
+      loadStats();loadGraph();
+    }
+  }catch(e){toast('Invalid JSON: '+e.message,true)}
+}
+
+// === Obsidian Import ===
+let obsidianPollTimer=null;
+let obsidianPollCount=0;
+const OBSIDIAN_MAX_POLLS=120; // 3 minutes at 1.5s interval
+
+async function runObsidianImport(){
+  const vault=document.getElementById('obsidianVault').value.trim();
+  if(!vault){toast('Enter vault path',true);return}
+  const ns=document.getElementById('obsidianNS').value.trim();
+  const dryRun=document.getElementById('obsidianDryRun').checked;
+  const statusEl=document.getElementById('obsidianStatus');
+  const outputEl=document.getElementById('obsidianOutput');
+
+  statusEl.innerHTML='<span style="color:#ffaa00">Starting import...</span>';
+  outputEl.style.display='block';
+  outputEl.textContent='';
+  obsidianPollCount=0;
+
+  try{
+    const r=await api('/import/obsidian',{
+      method:'POST',
+      body:JSON.stringify({vault_path:vault,namespace:ns||undefined,dry_run:dryRun})
+    });
+    if(!r){statusEl.innerHTML='<span style="color:#ff4444">Failed to start import</span>';return}
+    if(r.error){statusEl.innerHTML=`<span style="color:#ff4444">${esc(r.error)}</span>`;return}
+    statusEl.innerHTML=`<span style="color:#ffaa00">Running (job: ${esc(r.job_id)})...</span>`;
+    // Poll for status
+    if(obsidianPollTimer)clearInterval(obsidianPollTimer);
+    obsidianPollTimer=setInterval(pollObsidianStatus,1500);
+  }catch(e){statusEl.innerHTML=`<span style="color:#ff4444">${esc(e.message)}</span>`}
+}
+
+async function pollObsidianStatus(){
+  obsidianPollCount++;
+  if(obsidianPollCount>OBSIDIAN_MAX_POLLS){
+    clearInterval(obsidianPollTimer);obsidianPollTimer=null;
+    const statusEl=document.getElementById('obsidianStatus');
+    statusEl.innerHTML='<span style="color:#ff4444">Timed out after 3 minutes</span>';
+    return;
+  }
+  try{
+    const r=await api('/import/obsidian/status');
+    if(!r||r.status==='idle'){
+      clearInterval(obsidianPollTimer);obsidianPollTimer=null;return;
+    }
+    const outputEl=document.getElementById('obsidianOutput');
+    const statusEl=document.getElementById('obsidianStatus');
+    if(r.output&&r.output.length>0){
+      outputEl.textContent=r.output.join('\n');
+      outputEl.scrollTop=outputEl.scrollHeight;
+    }
+    if(r.status==='running'){
+      statusEl.innerHTML='<span style="color:#ffaa00">Running...</span>';
+    }else if(r.status==='success'){
+      clearInterval(obsidianPollTimer);obsidianPollTimer=null;
+      const s=r.summary||{};
+      statusEl.innerHTML=`<span style="color:#00ff88">Done! ${s.notes_created||0} notes, ${s.topics_created||0} topics, ${s.edges_created||0} edges created</span>`;
+      loadStats();loadNodes();
+    }else if(r.status==='error'){
+      clearInterval(obsidianPollTimer);obsidianPollTimer=null;
+      statusEl.innerHTML='<span style="color:#ff4444">Import failed — check output below</span>';
+    }
+  }catch(e){/* ignore poll errors */}
+}
+
+// === Graph 2D ===
+async function loadVisNetwork(){
+  if(visLoaded)return;
+  await new Promise((res,rej)=>{const s=document.createElement('script');s.src='https://unpkg.com/vis-network@9.1.6/standalone/umd/vis-network.min.js';s.onload=res;s.onerror=rej;document.head.appendChild(s)}).catch(()=>{toast('vis-network CDN unavailable',true)});
+  visLoaded=true;
+}
+async function loadGraph(){
+  await loadVisNetwork().catch(()=>{});
+  if(typeof vis==='undefined'){toast('Graph library not loaded',true);return}
+  const ns=document.getElementById('graphNS').value;
+  let url='/graph?';if(ns)url+='namespace='+encodeURIComponent(ns);
+  const data=await api(url);if(!data)return;
+  graphData=data;
+  document.getElementById('graphInfo').textContent=`${data.nodes.length} nodes, ${data.edges.length} edges`;
+
+  // Calculate node importance for sizing
+  const maxAcc=Math.max(...data.nodes.map(n=>n.access_count||0),1);
+  const maxImp=Math.max(...data.nodes.map(n=>n.importance||0.5),1);
+
+  const visNodes=data.nodes.map(n=>{const c=TC[n.node_type]||TC.concept;
+    const accNorm=(n.access_count||0)/maxAcc;
+    const impNorm=(n.importance||0.5)/maxImp;
+    return{id:n.id,label:n.label.length>22?n.label.substring(0,20)+'..':n.label,
+      title:`${esc(n.label)}\n[${n.node_type}] ${n.namespace}\nimp:${(n.importance||0).toFixed(2)} acc:${n.access_count||0}\n${esc((n.summary||'').substring(0,60))}`,
+      color:{background:c.bg,border:c.bd,highlight:{background:c.bg,border:'#fff'},hover:{background:c.bg,border:c.bg}},
+      shape:n.node_type==='project'?'diamond':n.node_type==='decision'?'star':n.node_type==='problem'?'triangle':'dot',
+      size:10+accNorm*15+impNorm*10,
+      font:{color:'#aaa',size:10,face:'SF Mono,monospace'},
+      borderWidth:2,borderWidthSelected:3}});
+  const visEdges=data.edges.map(e=>{
+    const src=data.nodes.find(n=>n.id===e.source);
+    const tgt=data.nodes.find(n=>n.id===e.target);
+    const nsMatch=src&&tgt&&src.namespace===tgt.namespace;
+    return{id:e.id,from:e.source,to:e.target,
+      label:e.edge_type.length>6?e.edge_type.substring(0,5)+'..':e.edge_type,
+      color:{color:nsMatch?'#333':'#553333',highlight:'#00ff88',hover:'#00ff88',inherit:'from'},
+      font:{color:'#555',size:8,strokeWidth:2,strokeColor:'#08080d',align:'middle'},
+      width:Math.max(0.5,Math.min(3,1+e.weight)),
+      dashes:e.edge_type==='contradicts'?[5,5]:e.edge_type==='supports'?[2,3]:false,
+      arrows:{to:{enabled:true,scaleFactor:.3,highlightScale:1}},
+      smooth:{type:'continuous',roundness:0.2}}});
+
+  // Clean up old network
+  if(graphNetwork){
+    try{graphNetwork.destroy()}catch{}
+    graphNetwork=null;
+  }
+
+  const container=document.getElementById('graphContainer');
+  const ds={nodes:new vis.DataSet(visNodes),edges:new vis.DataSet(visEdges)};
+  graphNetwork=new vis.Network(container,ds,{
+    layout:{improvedLayout:false},
+    physics:{enabled:true,
+      barnesHut:{gravitationalConstant:-2500,centralGravity:0.25,springLength:140,springConstant:0.04,damping:0.12},
+      stabilization:{iterations:150,updateInterval:25}},
+    interaction:{hover:true,tooltipDelay:150,navigationButtons:true,keyboard:{enabled:true,bindToWindow:false},
+      multiselect:true,selectConnectedEdges:true},
+    nodes:{scaling:{min:8,max:40},shadow:{enabled:true,size:5,color:'rgba(0,255,136,0.15)'}},
+    edges:{scaling:{min:0.5,max:3},shadow:{enabled:false}}});
+
+  // Highlight connected edges on node click
+  graphNetwork.on('click',function(params){
+    if(params.nodes.length>0){
+      const nodeId=params.nodes[0];
+      // Highlight all connected edges
+      const connectedEdges=ds.edges.get().filter(e=>e.from===nodeId||e.to===nodeId);
+      ds.edges.forEach(e=>{
+        const isConnected=connectedEdges.some(ce=>ce.id===e.id);
+        ds.edges.update({id:e.id,color:{color:isConnected?'#00ff88':'#333333',highlight:'#00ff88'}});
+      });
+      showDetail(nodeId);
+    }else{
+      // Reset edge colors
+      ds.edges.forEach(e=>{
+        const src=data.nodes.find(n=>n.id===e.from);
+        const tgt=data.nodes.find(n=>n.id===e.to);
+        const nsMatch=src&&tgt&&src.namespace===tgt.namespace;
+        ds.edges.update({id:e.id,color:{color:nsMatch?'#333':'#553333',highlight:'#00ff88'}});
+      });
+    }
+  });
+
+  // Stabilization progress
+  graphNetwork.on('stabilizationProgress',function(params){
+    const pct=Math.round(params.iterations/params.total*100);
+    document.getElementById('graphInfo').textContent=`Stabilizing: ${pct}%`;
+  });
+  graphNetwork.on('stabilizationIterationsDone',function(){
+    document.getElementById('graphInfo').textContent=`${data.nodes.length} nodes, ${data.edges.length} edges`;
+    graphNetwork.setOptions({physics:{enabled:false}}); // Disable physics after stabilization for performance
+  });
+}
+function graphFit(){if(graphNetwork)graphNetwork.fit({animation:true})}
+
+async function recalcImportance(){
+  document.getElementById('recalcResult').innerHTML='<span style="color:#ffaa00">Recalculating...</span>';
+  const r=await api('/nodes/recalculate',{method:'POST'});
+  if(r){
+    document.getElementById('recalcResult').innerHTML=`<span style="color:#00ff88">Updated ${r.rows_updated} node scores</span>`;
+    addFeed('recalc',`${r.rows_updated} nodes rescored`);
+    loadStats();loadNodes();
+  }else{document.getElementById('recalcResult').innerHTML='<span style="color:#ff4444">Failed</span>'}
+}
+
+// === Init ===
+loadHealth();loadOllamaStats();loadStats().then(()=>{lastDashNodeCount=parseInt(document.getElementById('statNodes').textContent)||0});
+loadNodes();loadSnapshot();loadDQATrend();
+// Recalculate importance scores on first load (one-time)
+if(!sessionStorage.getItem('mb_recalc_done')){api('/nodes/recalculate',{method:'POST'}).then(r=>{if(r&&r.rows_updated){sessionStorage.setItem('mb_recalc_done','1');addFeed('recalc',r.rows_updated+' nodes scored');loadStats();loadNodes()}})}
+pollHealthId=setInterval(loadHealth,30000);
+pollOllamaId=setInterval(loadOllamaStats,10000);
+pollNodeCountId=setInterval(async()=>{
+  const data=await api('/nodes?count=true');
+  if(data&&typeof data.count==='number'){
+    const currentCount=data.count;
+    if(lastDashNodeCount>0&&currentCount!==lastDashNodeCount){
+      const delta=currentCount-lastDashNodeCount;
+      if(Math.abs(delta)<50){
+        addFeed('create',`${delta>0?'+':''}${delta} node(s)`);
+        document.getElementById('statNodes').textContent=currentCount;
+        loadNodes();
+      }
+    }
+    lastDashNodeCount=currentCount;
+  }
+},15000);
+// Pause polling when tab hidden to save resources
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden){
+    if(pollHealthId)clearInterval(pollHealthId);
+    if(pollOllamaId)clearInterval(pollOllamaId);
+    if(pollNodeCountId)clearInterval(pollNodeCountId);
+  }else{
+    loadHealth();loadOllamaStats();
+    pollHealthId=setInterval(loadHealth,30000);
+    pollOllamaId=setInterval(loadOllamaStats,10000);
+    pollNodeCountId=setInterval(async()=>{
+      const data=await api('/nodes?count=true');
+      if(data&&typeof data.count==='number'){
+        const currentCount=data.count;
+        if(lastDashNodeCount>0&&currentCount!==lastDashNodeCount){
+          const delta=currentCount-lastDashNodeCount;
+          if(Math.abs(delta)<50){
+            addFeed('create',`${delta>0?'+':''}${delta} node(s)`);
+            document.getElementById('statNodes').textContent=currentCount;
+            loadNodes();
+          }
+        }
+        lastDashNodeCount=currentCount;
+      }
+    },15000);
+  }
+});
+
+// === Batch Node Manager ===
+function parseCSVRows(text) {
+  const defaultNs = document.getElementById('batch-default-ns').value.trim() || 'global';
+  return text.split('\n').map(line => line.trim()).filter(line => line.length > 0).map(line => {
+    // Simple CSV split: respects quoted fields
+    const fields = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') { inQuotes = !inQuotes; continue; }
+      if (ch === ',' && !inQuotes) { fields.push(current.trim()); current = ''; continue; }
+      current += ch;
+    }
+    fields.push(current.trim());
+    const label = fields[0] || '';
+    const node_type = fields[1] || 'fact';
+    const namespace = fields[2] || defaultNs;
+    const summary = fields[3] || '';
+    const content = fields[4] || '';
+    return { label, node_type, namespace, summary, content };
+  }).filter(r => r.label.length > 0);
+}
+
+function bulkCreatePreview() {
+  const text = document.getElementById('batch-csv').value;
+  const rows = parseCSVRows(text);
+  const el = document.getElementById('batch-create-preview');
+  if (rows.length === 0) {
+    el.style.display = 'block';
+    el.innerHTML = '<span style="color:var(--red)">No valid rows found. Check format: label,type,namespace,summary,content</span>';
+    return;
+  }
+  el.style.display = 'block';
+  const summary = rows.map((r, i) =>
+    (i+1) + '. <b>' + esc(r.label) + '</b> [' + esc(r.node_type) + '] @ ' + esc(r.namespace)
+  ).join('<br>');
+  el.innerHTML = '<div style="color:var(--green);margin-bottom:6px">Found ' + rows.length + ' nodes to create:</div>' + summary;
+}
+
+async function bulkCreateAll() {
+  const text = document.getElementById('batch-csv').value;
+  const rows = parseCSVRows(text);
+  if (rows.length === 0) {
+    toast('No valid rows to create', 'error');
+    return;
+  }
+  if (!confirm('Create ' + rows.length + ' nodes?')) return;
+
+  const progressEl = document.getElementById('batch-create-progress');
+  const barEl = document.getElementById('batch-create-bar');
+  const textEl = document.getElementById('batch-create-progress-text');
+  const statusEl = document.getElementById('batch-create-status');
+  progressEl.style.display = 'block';
+  barEl.style.width = '0%';
+  let created = 0;
+  let failed = 0;
+
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    textEl.textContent = 'Created ' + i + '/' + rows.length + ' nodes...';
+    try {
+      const resp = await fetch(API + '/nodes', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(r)
+      });
+      if (resp.ok) created++; else failed++;
+    } catch(e) { failed++; }
+    barEl.style.width = (((i + 1) / rows.length) * 100) + '%';
+  }
+  textEl.textContent = 'Created ' + created + '/' + rows.length + ' nodes' + (failed ? ' (' + failed + ' failed)' : '');
+  statusEl.textContent = 'Done: ' + created + ' created, ' + failed + ' failed';
+  toast('Batch create complete: ' + created + '/' + rows.length + ' nodes', failed > 0 ? 'warn' : 'success');
+  addActivity('Batch created ' + created + ' nodes');
+  loadGraph();
+}
+
+let _batchDeleteNodes = [];
+
+async function bulkDeletePreview() {
+  const ns = document.getElementById('batch-del-ns').value.trim();
+  const type = document.getElementById('batch-del-type').value;
+  const el = document.getElementById('batch-del-preview');
+  const statusEl = document.getElementById('batch-del-status');
+
+  let url = API + '/nodes?limit=500';
+  if (ns) url += '&namespace=' + encodeURIComponent(ns);
+  if (type) url += '&type=' + encodeURIComponent(type);
+
+  statusEl.textContent = 'Fetching...';
+  try {
+    const r = await fetch(url);
+    let nodes = await r.json();
+    if (!Array.isArray(nodes)) nodes = [];
+
+    // Client-side filter as fallback (API may not support type filter)
+    if (type) nodes = nodes.filter(n => n.node_type === type);
+    if (ns) nodes = nodes.filter(n => n.namespace === ns);
+
+    _batchDeleteNodes = nodes;
+    el.style.display = 'block';
+    if (nodes.length === 0) {
+      el.innerHTML = '<span style="color:var(--text-dim)">No matching nodes found.</span>';
+      statusEl.textContent = '0 nodes';
+      return;
+    }
+    const preview = nodes.slice(0, 20).map((n, i) =>
+      (i+1) + '. <b>' + esc(n.label) + '</b> [' + esc(n.node_type) + '] @ ' + esc(n.namespace)
+    ).join('<br>');
+    el.innerHTML = '<div style="color:var(--red);margin-bottom:6px">Found ' + nodes.length + ' nodes to delete:</div>' + preview +
+      (nodes.length > 20 ? '<div style="margin-top:4px">...and ' + (nodes.length - 20) + ' more</div>' : '');
+    statusEl.textContent = nodes.length + ' nodes matched';
+  } catch(e) {
+    el.style.display = 'block';
+    el.innerHTML = '<span style="color:var(--red)">Failed to fetch nodes: ' + esc(e.message) + '</span>';
+    statusEl.textContent = 'Error';
+  }
+}
+
+async function bulkDeleteAll() {
+  if (_batchDeleteNodes.length === 0) {
+    toast('Run Preview first to find nodes to delete', 'error');
+    return;
+  }
+  if (!confirm('DELETE ' + _batchDeleteNodes.length + ' nodes? This cannot be undone!')) return;
+
+  const progressEl = document.getElementById('batch-del-progress');
+  const barEl = document.getElementById('batch-del-bar');
+  const textEl = document.getElementById('batch-del-progress-text');
+  const statusEl = document.getElementById('batch-del-status');
+  progressEl.style.display = 'block';
+  barEl.style.width = '0%';
+  let deleted = 0;
+  let failed = 0;
+
+  for (let i = 0; i < _batchDeleteNodes.length; i++) {
+    const n = _batchDeleteNodes[i];
+    textEl.textContent = 'Deleted ' + i + '/' + _batchDeleteNodes.length + ' nodes...';
+    try {
+      const resp = await fetch(API + '/nodes/' + n.id, { method: 'DELETE' });
+      if (resp.ok) deleted++; else failed++;
+    } catch(e) { failed++; }
+    barEl.style.width = (((i + 1) / _batchDeleteNodes.length) * 100) + '%';
+  }
+  textEl.textContent = 'Deleted ' + deleted + '/' + _batchDeleteNodes.length + ' nodes' + (failed ? ' (' + failed + ' failed)' : '');
+  statusEl.textContent = 'Done: ' + deleted + ' deleted, ' + failed + ' failed';
+  toast('Batch delete complete: ' + deleted + '/' + _batchDeleteNodes.length + ' nodes', failed > 0 ? 'warn' : 'success');
+  addActivity('Batch deleted ' + deleted + ' nodes');
+  _batchDeleteNodes = [];
+  loadGraph();
+}
+
+// === Edge Creator ===
+let edgeNodesCache = [];
+
+async function loadEdgeNodesCache() {
+  try {
+    const r = await fetch(API + '/nodes?limit=5000');
+    edgeNodesCache = await r.json();
+  } catch(e) {
+    console.error('Failed to load nodes cache:', e);
+  }
+}
+
+function filterNodesDropdown(query) {
+  const q = query.toLowerCase();
+  return edgeNodesCache.filter(n =>
+    n.label.toLowerCase().includes(q) || (n.summary || '').toLowerCase().includes(q)
+  ).slice(0, 15);
+}
+
+function renderDropdown(containerId, nodes, inputId, hiddenId) {
+  const container = document.getElementById(containerId);
+  if (nodes.length === 0 || !document.getElementById(inputId).value.trim()) {
+    container.classList.remove('visible');
+    container.innerHTML = '';
+    return;
+  }
+  container.innerHTML = nodes.map(n =>
+    '<div class="dropdown-item" onclick="selectDropdownNode(\'' + esc(n.id) + "', '" + esc(n.label) + "', '" + inputId + "', '" + hiddenId + "', '" + containerId + '\')">' +
+    esc(n.label) + '<span class="dn-type">' + esc(n.node_type) + '</span></div>'
+  ).join('');
+  container.classList.add('visible');
+}
+
+function selectDropdownNode(id, label, inputId, hiddenId, containerId) {
+  document.getElementById(inputId).value = label;
+  document.getElementById(hiddenId).value = id;
+  document.getElementById(containerId).classList.remove('visible');
+}
+
+function searchSourceNodes() {
+  const q = document.getElementById('ec-source-search').value;
+  document.getElementById('ec-source-id').value = '';
+  if (q.length < 1) { document.getElementById('ec-source-results').classList.remove('visible'); return; }
+  renderDropdown('ec-source-results', filterNodesDropdown(q), 'ec-source-search', 'ec-source-id');
+}
+
+function searchTargetNodes() {
+  const q = document.getElementById('ec-target-search').value;
+  document.getElementById('ec-target-id').value = '';
+  if (q.length < 1) { document.getElementById('ec-target-results').classList.remove('visible'); return; }
+  renderDropdown('ec-target-results', filterNodesDropdown(q), 'ec-target-search', 'ec-target-id');
+}
+
+async function createEdge() {
+  const sourceId = document.getElementById('ec-source-id').value;
+  const targetId = document.getElementById('ec-target-id').value;
+  const edgeType = document.getElementById('ec-edge-type').value;
+  const weight = parseFloat(document.getElementById('ec-weight').value);
+
+  if (!sourceId) { toast('Please select a source node', 'error'); return; }
+  if (!targetId) { toast('Please select a target node', 'error'); return; }
+  if (sourceId === targetId) { toast('Source and target must be different', 'error'); return; }
+
+  try {
+    const r = await fetch(API + '/edges', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ source_id: sourceId, target_id: targetId, edge_type: edgeType, weight: weight })
+    });
+    if (!r.ok) {
+      const err = await r.text();
+      toast('Failed: ' + err, 'error');
+      addActivity('Edge create failed: ' + err);
+      return;
+    }
+    toast('Edge created: ' + edgeType, 'success');
+    addActivity('Created edge: ' + edgeType + ' (' + document.getElementById('ec-source-search').value + ' → ' + document.getElementById('ec-target-search').value + ')');
+    document.getElementById('ec-source-search').value = '';
+    document.getElementById('ec-source-id').value = '';
+    document.getElementById('ec-target-search').value = '';
+    document.getElementById('ec-target-id').value = '';
+    document.getElementById('ec-weight').value = '1';
+    document.getElementById('ec-weight-val').textContent = '1.0';
+  } catch(e) {
+    toast('Error: ' + e.message, 'error');
+    addActivity('Edge create error: ' + e.message);
+  }
+}
+
+async function bulkDeleteAll() {
+  if (_batchDeleteNodes.length === 0) {
+    toast('Run Preview first to find nodes to delete', 'error');
+    return;
+  }
+  if (!confirm('DELETE ' + _batchDeleteNodes.length + ' nodes? This cannot be undone!')) return;
+
+  const progressEl = document.getElementById('batch-del-progress');
+  const barEl = document.getElementById('batch-del-bar');
+  const textEl = document.getElementById('batch-del-progress-text');
+  const statusEl = document.getElementById('batch-del-status');
+  progressEl.style.display = 'block';
+  barEl.style.width = '0%';
+  let deleted = 0;
+  let failed = 0;
+
+  for (let i = 0; i < _batchDeleteNodes.length; i++) {
+    const n = _batchDeleteNodes[i];
+    textEl.textContent = 'Deleted ' + i + '/' + _batchDeleteNodes.length + ' nodes...';
+    try {
+      const resp = await fetch(API + '/nodes/' + n.id, { method: 'DELETE' });
+      if (resp.ok) deleted++; else failed++;
+    } catch(e) { failed++; }
+    barEl.style.width = (((i + 1) / _batchDeleteNodes.length) * 100) + '%';
+  }
+  textEl.textContent = 'Deleted ' + deleted + '/' + _batchDeleteNodes.length + ' nodes' + (failed ? ' (' + failed + ' failed)' : '');
+  statusEl.textContent = 'Done: ' + deleted + ' deleted, ' + failed + ' failed';
+  toast('Batch delete complete: ' + deleted + '/' + _batchDeleteNodes.length + ' nodes', failed > 0 ? 'warn' : 'success');
+  addActivity('Batch deleted ' + deleted + ' nodes');
+  _batchDeleteNodes = [];
+  loadGraph();
+}
+
+function addActivity(msg) { addFeed('create', msg); }
+loadEdgeNodesCache();
+
+// === Bulk Edge Manager ===
+async function bulkDeleteEdgePreview() {
+  const edgeType = document.getElementById('bulk-edge-type').value;
+  const previewEl = document.getElementById('bulk-edge-preview');
+  if (!edgeType) { previewEl.textContent = 'Select an edge type first'; return; }
+  try {
+    const r = await fetch(API + '/edges?type=' + encodeURIComponent(edgeType) + '&limit=1000');
+    let edges = await r.json();
+    if (!Array.isArray(edges)) edges = [];
+    if (edges.length === 0) {
+      previewEl.innerHTML = '<span style="color:var(--text-dim)">No edges of type "' + esc(edgeType) + '" found.</span>';
+      return;
+    }
+    previewEl.innerHTML = '<span style="color:var(--red)">' + edges.length + ' edge(s)</span> of type "' + esc(edgeType) + '" will be deleted.';
+  } catch(e) {
+    previewEl.textContent = 'Preview failed: ' + e.message;
+  }
+}
+
+async function bulkDeleteEdges() {
+  const edgeType = document.getElementById('bulk-edge-type').value;
+  if (!edgeType) { toast('Select an edge type', 'error'); return; }
+  const previewEl = document.getElementById('bulk-edge-preview');
+  try {
+    const r = await fetch(API + '/edges?type=' + encodeURIComponent(edgeType) + '&limit=1000');
+    let edges = await r.json();
+    if (!Array.isArray(edges)) edges = [];
+    if (edges.length === 0) { toast('No edges to delete', 'warn'); return; }
+    if (!confirm('DELETE all ' + edges.length + '+ edges of type "' + edgeType + '"? This cannot be undone!')) return;
+
+    // Use the batch delete endpoint
+    const dr = await fetch(API + '/edges?type=' + encodeURIComponent(edgeType), { method: 'DELETE' });
+    const data = await dr.json();
+    if (dr.ok) {
+      toast('Deleted ' + data.deleted + ' edge(s)', 'success');
+    } else {
+      toast('Delete failed: ' + (data.error || 'unknown'), 'error');
+    }
+    previewEl.textContent = '';
+    loadGraph();
+  } catch(e) {
+    toast('Bulk delete failed: ' + e.message, 'error');
+  }
+}
+
+let _nsConnectPreview = [];
+
+async function connectNamespacesPreview() {
+  const source = document.getElementById('bulk-connect-source').value;
+  const target = document.getElementById('bulk-connect-target').value;
+  const limit = document.getElementById('bulk-connect-limit').value;
+  const threshold = document.getElementById('bulk-connect-threshold').value;
+  const statusEl = document.getElementById('bulk-connect-status');
+  const previewEl = document.getElementById('bulk-connect-preview');
+
+  if (!source || !target) { statusEl.textContent = 'Select both namespaces'; return; }
+  statusEl.textContent = 'Searching...';
+  try {
+    const r = await fetch(API + '/edges/connect-namespaces?source=' + encodeURIComponent(source) + '&target=' + encodeURIComponent(target) + '&limit=' + limit + '&threshold=' + threshold, { method: 'POST' });
+    const data = await r.json();
+    if (data.error) { statusEl.textContent = 'Error: ' + data.error; return; }
+    _nsConnectPreview = data.pairs_found || 0;
+    if (data.pairs_found === 0) {
+      statusEl.textContent = '0 pairs found';
+      previewEl.style.display = 'block';
+      previewEl.innerHTML = '<span style="color:var(--text-dim)">No similar nodes found. This usually means embeddings are not yet generated for nodes in these namespaces. Wait for the embedding worker to catch up, or check Ollama status.</span>';
+    } else {
+      statusEl.textContent = data.pairs_found + ' similar pairs found, ' + data.edges_created + ' edges created';
+      previewEl.style.display = 'block';
+      previewEl.innerHTML = '<span style="color:var(--green)">Created ' + data.edges_created + ' edges</span> between "' + esc(source) + '" and "' + esc(target) + '"';
+      loadGraph();
+    }
+  } catch(e) {
+    statusEl.textContent = 'Failed: ' + e.message;
+  }
+}
+
+async function connectNamespacesRun() {
+  // Same as preview — the endpoint is idempotent (uses ON CONFLICT DO NOTHING)
+  await connectNamespacesPreview();
+}
+
+// === DQA Trend ===
+async function saveDQASnapshot(score, totalNodes, issuesCount) {
+  try {
+    await fetch(API + '/dqa/snapshot', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ score, total_nodes: totalNodes, issues_count: issuesCount })
+    });
+  } catch(e) { console.error('Failed to save DQA snapshot', e); }
+}
+
+async function loadDQATrend() {
+  try {
+    const r = await fetch(API + '/dqa/trend?days=30');
+    const data = await r.json();
+    if (!Array.isArray(data) || data.length === 0) {
+      document.getElementById('dqa-trend-current').textContent = '-';
+      document.getElementById('dqa-trend-info').textContent = 'Run DQA to start tracking';
+      return;
+    }
+    const latest = data[data.length - 1];
+    const prev = data.length > 1 ? data[data.length - 2] : null;
+    document.getElementById('dqa-trend-current').textContent = latest.score + '%';
+    document.getElementById('dqa-trend-current').style.color = latest.score >= 80 ? 'var(--green)' : latest.score >= 50 ? 'var(--yellow)' : 'var(--red)';
+
+    if (prev) {
+      const diff = latest.score - prev.score;
+      const arrow = diff > 0 ? '↑' : diff < 0 ? '↓' : '→';
+      const color = diff > 0 ? 'var(--green)' : diff < 0 ? 'var(--red)' : 'var(--text-dim)';
+      document.getElementById('dqa-trend-arrow').innerHTML = '<span style="color:' + color + '">' + arrow + ' ' + Math.abs(diff) + '%</span>';
+      document.getElementById('dqa-trend-prev').textContent = 'Previous: ' + prev.score + '% (' + new Date(prev.created_at).toLocaleDateString() + ')';
+    } else {
+      document.getElementById('dqa-trend-arrow').textContent = '';
+      document.getElementById('dqa-trend-prev').textContent = 'First snapshot';
+    }
+    document.getElementById('dqa-trend-info').textContent = data.length + ' snapshots · ' + latest.total_nodes + ' nodes · ' + latest.issues_count + ' issues';
+
+    // Render sparkline
+    const maxScore = Math.max(...data.map(d => d.score), 100);
+    const minScore = Math.min(...data.map(d => d.score), 0);
+    const range = maxScore - minScore || 1;
+    const sparklineEl = document.getElementById('dqa-trend-sparkline');
+    sparklineEl.innerHTML = data.map(d => {
+      const h = Math.max(4, ((d.score - minScore) / range) * 36);
+      const c = d.score >= 80 ? 'var(--green)' : d.score >= 50 ? 'var(--yellow)' : 'var(--red)';
+      return '<div style="flex:1;background:' + c + ';border-radius:2px;height:' + h + 'px;opacity:0.7" title="' + d.score + '% (' + new Date(d.created_at).toLocaleDateString() + ')"></div>';
+    }).join('');
+  } catch(e) {
+    console.error('DQA trend load failed', e);
+  }
+}
+
+// === Data Quality Analyzer ===
+let dqaResults = {};
+let dqaChecked = new Set();
+const _sid = (x) => String(x === null || x === undefined ? '' : x).trim();
+
+async function runQualityAnalysis() {
+  const runBtn = document.getElementById('dqa-run-btn');
+  const fixBtn = document.getElementById('dqa-fix-btn');
+  const progressEl = document.getElementById('dqa-progress');
+  const progressText = document.getElementById('dqa-progress-text');
+  const scoreEl = document.getElementById('dqa-score');
+  const resultsEl = document.getElementById('dqa-results');
+
+  runBtn.disabled = true;
+  runBtn.textContent = 'Running...';
+  progressEl.style.display = 'block';
+  scoreEl.style.display = 'none';
+  resultsEl.style.display = 'none';
+  fixBtn.style.display = 'none';
+  dqaChecked = new Set();
+
+  try {
+    progressText.textContent = 'Fetching nodes...';
+    const nodesRes = await fetch(API + '/nodes?limit=500');
+    const nodesData = await nodesRes.json();
+    const nodes = Array.isArray(nodesData) ? nodesData : (nodesData.nodes || []);
+    if (!nodes.length) {
+      progressText.textContent = 'No nodes found.';
+      runBtn.disabled = false;
+      runBtn.textContent = 'Run Analysis';
+      setTimeout(() => { progressEl.style.display = 'none'; }, 3000);
+      return;
+    }
+
+    progressText.textContent = 'Fetching edges...';
+    let allEdgesDqa = [];
+    try {
+      const edgesRes = await fetch(API + '/edges');
+      const edgesData = await edgesRes.json();
+      allEdgesDqa = Array.isArray(edgesData) ? edgesData : (edgesData.edges || []);
+    } catch(ex) { allEdgesDqa = []; }
+
+    progressText.textContent = 'Analyzing data quality...';
+    await new Promise(r => setTimeout(r, 300));
+
+    // Build node connection map — normalize ALL ids to strings to avoid type mismatch
+    const _s = (x) => String(x === null || x === undefined ? '' : x).trim();
+    const connectedNodes = new Set();
+    for (const e of allEdgesDqa) {
+      connectedNodes.add(_s(e.source_id));
+      connectedNodes.add(_s(e.target_id));
+    }
+
+    // Check 1: Orphan nodes (0 edges)
+    const orphans = nodes.filter(n => !connectedNodes.has(_s(n.id)));
+
+    // Check 2: Disconnected clusters (groups not connected to main graph)
+    // Build adjacency, find connected components via BFS
+    const adj = new Map();
+    for (const n of nodes) adj.set(_s(n.id), []);
+    for (const e of allEdgesDqa) {
+      const src = _s(e.source_id), tgt = _s(e.target_id);
+      if (adj.has(src)) adj.get(src).push(tgt);
+      if (adj.has(tgt)) adj.get(tgt).push(src);
+    }
+    const visited = new Set();
+    let components = [];
+    for (const n of nodes) {
+      const nid = _s(n.id);
+      if (visited.has(nid)) continue;
+      const comp = [];
+      const queue = [nid];
+      visited.add(nid);
+      while (queue.length) {
+        const cur = queue.shift();
+        comp.push(cur);
+        for (const nb of (adj.get(cur) || [])) {
+          if (!visited.has(nb)) { visited.add(nb); queue.push(nb); }
+        }
+      }
+      components.push(comp);
+    }
+    // Largest component is the "main graph"
+    components.sort((a, b) => b.length - a.length);
+    const orphanIds = new Set(orphans.map(n => _s(n.id)));
+    const disconnected = components.length > 1
+      ? components.slice(1).flat().filter(id => !orphanIds.has(id))
+      : [];
+
+    // Check 3: Duplicate labels (same label + same namespace)
+    const labelMap = new Map();
+    for (const n of nodes) {
+      const key = _s(n.namespace) + '::' + _s(n.label).toLowerCase();
+      if (!labelMap.has(key)) labelMap.set(key, []);
+      labelMap.get(key).push(n);
+    }
+    const duplicates = [];
+    for (const [key, group] of labelMap) {
+      if (group.length > 1) {
+        for (let i = 1; i < group.length; i++) duplicates.push(group[i]);
+      }
+    }
+
+    // Check 4: Empty content (no content AND no summary)
+    const emptyContent = nodes.filter(n => !_s(n.content) && !_s(n.summary));
+
+    // Check 5: Low importance
+    const lowImportance = nodes.filter(n => (n.importance || 0) < 0.1);
+
+    // Check 6: Uncontained nodes (no incoming 'contains' edge — not linked to a project/session root)
+    // Project and session nodes are organizational anchors, not content — exclude them from this check
+    const containedIds = new Set();
+    for (const e of allEdgesDqa) {
+      if (_s(e.edge_type) === 'contains') {
+        containedIds.add(_s(e.target_id));
+      }
+    }
+    const uncontained = nodes.filter(n => {
+      const nt = _s(n.node_type);
+      // Organizational anchors don't need to be contained
+      if (nt === 'project' || nt === 'session' || nt === 'event') return false;
+      return !containedIds.has(_s(n.id));
+    });
+
+    // Store raw results (resolve disconnected IDs to node objects)
+    const nodesById = new Map(nodes.map(n => [_s(n.id), n]));
+    dqaResults = {
+      orphan: orphans,
+      disconnected: disconnected.map(id => nodesById.get(id) || { id, label: id, namespace: '' }),
+      duplicate: duplicates,
+      empty: emptyContent,
+      lowImportance: lowImportance,
+      uncontained: uncontained
+    };
+
+    progressText.textContent = 'Rendering results...';
+    await new Promise(r => setTimeout(r, 200));
+
+    // Calculate quality score — robust: normalize ids, cap at 0, never negative good count
+    const allNodeIds = new Set(nodes.map(n => _s(n.id)));
+    const badIds = new Set([
+      ...orphans.map(n => _s(n.id)),
+      ...disconnected.map(id => _s(id)),
+      ...duplicates.map(n => _s(n.id)),
+      ...emptyContent.map(n => _s(n.id)),
+      ...lowImportance.map(n => _s(n.id)),
+      ...uncontained.map(n => _s(n.id))
+    ]);
+    // Remove any bad IDs that aren't actually in our node set (defensive)
+    for (const bid of badIds) { if (!allNodeIds.has(bid)) badIds.delete(bid); }
+    const totalIssues = Math.min(badIds.size, nodes.length);
+    const clean = Math.max(0, nodes.length - totalIssues);
+    const score = nodes.length === 0 ? 100 : Math.round((clean / nodes.length) * 100);
+
+    const scoreValue = document.getElementById('dqa-score-value');
+    const scoreBar = document.getElementById('dqa-score-bar');
+    const scoreDetail = document.getElementById('dqa-score-detail');
+    scoreValue.textContent = score + '%';
+    scoreBar.style.width = score + '%';
+    scoreBar.style.background = score >= 80 ? 'var(--green)' : score >= 50 ? 'var(--yellow)' : 'var(--red)';
+    scoreValue.className = 'dqa-score-big ' + (score >= 80 ? 'dqa-score-ok' : score >= 50 ? 'dqa-score-warn' : 'dqa-score-bad');
+    const goodNodes = clean;
+    scoreDetail.textContent = `${nodes.length} nodes checked · ${goodNodes} good · ${totalIssues} need attention`;
+    scoreEl.style.display = 'block';
+
+    // Save snapshot for trend tracking
+    saveDQASnapshot(score, nodes.length, totalIssues);
+    loadDQATrend(); // refresh dashboard sparkline
+
+    // Render categories
+    renderDqaResults();
+
+    progressEl.style.display = 'none';
+    resultsEl.style.display = 'block';
+    updateFixBtn();
+
+  } catch(e) {
+    progressText.textContent = 'Error: ' + e.message;
+    setTimeout(() => { progressEl.style.display = 'none'; }, 3000);
+  } finally {
+    runBtn.disabled = false;
+    runBtn.textContent = 'Run Analysis';
+  }
+}
+
+function calculateQualityScore(nodes, orphans, disconnected, duplicates, emptyContent, lowImportance, uncontained) {
+  if (nodes.length === 0) return 100;
+  const _s = (x) => String(x === null || x === undefined ? '' : x).trim();
+  const allNodeIds = new Set(nodes.map(n => _s(n.id)));
+  const badIds = new Set([
+    ...orphans.map(n => _s(n.id)),
+    ...disconnected.map(id => _s(id)),
+    ...duplicates.map(n => _s(n.id)),
+    ...emptyContent.map(n => _s(n.id)),
+    ...lowImportance.map(n => _s(n.id)),
+    ...(uncontained || []).map(n => _s(n.id))
+  ]);
+  for (const bid of badIds) { if (!allNodeIds.has(bid)) badIds.delete(bid); }
+  const totalIssues = Math.min(badIds.size, nodes.length);
+  const clean = Math.max(0, nodes.length - totalIssues);
+  return Math.round((clean / nodes.length) * 100);
+}
+
+function renderDqaResults() {
+  const el = document.getElementById('dqa-results');
+  const categories = [
+    { key: 'orphan', label: 'Orphan Nodes', desc: 'No edges connected', severity: 'warn' },
+    { key: 'disconnected', label: 'Disconnected Cluster', desc: 'Not part of main graph', severity: 'warn' },
+    { key: 'uncontained', label: 'Uncontained', desc: 'Not linked to a project root', severity: 'warn' },
+    { key: 'duplicate', label: 'Duplicate Labels', desc: 'Same label in same namespace', severity: 'bad' },
+    { key: 'empty', label: 'Empty Content', desc: 'No content or summary', severity: 'bad' },
+    { key: 'lowImportance', label: 'Low Importance', desc: 'Importance < 0.1', severity: 'ok' }
+  ];
+
+  // Sort by issue count descending (most severe first), then filter out empty categories
+  categories.sort((a, b) => {
+    const countA = (dqaResults[a.key] || []).length;
+    const countB = (dqaResults[b.key] || []).length;
+    return countB - countA;
+  });
+
+  // Only show categories that have actual issues
+  const activeCategories = categories.filter(cat => (dqaResults[cat.key] || []).length > 0);
+
+  if (activeCategories.length === 0) {
+    el.innerHTML = '<div style="color:var(--green);padding:12px;text-align:center">✓ All checks passed — no issues found</div>';
+    return;
+  }
+
+  el.innerHTML = activeCategories.map(cat => {
+    const items = dqaResults[cat.key] || [];
+    const count = items.length;
+    const severityClass = cat.severity === 'bad' ? 'dqa-cat-bad' : 'dqa-cat-warn';
+    const badgeColor = cat.severity === 'bad' ? 'var(--red)' : 'var(--yellow)';
+    
+    // Show max 5 items with expander
+    const maxVisible = 5;
+    const visibleItems = items.slice(0, maxVisible);
+    const hiddenCount = items.length - maxVisible;
+    
+    let itemsHtml = visibleItems.map((n, idx) => {
+      const id = _sid(n.id);
+      const label = n.label || id;
+      const ns = n.namespace || '';
+      const checked = dqaChecked.has(id) ? 'checked' : '';
+      return `<div class="dqa-item-row">
+        <input type="checkbox" class="dqa-cb" ${checked} onchange="dqaToggleCheck('${id}')">
+        <span style="flex:1;cursor:pointer" onclick="selectNodeById('${id}')">${esc(label)}</span>
+        <span style="font-size:11px;color:var(--text-dim)">${esc(ns)}</span>
+      </div>`;
+    }).join('');
+    
+    if (hiddenCount > 0) {
+      itemsHtml += `<div class="dqa-show-more" onclick="dqaExpandCat('${cat.key}',this)">Show ${hiddenCount} more...</div>`;
+    }
+    
+    return `
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;margin-bottom:8px;overflow:hidden;${severityClass}">
+        <div style="padding:8px 12px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;background:var(--surface)" onclick="toggleCategory('${cat.key}')">
+          <div>
+            <span style="font-size:13px;font-weight:500">${cat.label}</span>
+            <span style="font-size:11px;color:var(--text-dim);margin-left:6px">${cat.desc}</span>
+          </div>
+          <span class="badge-pill" style="background:${badgeColor}20;color:${badgeColor}">${count}</span>
+        </div>
+        <div class="dqa-category-body open" id="dqa-cat-${cat.key}">
+          ${itemsHtml}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function dqaExpandCat(catKey, el) {
+  const items = dqaResults[catKey] || [];
+  const maxVisible = 5;
+  const hidden = items.slice(maxVisible);
+  const container = el.parentElement;
+  el.remove();
+  
+  const extraHtml = hidden.map(n => {
+    const id = _sid(n.id);
+    const label = n.label || id;
+    const ns = n.namespace || '';
+    const checked = dqaChecked.has(id) ? 'checked' : '';
+    return `<div class="dqa-item-row">
+      <input type="checkbox" class="dqa-cb" ${checked} onchange="dqaToggleCheck('${id}')">
+      <span style="flex:1;cursor:pointer" onclick="selectNodeById('${id}')">${esc(label)}</span>
+      <span style="font-size:11px;color:var(--text-dim)">${esc(ns)}</span>
+    </div>`;
+  }).join('');
+  
+  container.insertAdjacentHTML('beforeend', extraHtml);
+}
+
+function toggleCategory(cat) {
+  const el = document.getElementById('dqa-cat-' + cat);
+  if (el) el.classList.toggle('open');
+}
+
+function dqaToggleCheck(id) {
+  const sid = _sid(id);
+  if (dqaChecked.has(sid)) dqaChecked.delete(sid);
+  else dqaChecked.add(sid);
+  updateFixBtn();
+}
+
+function updateFixBtn() {
+  const btn = document.getElementById('dqa-fix-btn');
+  const selAll = document.getElementById('dqa-selectall-btn');
+  const hasIssues = Object.values(dqaResults).some(arr => arr && arr.length > 0);
+  btn.textContent = 'Fix Selected (' + dqaChecked.size + ')';
+  btn.style.display = dqaChecked.size > 0 ? 'block' : 'none';
+  selAll.style.display = hasIssues ? 'block' : 'none';
+}
+
+function dqaSelectAll() {
+  const allIds = new Set();
+  for (const cat of ['orphan','disconnected','uncontained','duplicate','empty','lowImportance']) {
+    const items = dqaResults[cat];
+    if (items) items.forEach(n => { if(n&&n.id) allIds.add(_sid(n.id)); });
+  }
+  const allChecked = allIds.size > 0 && Array.from(allIds).every(id => dqaChecked.has(id));
+  if (allChecked) {
+    dqaChecked = new Set();
+  } else {
+    dqaChecked = new Set(allIds);
+  }
+  renderDqaResults();
+  updateFixBtn();
+}
+
+async function dqaQuickFix() {
+  // Run dry-run first to preview what would happen
+  const btn = document.querySelector('button[onclick="dqaQuickFix()"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Analyzing...'; }
+
+  const report = { orphans: [], connected: null, uncontained: {}, dryRun: true };
+
+  // Preview orphans
+  if (dqaResults.orphan && dqaResults.orphan.length > 0) {
+    const nsSet = new Set(dqaResults.orphan.map(n => n.namespace).filter(Boolean));
+    for (const ns of nsSet) {
+      try {
+        const r = await fetch(API + '/analyze/link-orphans?dry_run=true&limit=50&namespace=' + encodeURIComponent(ns), { method: 'POST' });
+        const data = await r.json();
+        if (data && data.orphans) {
+          report.orphans.push(...data.orphans.filter(o => o.status === 'would_link'));
+        }
+      } catch(e) { console.error('link-orphans preview failed', ns, e); }
+    }
+  }
+
+  // Preview disconnected
+  if (dqaResults.disconnected && dqaResults.disconnected.length > 0) {
+    const nsSet = new Set(dqaResults.disconnected.map(n => n.namespace).filter(Boolean));
+    for (const ns of nsSet) {
+      try {
+        const r = await fetch(API + '/analyze/connect-components?namespace=' + encodeURIComponent(ns), { method: 'POST' });
+        const data = await r.json();
+        report.connected = data;
+      } catch(e) { console.error('connect-components preview failed', ns, e); }
+    }
+  }
+
+  // Preview uncontained: group by namespace, show project that would be created
+  if (dqaResults.uncontained && dqaResults.uncontained.length > 0) {
+    for (const n of dqaResults.uncontained) {
+      const ns = n.namespace || 'global';
+      if (!report.uncontained[ns]) report.uncontained[ns] = [];
+      report.uncontained[ns].push(n.label || n.id);
+    }
+  }
+
+  // Show preview modal
+  const previewHtml = buildFixPreview(report);
+  const doFix = await confirmFixPreview(previewHtml);
+  if (!doFix) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Quick Fix All'; }
+    return;
+  }
+
+  // Execute the actual fix
+  if (btn) { btn.textContent = 'Fixing...'; }
+  const executed = { orphans: [], connected: null, uncontained: 0 };
+  let linked = 0, connectedCount = 0;
+
+  if (dqaResults.orphan && dqaResults.orphan.length > 0) {
+    const nsSet = new Set(dqaResults.orphan.map(n => n.namespace).filter(Boolean));
+    for (const ns of nsSet) {
+      try {
+        const r = await fetch(API + '/analyze/link-orphans?dry_run=false&limit=50&namespace=' + encodeURIComponent(ns), { method: 'POST' });
+        const data = await r.json();
+        if (data && data.orphans) {
+          executed.orphans.push(...data.orphans.filter(o => o.status === 'linked'));
+          linked += data.linked || 0;
+        }
+      } catch(e) { console.error('link-orphans failed', ns, e); }
+    }
+  }
+
+  if (dqaResults.disconnected && dqaResults.disconnected.length > 0) {
+    const nsSet = new Set(dqaResults.disconnected.map(n => n.namespace).filter(Boolean));
+    for (const ns of nsSet) {
+      try {
+        const r = await fetch(API + '/analyze/connect-components?namespace=' + encodeURIComponent(ns), { method: 'POST' });
+        const data = await r.json();
+        executed.connected = data;
+        connectedCount += data.edges_created || 0;
+      } catch(e) { console.error('connect-components failed', ns, e); }
+    }
+  }
+
+  // Fix uncontained: create project node + contains edges per namespace
+  if (dqaResults.uncontained && dqaResults.uncontained.length > 0) {
+    const nsGroups = new Map();
+    for (const n of dqaResults.uncontained) {
+      const ns = n.namespace || 'global';
+      if (!nsGroups.has(ns)) nsGroups.set(ns, []);
+      nsGroups.get(ns).push(_sid(n.id));
+    }
+    for (const [ns, nodeIds] of nsGroups) {
+      try {
+        let projectId = null;
+        const searchR = await fetch(API + '/nodes?type=project&namespace=' + encodeURIComponent(ns) + '&limit=5');
+        const searchData = await searchR.json();
+        const projects = Array.isArray(searchData) ? searchData : (searchData.nodes || []);
+        if (projects.length > 0) {
+          projectId = projects[0].id;
+        } else {
+          const createR = await fetch(API + '/nodes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              label: ns.charAt(0).toUpperCase() + ns.slice(1),
+              node_type: 'project',
+              content: 'Project root for ' + ns + ' namespace',
+              namespace: ns,
+              summary: 'Organizational anchor'
+            })
+          });
+          const createData = await createR.json();
+          if (createData && createData.id) projectId = createData.id;
+        }
+        if (projectId) {
+          const edges = nodeIds.map(tid => ({
+            source_id: projectId,
+            target_id: tid,
+            edge_type: 'contains',
+            workspace_name: 'hermes'
+          }));
+          await fetch(API + '/edges/batch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ edges })
+          });
+          executed.uncontained += nodeIds.length;
+        }
+      } catch(e) { console.error('contain-nodes failed', ns, e); }
+    }
+  }
+
+  // Show result report
+  showFixResultReport(executed, linked, connectedCount);
+
+  if (btn) { btn.disabled = false; btn.textContent = 'Quick Fix All'; }
+  runQualityAnalysis();
+}
+
+function buildFixPreview(report) {
+  let html = '<div style="max-height:400px;overflow:auto">';
+  const orphans = report.orphans || [];
+  const conn = report.connected || {};
+  const uncontained = report.uncontained || {};
+  const hasUncontained = Object.keys(uncontained).length > 0;
+
+  if (orphans.length === 0 && !conn.edges_created && !hasUncontained) {
+    html += '<p style="color:var(--text-dim)">No auto-fixable issues found.</p>';
+  } else {
+    html += '<p style="margin-bottom:12px;font-weight:600">This will:</p>';
+    if (orphans.length > 0) {
+      html += '<div style="margin-bottom:12px"><strong>Link ' + orphans.length + ' orphan(s):</strong></div>';
+      html += '<div style="font-size:12px;line-height:1.6">';
+      for (const o of orphans.slice(0, 10)) {
+        html += '<div style="display:flex;gap:8px;margin-bottom:4px">';
+        html += '<span style="color:var(--yellow)">→</span>';
+        html += '<span style="flex:1">' + esc(o.orphan_label) + '</span>';
+        html += '<span style="color:var(--text-dim)">→ ' + esc(o.linked_to_label || '?') + '</span>';
+        html += '</div>';
+      }
+      if (orphans.length > 10) html += '<div style="color:var(--text-dim)">... and ' + (orphans.length - 10) + ' more</div>';
+      html += '</div>';
+    }
+    if (conn.edges_created) {
+      html += '<div style="margin-top:12px"><strong>Connect ' + conn.orphan_nodes + ' disconnected node(s)</strong> to main component (' + conn.main_component + ' nodes) by creating ' + conn.edges_created + ' edge(s).</div>';
+    }
+    if (hasUncontained) {
+      let totalUncontained = 0;
+      for (const ns of Object.keys(uncontained)) totalUncontained += uncontained[ns].length;
+      html += '<div style="margin-top:12px"><strong>Contain ' + totalUncontained + ' node(s)</strong> under project roots:</div>';
+      html += '<div style="font-size:12px;line-height:1.6;margin-top:6px">';
+      for (const [ns, labels] of Object.entries(uncontained).slice(0, 5)) {
+        html += '<div style="margin-bottom:4px"><span style="color:var(--accent)">▸</span> <strong>' + esc(ns) + '</strong>: ' + esc(labels.slice(0, 3).join(', ')) + (labels.length > 3 ? ' +' + (labels.length - 3) + ' more' : '') + '</div>';
+      }
+      html += '</div>';
+    }
+  }
+  html += '</div>';
+  return html;
+}
+
+function confirmFixPreview(html) {
+  return new Promise(resolve => {
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:9999';
+    modal.innerHTML = '<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;max-width:500px;width:90%">' +
+      '<h3 style="margin:0 0 16px">Quick Fix Preview</h3>' + html +
+      '<div style="display:flex;gap:10px;margin-top:20px;justify-content:flex-end">' +
+      '<button id="fix-cancel" style="background:var(--border);color:var(--text)">Cancel</button>' +
+      '<button id="fix-confirm" style="background:var(--green);color:#fff">Apply Fix</button>' +
+      '</div></div>';
+    document.body.appendChild(modal);
+    document.getElementById('fix-cancel').onclick = () => { modal.remove(); resolve(false); };
+    document.getElementById('fix-confirm').onclick = () => { modal.remove(); resolve(true); };
+  });
+}
+
+function showFixResultReport(executed, linked, connectedCount) {
+  const orphans = executed.orphans || [];
+  let html = '<div style="max-height:400px;overflow:auto">';
+  html += '<p style="font-weight:600;color:var(--green);margin-bottom:12px">✓ Fix applied successfully</p>';
+
+  if (linked > 0) {
+    html += '<div style="margin-bottom:12px"><strong>Linked ' + linked + ' orphan(s):</strong></div>';
+    html += '<div style="font-size:12px;line-height:1.6">';
+    for (const o of orphans.slice(0, 10)) {
+      html += '<div style="display:flex;gap:8px;margin-bottom:4px">';
+      html += '<span style="color:var(--green)">✓</span>';
+      html += '<span style="flex:1">' + esc(o.orphan_label) + '</span>';
+      html += '<span style="color:var(--text-dim)">→ ' + esc(o.linked_to_label || '?') + '</span>';
+      html += '</div>';
+    }
+    if (orphans.length > 10) html += '<div style="color:var(--text-dim)">... and ' + (orphans.length - 10) + ' more</div>';
+    html += '</div>';
+  }
+
+  const conn = executed.connected || {};
+  if (connectedCount > 0) {
+    html += '<div style="margin-top:12px"><strong>Connected ' + conn.orphan_nodes + ' node(s)</strong> to main component with ' + connectedCount + ' new edge(s).</div>';
+  }
+
+  if (executed.uncontained > 0) {
+    html += '<div style="margin-top:12px"><strong>Contained ' + executed.uncontained + ' node(s)</strong> under project roots.</div>';
+  }
+
+  if (linked === 0 && connectedCount === 0 && executed.uncontained === 0) {
+    html += '<p style="color:var(--text-dim)">No changes were made.</p>';
+  }
+
+  html += '</div>';
+
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:9999';
+  modal.innerHTML = '<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;max-width:500px;width:90%">' +
+    '<h3 style="margin:0 0 16px">Fix Results</h3>' + html +
+    '<div style="display:flex;gap:10px;margin-top:20px;justify-content:flex-end">' +
+    '<button id="fix-close" style="background:var(--accent);color:#fff">Close</button>' +
+    '</div></div>';
+  document.body.appendChild(modal);
+  document.getElementById('fix-close').onclick = () => modal.remove();
+}
+
+async function fixSelected() {
+  if (dqaChecked.size === 0) return;
+
+  const byCategory = { orphan:[], disconnected:[], uncontained:[], duplicate:[], empty:[], lowImportance:[] };
+  for (const id of dqaChecked) {
+    for (const cat of Object.keys(byCategory)) {
+      if (dqaResults[cat] && dqaResults[cat].some(n => _sid(n.id) === id)) {
+        byCategory[cat].push(id);
+        break;
+      }
+    }
+  }
+
+  const summary = [];
+  const btn = document.getElementById('dqa-fix-btn');
+  btn.disabled = true;
+  btn.textContent = 'Fixing...';
+
+  // Safe fixes only: link orphans and connect-components for disconnected
+  if (byCategory.orphan.length > 0) {
+    const nsSet = new Set();
+    byCategory.orphan.forEach(id => {
+      const n = dqaResults.orphan.find(x => _sid(x.id) === id);
+      if (n && n.namespace) nsSet.add(n.namespace);
+    });
+    let linked = 0;
+    for (const ns of nsSet) {
+      try {
+        const r = await fetch(API + '/analyze/link-orphans?dry_run=false&limit=50&namespace=' + encodeURIComponent(ns), { method: 'POST' });
+        const data = await r.json();
+        if (data && data.linked) linked += data.linked;
+      } catch(e) { console.error('link-orphans failed', ns, e); }
+    }
+    summary.push('Orphans: linked ' + linked + ' nodes');
+  }
+
+  if (byCategory.disconnected.length > 0) {
+    const nsSet = new Set();
+    byCategory.disconnected.forEach(id => {
+      const n = dqaResults.disconnected.find(x => _sid(x.id) === id);
+      if (n && n.namespace) nsSet.add(n.namespace);
+    });
+    let connected = 0;
+    for (const ns of nsSet) {
+      try {
+        const r = await fetch(API + '/analyze/connect-components?namespace=' + encodeURIComponent(ns), { method: 'POST' });
+        const data = await r.json();
+        if (data && data.edges_created) connected += data.edges_created;
+      } catch(e) { console.error('connect-components failed', ns, e); }
+    }
+    summary.push('Disconnected: created ' + connected + ' edges');
+  }
+
+  // Fix uncontained: create project node + contains edges per namespace
+  if (byCategory.uncontained.length > 0) {
+    const nsGroups = new Map();
+    byCategory.uncontained.forEach(id => {
+      const n = dqaResults.uncontained.find(x => _sid(x.id) === id);
+      if (n && n.namespace) {
+        if (!nsGroups.has(n.namespace)) nsGroups.set(n.namespace, []);
+        nsGroups.get(n.namespace).push(id);
+      }
+    });
+    let containedCount = 0;
+    for (const [ns, nodeIds] of nsGroups) {
+      try {
+        // Find or create project node for this namespace
+        let projectId = null;
+        const searchR = await fetch(API + '/nodes?type=project&namespace=' + encodeURIComponent(ns) + '&limit=5');
+        const searchData = await searchR.json();
+        const projects = Array.isArray(searchData) ? searchData : (searchData.nodes || []);
+        if (projects.length > 0) {
+          projectId = projects[0].id;
+        } else {
+          // Create project node
+          const createR = await fetch(API + '/nodes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              label: ns.charAt(0).toUpperCase() + ns.slice(1),
+              node_type: 'project',
+              content: 'Project root for ' + ns + ' namespace',
+              namespace: ns,
+              summary: 'Organizational anchor'
+            })
+          });
+          const createData = await createR.json();
+          if (createData && createData.id) projectId = createData.id;
+        }
+        if (projectId) {
+          // Create contains edges
+          const edges = nodeIds.map(tid => ({
+            source_id: projectId,
+            target_id: tid,
+            edge_type: 'contains',
+            workspace_name: 'hermes'
+          }));
+          await fetch(API + '/edges/batch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ edges })
+          });
+          containedCount += nodeIds.length;
+        }
+      } catch(e) { console.error('contain-nodes failed', ns, e); }
+    }
+    summary.push('Uncontained: linked ' + containedCount + ' nodes to project roots');
+  }
+
+  // Never auto-delete. Warn about items that need manual review.
+  if (byCategory.duplicate.length > 0) {
+    summary.push('Duplicates: ' + byCategory.duplicate.length + ' nodes need manual review');
+  }
+  if (byCategory.empty.length > 0) {
+    summary.push('Empty content: ' + byCategory.empty.length + ' nodes need manual review');
+  }
+  if (byCategory.lowImportance.length > 0) {
+    summary.push('Low importance: ' + byCategory.lowImportance.length + ' nodes need manual review');
+  }
+
+  toast(summary.join(' \u00b7 '));
+  btn.disabled = false;
+  btn.textContent = 'Fix Selected (0)';
+  dqaChecked = new Set();
+  runQualityAnalysis();
+}
+
+// === Namespace Manager ===
+let nsList = [];
+
+async function loadNamespaces() {
+  try {
+    // Fetch namespace distribution from graph endpoint
+    const gR = await fetch(API + '/graph');
+    const g = await gR.json();
+    const nsCounts = {};
+    if (g && Array.isArray(g.nodes)) {
+      for (const n of g.nodes) {
+        const ns = n.namespace || 'global';
+        nsCounts[ns] = (nsCounts[ns] || 0) + 1;
+      }
+    }
+    nsList = Object.keys(nsCounts).sort();
+    // Populate all namespace dropdowns
+    const dropdowns = ['ns-rename-source','ns-move-source','ns-merge-a','ns-merge-b'];
+    for (const id of dropdowns) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      const placeholder = el.options[0].textContent;
+      el.innerHTML = '<option value="">' + esc(placeholder) + '</option>';
+      for (const ns of nsList) {
+        el.innerHTML += '<option value="' + esc(ns) + '">' + esc(ns) + ' (' + nsCounts[ns] + ')</option>';
+      }
+    }
+  } catch(e) {
+    console.error('Failed to load namespaces:', e);
+  }
+}
+
+async function renameNamespace() {
+  const source = document.getElementById('ns-rename-source').value;
+  const newName = document.getElementById('ns-rename-new').value.trim();
+  const status = document.getElementById('ns-rename-status');
+  if (!source) { toast('Select a namespace'); return; }
+  if (!newName) { toast('Enter a new name'); return; }
+  if (source === newName) { toast('Source and target are the same'); return; }
+
+  status.textContent = 'Fetching nodes...';
+  try {
+    const r = await fetch(API + '/nodes?namespace=' + encodeURIComponent(source) + '&limit=5000');
+    const nodes = await r.json();
+    if (!Array.isArray(nodes) || nodes.length === 0) {
+      status.textContent = 'No nodes found in namespace "' + esc(source) + '"';
+      return;
+    }
+    if (!confirm('Rename namespace "' + source + '" to "' + newName + '"? This will update ' + nodes.length + ' nodes.')) {
+      status.textContent = 'Cancelled.';
+      return;
+    }
+    status.textContent = 'Renaming ' + nodes.length + ' nodes...';
+    let updated = 0;
+    for (const n of nodes) {
+      try {
+        await fetch(API + '/nodes/' + n.id, {
+          method: 'PUT',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ namespace: newName })
+        });
+        updated++;
+      } catch(e) {
+        console.error('Failed to update node', n.id, e);
+      }
+    }
+    status.textContent = 'Done. Updated ' + updated + '/' + nodes.length + ' nodes.';
+    toast('Namespace renamed: ' + source + ' → ' + newName);
+    loadNamespaces();
+  } catch(e) {
+    status.textContent = 'Error: ' + e.message;
+  }
+}
+
+let nsMoveNodes = [];
+
+async function moveNodesPreview() {
+  const source = document.getElementById('ns-move-source').value;
+  const type = document.getElementById('ns-move-type').value;
+  const status = document.getElementById('ns-move-status');
+  const btn = document.getElementById('ns-move-btn');
+  if (!source) { toast('Select a namespace'); return; }
+
+  status.textContent = 'Loading...';
+  try {
+    let url = API + '/nodes?namespace=' + encodeURIComponent(source) + '&limit=5000';
+    const r = await fetch(url);
+    let nodes = await r.json();
+    if (Array.isArray(nodes) && type) {
+      nodes = nodes.filter(n => n.node_type === type);
+    }
+    nsMoveNodes = Array.isArray(nodes) ? nodes : [];
+    status.textContent = 'Preview: ' + nsMoveNodes.length + ' node(s) in "' + esc(source) + '"' + (type ? ' of type ' + type : '') + ' ready to move.';
+    btn.disabled = false;
+    btn.style.opacity = '1';
+  } catch(e) {
+    status.textContent = 'Error: ' + e.message;
+  }
+}
+
+async function moveNodesAll() {
+  const target = document.getElementById('ns-move-target').value.trim();
+  const status = document.getElementById('ns-move-status');
+  if (!target) { toast('Enter a target namespace'); return; }
+  if (nsMoveNodes.length === 0) { toast('Click Preview first'); return; }
+  if (!confirm('Move ' + nsMoveNodes.length + ' node(s) to "' + target + '"?')) {
+    status.textContent = 'Cancelled.';
+    return;
+  }
+
+  status.textContent = 'Moving ' + nsMoveNodes.length + ' nodes...';
+  let moved = 0;
+  for (const n of nsMoveNodes) {
+    try {
+      await fetch(API + '/nodes/' + n.id, {
+        method: 'PUT',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ namespace: target })
+      });
+      moved++;
+    } catch(e) {
+      console.error('Failed to move node', n.id, e);
+    }
+  }
+  status.textContent = 'Done. Moved ' + moved + '/' + nsMoveNodes.length + ' nodes to "' + esc(target) + '".';
+  toast('Moved ' + moved + ' nodes to ' + target);
+  nsMoveNodes = [];
+  document.getElementById('ns-move-btn').disabled = true;
+  document.getElementById('ns-move-btn').style.opacity = '0.5';
+  loadNamespaces();
+}
+
+let nsMergeNodes = [];
+
+async function mergeNamespacesPreview() {
+  const a = document.getElementById('ns-merge-a').value;
+  const b = document.getElementById('ns-merge-b').value;
+  const status = document.getElementById('ns-merge-status');
+  const btn = document.getElementById('ns-merge-btn');
+  if (!a || !b) { toast('Select two namespaces'); return; }
+
+  status.textContent = 'Loading...';
+  try {
+    const [rA, rB] = await Promise.all([
+      fetch(API + '/nodes?namespace=' + encodeURIComponent(a) + '&limit=5000'),
+      fetch(API + '/nodes?namespace=' + encodeURIComponent(b) + '&limit=5000')
+    ]);
+    const nodesA = await rA.json();
+    const nodesB = await rB.json();
+    const countA = Array.isArray(nodesA) ? nodesA.length : 0;
+    const countB = Array.isArray(nodesB) ? nodesB.length : 0;
+    nsMergeNodes = [
+      ...(Array.isArray(nodesA) ? nodesA : []),
+      ...(Array.isArray(nodesB) ? nodesB : [])
+    ];
+    status.textContent = 'Preview: ' + countA + ' from "' + esc(a) + '" + ' + countB + ' from "' + esc(b) + '" = ' + nsMergeNodes.length + ' total nodes to merge.';
+    btn.disabled = false;
+    btn.style.opacity = '1';
+  } catch(e) {
+    status.textContent = 'Error: ' + e.message;
+  }
+}
+
+async function mergeNamespaces() {
+  const target = document.getElementById('ns-merge-target').value.trim();
+  const status = document.getElementById('ns-merge-status');
+  if (!target) { toast('Enter a merged namespace name'); return; }
+  if (nsMergeNodes.length === 0) { toast('Click Preview first'); return; }
+  if (!confirm('Merge ' + nsMergeNodes.length + ' nodes into "' + target + '"?')) {
+    status.textContent = 'Cancelled.';
+    return;
+  }
+
+  status.textContent = 'Merging ' + nsMergeNodes.length + ' nodes...';
+  let merged = 0;
+  for (const n of nsMergeNodes) {
+    try {
+      await fetch(API + '/nodes/' + n.id, {
+        method: 'PUT',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ namespace: target })
+      });
+      merged++;
+    } catch(e) {
+      console.error('Failed to merge node', n.id, e);
+    }
+  }
+  status.textContent = 'Done. Merged ' + merged + '/' + nsMergeNodes.length + ' nodes into "' + esc(target) + '".';
+  toast('Merged ' + merged + ' nodes into ' + target);
+  nsMergeNodes = [];
+  document.getElementById('ns-merge-btn').disabled = true;
+  document.getElementById('ns-merge-btn').style.opacity = '0.5';
+  loadNamespaces();
+}
+
+loadNamespaces();
+// === Version Manager ===
+let vmAllNodes = [];
+let vmSelectedNode = null;
+let vmVersionHistory = [];
+let vmStaleNodes = [];
+
+async function searchNodeForVersions() {
+  const q = document.getElementById('vm-search-input').value.trim().toLowerCase();
+  const container = document.getElementById('vm-search-results');
+  const historyEl = document.getElementById('vm-history');
+  const diffEl = document.getElementById('vm-diff-panel');
+  diffEl.style.display = 'none';
+  historyEl.innerHTML = '';
+  document.getElementById('vm-node-info').style.display = 'none';
+
+  if (!q) { container.innerHTML = ''; return; }
+
+  try {
+    const r = await fetch(API + '/nodes?limit=500');
+    let nodes = await r.json();
+    if (!Array.isArray(nodes)) nodes = [];
+    vmAllNodes = nodes;
+    const matches = nodes.filter(n => n.label.toLowerCase().includes(q));
+
+    if (matches.length === 0) {
+      container.innerHTML = '<p style="color:var(--text-dim);font-size:13px">No nodes found matching "' + esc(q) + '"</p>';
+      return;
+    }
+
+    container.innerHTML = '<div style="max-height:150px;overflow-y:auto">' + matches.map(n =>
+      '<div class="node-card" onclick="loadVersionHistory(\'' + n.id + '\')" style="padding:8px 12px;cursor:pointer;border-radius:6px;margin-bottom:4px;background:var(--bg)">' +
+        '<span style="font-weight:500;font-size:13px">' + esc(n.label) + '</span>' +
+        '<span class="tag tag-' + n.node_type + '" style="margin-left:8px;font-size:10px">' + n.node_type + '</span>' +
+        '<span style="margin-left:8px;color:var(--text-dim);font-size:11px">v' + n.version + '</span>' +
+      '</div>'
+    ).join('') + '</div>';
+  } catch(e) {
+    container.innerHTML = '<p style="color:var(--red);font-size:13px">Search failed: ' + esc(e.message) + '</p>';
+  }
+}
+
+async function loadVersionHistory(id) {
+  const container = document.getElementById('vm-history');
+  const infoEl = document.getElementById('vm-node-info');
+  const diffEl = document.getElementById('vm-diff-panel');
+  diffEl.style.display = 'none';
+  container.innerHTML = '<p style="color:var(--text-dim);font-size:13px">Loading version history...</p>';
+
+  try {
+    const [nodeRes, histRes] = await Promise.all([
+      fetch(API + '/nodes/' + id),
+      fetch(API + '/nodes/' + id + '/history')
+    ]);
+    vmSelectedNode = await nodeRes.json();
+    vmVersionHistory = await histRes.json();
+
+    // Show node info
+    infoEl.style.display = 'block';
+    document.getElementById('vm-node-label').textContent = vmSelectedNode.label;
+    const typeEl = document.getElementById('vm-node-type');
+    typeEl.textContent = vmSelectedNode.node_type;
+    typeEl.className = 'tag tag-' + vmSelectedNode.node_type;
+    document.getElementById('vm-node-ns').textContent = vmSelectedNode.namespace;
+
+    if (!Array.isArray(vmVersionHistory) || vmVersionHistory.length === 0) {
+      container.innerHTML = '<p style="color:var(--text-dim);font-size:13px">No version history found.</p>';
+      return;
+    }
+
+    // Sort by version descending
+    vmVersionHistory.sort((a, b) => (b.version || 0) - (a.version || 0));
+
+    container.innerHTML = '<div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">' + vmVersionHistory.length + ' version(s) found</div>' +
+      vmVersionHistory.map((v, i) => {
+        const isCurrent = !v.valid_to;
+        const validFrom = v.valid_from ? new Date(v.valid_from).toLocaleString() : '—';
+        const validTo = v.valid_to ? new Date(v.valid_to).toLocaleString() : '—';
+        const preview = (v.content || '').substring(0, 120);
+        return '<div style="padding:10px 12px;background:var(--bg);border:1px solid ' + (isCurrent ? 'var(--green)' : 'var(--border)') + ';border-radius:6px;margin-bottom:6px;cursor:pointer" onclick="selectVersion(' + i + ')">' +
+          '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">' +
+            '<strong style="font-size:13px">v' + v.version + '</strong>' +
+            '<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:' + (isCurrent ? 'var(--green)' : 'var(--border)') + ';color:' + (isCurrent ? '#fff' : 'var(--text-dim)') + '">' + (isCurrent ? 'current' : 'superseded') + '</span>' +
+          '</div>' +
+          '<div style="font-size:12px;color:var(--text-dim);margin-bottom:4px">from: ' + validFrom + ' &rarr; to: ' + validTo + '</div>' +
+          '<div style="font-size:12px;color:var(--text-dim)">' + esc(preview) + (preview.length >= 120 ? '...' : '') + '</div>' +
+        '</div>';
+      }).join('');
+  } catch(e) {
+    container.innerHTML = '<p style="color:var(--red);font-size:13px">Failed to load history: ' + esc(e.message) + '</p>';
+  }
+}
+
+function selectVersion(idx) {
+  if (!vmVersionHistory || !vmVersionHistory[idx]) return;
+  const diffEl = document.getElementById('vm-diff-panel');
+  const v = vmVersionHistory[idx];
+
+  // Find the previous version for comparison
+  let prev = null;
+  for (let i = idx + 1; i < vmVersionHistory.length; i++) {
+    if (vmVersionHistory[i].content !== v.content) { prev = vmVersionHistory[i]; break; }
+  }
+  if (!prev && idx + 1 < vmVersionHistory.length) prev = vmVersionHistory[idx + 1];
+
+  diffEl.style.display = 'block';
+
+  if (prev) {
+    document.getElementById('vm-diff-left-label').textContent = 'v' + prev.version + (prev.valid_to ? ' (superseded)' : ' (current)');
+    document.getElementById('vm-diff-right-label').textContent = 'v' + v.version + (v.valid_to ? ' (superseded)' : ' (current)');
+    document.getElementById('vm-diff-left').textContent = prev.content || '—';
+    document.getElementById('vm-diff-right').textContent = v.content || '—';
+
+    // Highlighted inline diff
+    renderInlineDiff(prev.content || '', v.content || '');
+  } else {
+    document.getElementById('vm-diff-left-label').textContent = 'v' + v.version;
+    document.getElementById('vm-diff-right-label').textContent = '(no previous version)';
+    document.getElementById('vm-diff-left').textContent = v.content || '—';
+    document.getElementById('vm-diff-right').textContent = '—';
+    document.getElementById('vm-diff-highlighted').innerHTML = '';
+  }
+}
+
+function renderInlineDiff(oldText, newText) {
+  const oldLines = oldText.split('\n');
+  const newLines = newText.split('\n');
+  const maxLen = Math.max(oldLines.length, newLines.length);
+  let html = '<div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:12px;font-family:monospace;max-height:300px;overflow-y:auto">';
+
+  for (let i = 0; i < maxLen; i++) {
+    const ol = i < oldLines.length ? oldLines[i] : null;
+    const nl = i < newLines.length ? newLines[i] : null;
+
+    if (ol === null && nl !== null) {
+      html += '<div style="background:#1a3a1a;color:var(--green)">+ ' + esc(nl) + '</div>';
+    } else if (ol !== null && nl === null) {
+      html += '<div style="background:#3a1a1a;color:var(--red)">- ' + esc(ol) + '</div>';
+    } else if (ol !== nl) {
+      html += '<div style="background:#3a1a1a;color:var(--red)">- ' + esc(ol) + '</div>';
+      html += '<div style="background:#1a3a1a;color:var(--green)">+ ' + esc(nl) + '</div>';
+    } else {
+      html += '<div style="color:var(--text-dim)">&nbsp; ' + esc(ol) + '</div>';
+    }
+  }
+  html += '</div>';
+  document.getElementById('vm-diff-highlighted').innerHTML = html;
+}
+
+async function expireOldVersions() {
+  const days = parseInt(document.getElementById('vm-purge-days').value);
+  if (!days || days < 1) { alert('Enter a valid number of days'); return; }
+  if (!confirm('Expire all versions older than ' + days + ' days? This cannot be undone.')) return;
+
+  try {
+    const r = await fetch(API + '/nodes/purge?older_than_days=' + days, { method: 'DELETE' });
+    const data = await r.json();
+    toast('Expired ' + (data.deleted || data.purged || 'unknown') + ' old version(s)');
+  } catch(e) {
+    toast('Purge failed: ' + e.message, true);
+  }
+}
+
+async function findStaleNodes() {
+  const container = document.getElementById('vm-stale-results');
+  const actionsEl = document.getElementById('vm-stale-actions');
+  container.innerHTML = '<p style="color:var(--text-dim);font-size:13px">Searching for stale nodes...</p>';
+  actionsEl.style.display = 'none';
+
+  try {
+    const r = await fetch(API + '/nodes?limit=5000');
+    const nodes = await r.json();
+    vmStaleNodes = nodes.filter(n => (n.version || 1) > 5);
+
+    if (vmStaleNodes.length === 0) {
+      container.innerHTML = '<p style="color:var(--green);font-size:13px">No stale nodes found (all versions <= 5).</p>';
+      return;
+    }
+
+    container.innerHTML = '<div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">' + vmStaleNodes.length + ' stale node(s) found</div>' +
+      '<div style="max-height:250px;overflow-y:auto">' +
+      vmStaleNodes.map((n, i) =>
+        '<div style="padding:8px 12px;background:var(--bg);border-radius:6px;margin-bottom:4px;display:flex;align-items:center;gap:8px">' +
+          '<input type="checkbox" id="vm-stale-cb-' + i + '" checked style="cursor:pointer">' +
+          '<label for="vm-stale-cb-' + i + '" style="flex:1;cursor:pointer;font-size:13px">' +
+            '<strong>' + esc(n.label) + '</strong>' +
+            '<span class="tag tag-' + n.node_type + '" style="margin-left:8px;font-size:10px">' + n.node_type + '</span>' +
+            '<span style="margin-left:8px;color:var(--yellow);font-size:11px">v' + n.version + '</span>' +
+          '</label>' +
+        '</div>'
+      ).join('') + '</div>';
+
+    actionsEl.style.display = 'block';
+    updateStaleCount();
+    // Attach checkbox listeners
+    container.querySelectorAll('input[type=checkbox]').forEach(cb => {
+      cb.addEventListener('change', updateStaleCount);
+    });
+  } catch(e) {
+    container.innerHTML = '<p style="color:var(--red);font-size:13px">Search failed: ' + esc(e.message) + '</p>';
+  }
+}
+
+function updateStaleCount() {
+  const checked = document.querySelectorAll('#vm-stale-results input[type=checkbox]:checked').length;
+  document.getElementById('vm-stale-count').textContent = checked + ' selected';
+}
+
+async function compactSelectedStale() {
+  const selected = [];
+  vmStaleNodes.forEach((n, i) => {
+    const cb = document.getElementById('vm-stale-cb-' + i);
+    if (cb && cb.checked) selected.push(n);
+  });
+
+  if (selected.length === 0) { alert('No nodes selected'); return; }
+  if (!confirm('Compact ' + selected.length + ' node(s)? This will remove old superseded versions.')) return;
+
+  let success = 0;
+  let totalCompacted = 0;
+  let failed = 0;
+  for (const n of selected) {
+    try {
+      const r = await fetch(API + '/nodes/' + n.id + '/compact', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' });
+      if (r.ok) {
+        const data = await r.json();
+        totalCompacted += (data.compacted || 0);
+        success++;
+      } else {
+        failed++;
+      }
+    } catch(e) { failed++; }
+  }
+  toast('Compacted ' + totalCompacted + ' version(s) from ' + success + ' node(s)' + (failed ? ', ' + failed + ' failed' : ''));
+  findStaleNodes();
+}
+
+// === Graph Analytics ===
+async function loadGraphAnalytics() {
+  const btn = document.querySelector('[onclick="loadGraphAnalytics()"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Loading...'; }
+  try {
+    const r = await fetch(API + '/analytics/graph');
+    const data = await r.json();
+    if (!data) return;
+    document.getElementById('ga-nodes').textContent = data.node_count || 0;
+    document.getElementById('ga-edges').textContent = data.edge_count || 0;
+    document.getElementById('ga-density').textContent = data.density || '0.000';
+    document.getElementById('ga-avg').textContent = data.avg_connections || '0.000';
+    document.getElementById('ga-clusters').textContent = data.components || 0;
+
+    const hubs = data.hub_nodes || [];
+    document.getElementById('ga-hubs').innerHTML = hubs.length > 0
+      ? hubs.map(h => `<div style="padding:3px 0;border-bottom:1px solid var(--border);display:flex;gap:8px">
+        <span style="flex:1"><a href="#" onclick="showDetail('${h.id}');return false" style="color:var(--green);text-decoration:none">${esc(h.label)}</a> <span style="color:var(--text-dim);font-size:10px">${esc(h.namespace)}</span></span>
+        <span style="color:var(--accent);font-size:10px">${h.degree} conn</span>
+      </div>`).join('')
+      : '<span style="color:var(--text-dim)">No hub nodes found</span>';
+
+    const bridges = data.bridge_nodes || [];
+    document.getElementById('ga-bridges').innerHTML = bridges.length > 0
+      ? bridges.map(b => `<div style="padding:3px 0;border-bottom:1px solid var(--border);display:flex;gap:8px">
+        <span style="flex:1"><a href="#" onclick="showDetail('${b.id}');return false" style="color:var(--yellow);text-decoration:none">${esc(b.label || b.id.substring(0,8))}</a> <span style="color:var(--text-dim);font-size:10px">${esc(b.namespace || '')}</span></span>
+      </div>`).join('')
+      : '<span style="color:var(--text-dim)">No bridge nodes found</span>';
+  } catch(e) {
+    console.error('Graph analytics failed', e);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Load Analytics'; }
+  }
+}
+
+function toast(msg, isError) {
+  const el = document.createElement('div');
+  el.style.cssText = 'position:fixed;bottom:20px;right:20px;padding:12px 20px;border-radius:8px;font-size:13px;z-index:200;background:' + (isError ? 'var(--red)' : 'var(--green)') + '18;color:' + (isError ? 'var(--red)' : 'var(--green)') + ';border:1px solid ' + (isError ? 'var(--red)' : 'var(--green)') + '30;box-shadow:0 4px 12px rgba(0,0,0,0.3);transition:opacity .3s';
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, 2700);
+}
+
+
+
+
+function selectNodeById(id) { showDetail(id); }
+
+// === Keyboard Shortcuts ===
+document.addEventListener('keydown', function(e) {
+  // Ctrl+K: focus search
+  if (e.ctrlKey && e.key === 'k') { e.preventDefault(); document.getElementById('searchQuery').focus(); }
+  // Ctrl+N: focus create node label
+  if (e.ctrlKey && e.key === 'n') { e.preventDefault(); document.getElementById('nodeLabel').focus(); }
+  // 1-6: switch tabs (when not in input)
+  const tag = e.target.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+  const tabs = ['dashboard','questions','edges','tools','graph','brain','observer'];
+  const idx = parseInt(e.key) - 1;
+  if (idx >= 0 && idx < tabs.length) { e.preventDefault(); switchTab(tabs[idx]); }
+  // R: refresh current data
+  if (e.key === 'r') { e.preventDefault(); loadStats(); loadNodes(); }
+  // /: focus search
+  if (e.key === '/') { e.preventDefault(); document.getElementById('searchQuery').focus(); }
+});
+
+  </script>
+<script src="observer-tab.js"></script>
+</body>
+</html>

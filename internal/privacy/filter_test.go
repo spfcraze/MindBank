@@ -85,7 +85,7 @@ func TestFilterURLAuth(t *testing.T) {
 }
 
 func TestFilterJWT(t *testing.T) {
-	input := "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+	input := "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
 	want := "Authorization: Bearer [REDACTED]"
 	got := Filter(input)
 	if got != want {
@@ -137,5 +137,48 @@ func TestFilterNodeNoSecrets(t *testing.T) {
 
 	if fl != label || fc != content || fs != summary {
 		t.Error("FilterNode modified clean strings")
+	}
+}
+
+// RED tests: these should FAIL with current awsSecretPattern (over-redaction)
+func TestFilterDoesNotRedactSHA1Hash(t *testing.T) {
+	input := "The hash is a94a8fe5ccb19ba61c4c0873d391e987982fbbd3 for the file"
+	got := Filter(input)
+	if strings.Contains(got, "[REDACTED]") {
+		t.Errorf("Filter(%q) over-redacted SHA-1 hash: got %q", input, got)
+	}
+}
+
+func TestFilterDoesNotRedactDataURI(t *testing.T) {
+	input := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9aw=="
+	got := Filter(input)
+	if strings.Contains(got, "[REDACTED]") {
+		t.Errorf("Filter(%q) over-redacted data URI: got %q", input, got)
+	}
+}
+
+func TestFilterDoesNotRedactRandomBase64(t *testing.T) {
+	input := "Here is some base64: SGVsbG8gV29ybGQhIEhvdyBhcmUgeW91IHRvZGF5"
+	got := Filter(input)
+	if strings.Contains(got, "[REDACTED]") {
+		t.Errorf("Filter(%q) over-redacted random base64: got %q", input, got)
+	}
+}
+
+func TestFilterDoesRedactAWSContextSecret(t *testing.T) {
+	input := "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	got := Filter(input)
+	// secretPattern catches "SECRET_ACCESS_KEY=..." first, which is fine — secret is redacted
+	if !strings.Contains(got, "[REDACTED]") {
+		t.Errorf("Filter(%q) failed to redact AWS secret: got %q", input, got)
+	}
+}
+
+func TestFilterDoesRedactSecretPrefix(t *testing.T) {
+	input := "secret: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	want := "[REDACTED]"
+	got := Filter(input)
+	if got != want {
+		t.Errorf("Filter(%q) = %q, want %q", input, got, want)
 	}
 }

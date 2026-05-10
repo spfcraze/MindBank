@@ -251,7 +251,28 @@ if is_git_install; then
     echo "  Method: git pull"
     cd "$MINDBANK_DIR"
     git fetch origin
+
+    # Stash local changes before pull to preserve them
+    STASHED=false
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        echo "  Stashing local changes..."
+        git stash push -m "update backup $(date +%Y%m%d-%H%M%S)"
+        STASHED=true
+    fi
+
     git reset --hard "origin/main" 2>/dev/null || git reset --hard "origin/master" 2>/dev/null || git pull --ff-only
+
+    # Restore stashed changes if any
+    if [ "$STASHED" = true ]; then
+        echo "  Restoring local changes..."
+        if git stash pop 2>/dev/null; then
+            echo "  Stash restored ✓"
+        else
+            echo "  WARNING: Stash pop had conflicts. Resolve manually:"
+            echo "    cd $MINDBANK_DIR && git stash list && git stash pop"
+        fi
+    fi
+
     echo "  Git pull complete ✓"
 else
     echo "  Method: tarball download"

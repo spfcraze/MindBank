@@ -20,10 +20,12 @@ Hybrid search · Temporal versioning · Local embeddings · Per-project isolatio
 ## ⚡ One-Command Install
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/spfcraze/MindBank/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/spfcraze/MindBank/main/scripts/setup.sh | bash
 ```
 
 **Dashboard:** http://localhost:8095
+
+> **Note:** The setup script creates a `.env` file with all required configuration. The API server (`mindbank-api`) and MCP server (`mindbank-mcp`) are started together via `scripts/start.sh`.
 
 ---
 
@@ -71,7 +73,7 @@ MindBank **remembers**:
 ### Option 1: One-liner (recommended)
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/spfcraze/MindBank/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/spfcraze/MindBank/main/scripts/setup.sh | bash
 ```
 
 ### Option 2: Manual
@@ -81,18 +83,19 @@ curl -sSL https://raw.githubusercontent.com/spfcraze/MindBank/main/install.sh | 
 git clone https://github.com/spfcraze/MindBank.git ~/mindbank
 cd ~/mindbank
 
-# 2. Setup (Docker Postgres + build + plugin install)
-make setup
+# 2. Run the setup script (creates .env, starts Postgres, builds binaries)
+bash scripts/setup.sh
 
 # 3. Start Ollama + pull model
 curl -fsSL https://ollama.ai/install.sh | sh
 ollama pull nomic-embed-text
 
-# 4. Run
-make run
+# 4. Start MindBank (API + MCP)
+bash scripts/start.sh
 
 # 5. Verify
 curl http://localhost:8095/api/v1/health
+curl http://localhost:8096/mcp
 # → {"status":"ok","postgres":"connected","ollama":"connected"}
 ```
 
@@ -111,6 +114,36 @@ The web UI gives you:
 - **Graph 2D** — Interactive force-directed visualization
 - **Brain 3D** — Immersive 3D graph exploration
 - **Observer** — Causal precursor tracing, blind spot detection, knowledge coverage analysis
+
+---
+
+## Lifecycle Event Capture
+
+MindBank captures detailed session lifecycle events via hooks:
+
+### Event Types
+
+| Event | Description | Payload |
+|---|---|---|
+| `session_start` | Session begins | `{model, timestamp}` |
+| `user_prompt_submit` | User sends message | `{prompt}` |
+| `pre_tool_use` | Before tool execution | `{tool, command, args}` |
+| `post_tool_use` | After tool execution | `{tool, result, error}` |
+| `stop` | Session ends | `{duration_seconds, exit_code}` |
+
+### Storage
+
+Events are stored as JSON files in `~/.hermes/sessions/events/<session_id>/`.
+Each event becomes a node in the graph with `temporal_next` edges linking the sequence.
+
+### Visualization
+
+Event nodes appear in Brain3D as colored dots:
+- Green: session_start
+- Blue: user_prompt_submit
+- Amber: pre_tool_use
+- Teal: post_tool_use
+- Red: stop
 
 ---
 
@@ -261,16 +294,45 @@ The dependence system follows these edge types backward:
 
 | Edge Type | Direction | Meaning |
 |-----------|-----------|---------|
+| `contains` | A → B | A contains/is about B |
+| `relates_to` | A ↔ B | A is related to B (symmetric) |
 | `depends_on` | A → B | A depends on B (B is prerequisite) |
 | `learned_from` | A → B | A was learned from experience B |
 | `decided_by` | A → B | Decision A was informed by B |
 | `produced` | A → B | A produced outcome B |
 | `supports` | A → B | A supports/evidences B |
 | `contradicts` | A → B | A contradicts B (triggers blind spot detection) |
+| `tested_by` | A → B | A was empirically validated by B |
+| `invalidated_by` | A → B | A was disproven/invalidated by B |
+| `derived_from` | A → B | A was derived from B |
+| `assumed` | A → B | A assumes B as a premise |
+| `superseded_by` | A → B | A was replaced/superseded by B |
+| `refined_by` | A → B | A was refined/improved by B |
+| `merged_into` | A → B | A was merged into B |
+| `created_by` | A → B | A was created by agent B |
+| `reviewed_by` | A → B | A was reviewed by agent B |
+| `executed_by` | A → B | A was executed by agent B |
+| `failed_due_to` | A → B | A failed because of B |
+| `incompatible_with` | A → B | A is incompatible with B |
+| `precondition_for` | A → B | A is a precondition for B |
 
 ---
 
 ## Connect Your AI Agent
+
+### Hermes Agent (Recommended)
+
+MindBank connects to Hermes via MCP (Model Context Protocol) over HTTP:
+
+```bash
+# 1. Start MindBank (API + MCP)
+cd ~/mindbank && bash scripts/start.sh
+
+# 2. Hermes auto-detects the MCP server at http://localhost:8096/mcp
+#    (configured in ~/.hermes/config.yaml)
+```
+
+### Claude Desktop / Claude Code CLI
 
 ```bash
 bash scripts/install-plugin.sh
@@ -280,7 +342,6 @@ Detects and configures:
 
 - **Claude Desktop** → `~/.config/claude/claude_desktop_config.json`
 - **Claude Code CLI** → `~/.claude/mcp.json`
-- **Hermes Agent** → `~/.hermes/hermes-agent/plugins/memory/`
 
 Or use flags:
 
@@ -430,11 +491,14 @@ POST /api/v1/snapshot/rebuild
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MB_PORT` | `8095` | HTTP server port |
-| `MB_DB_DSN` | `postgres://...` | PostgreSQL connection string |
+| `MB_DB_DSN` | `postgres://mindbank:mindbank@localhost:5434/mindbank?sslmode=disable` | PostgreSQL connection string |
+| `MB_POSTGRES_PASSWORD` | `mindbank` | Postgres password (used by docker-compose) |
 | `MB_OLLAMA_URL` | `http://localhost:11434` | Ollama API endpoint |
 | `MB_EMBED_MODEL` | `nomic-embed-text` | Embedding model |
 | `MB_LOG_LEVEL` | `info` | debug / info / warn / error |
 | `MB_API_KEY` | *(none)* | Require API key for all endpoints |
+| `MCP_HTTP_PORT` | `8096` | MCP server HTTP port |
+| `MCP_TRANSPORT` | *(stdio)* | Set to `http` for HTTP mode |
 
 ---
 

@@ -239,7 +239,42 @@ func (w *Worker) createExtractedNodes(ctx context.Context, parentID string, resu
 	Decisions []string `json:"decisions"`
 	Problems  []string `json:"problems"`
 }) error {
-	// TODO: Implement node creation via repository
+	// Create nodes for each extracted fact
+	for _, fact := range result.Facts {
+		if err := w.createNode(ctx, parentID, fact, "fact"); err != nil {
+			slog.Error("compression: create fact node", "error", err)
+		}
+	}
+	for _, concept := range result.Concepts {
+		if err := w.createNode(ctx, parentID, concept, "concept"); err != nil {
+			slog.Error("compression: create concept node", "error", err)
+		}
+	}
+	for _, decision := range result.Decisions {
+		if err := w.createNode(ctx, parentID, decision, "decision"); err != nil {
+			slog.Error("compression: create decision node", "error", err)
+		}
+	}
+	for _, problem := range result.Problems {
+		if err := w.createNode(ctx, parentID, problem, "problem"); err != nil {
+			slog.Error("compression: create problem node", "error", err)
+		}
+	}
+	return nil
+}
+
+func (w *Worker) createNode(ctx context.Context, parentID, content, nodeType string) error {
+	label := content
+	if len(label) > 80 {
+		label = label[:80] + "..."
+	}
+	_, err := w.pool.Exec(ctx, `
+		INSERT INTO nodes (workspace_name, namespace, label, node_type, content, summary, materialized_path)
+		VALUES ('default', 'global', $1, $2, $3, $3, '/' || gen_random_uuid()::text)
+	`, label, nodeType, content)
+	if err != nil {
+		return fmt.Errorf("insert node: %w", err)
+	}
 	return nil
 }
 

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"mindbank/internal/autocapture"
 	"mindbank/internal/embedder"
 	"mindbank/internal/models"
 	"mindbank/internal/repository"
@@ -287,6 +288,11 @@ func (s *Server) toolCreateNode(ctx context.Context, args json.RawMessage) (any,
 	if !nodeType.IsValid() {
 		return nil, fmt.Errorf("invalid node_type: %s", req.Type)
 	}
+	if req.Namespace == "" {
+		if pwd := os.Getenv("PWD"); pwd != "" {
+			req.Namespace = autocapture.DeriveNamespaceFromPath(pwd)
+		}
+	}
 	node, err := s.nodeRepo.Create(ctx, models.NodeCreate{
 		WorkspaceName: req.Workspace,
 		Namespace:     req.Namespace,
@@ -311,6 +317,11 @@ func (s *Server) toolSearch(ctx context.Context, args json.RawMessage) (any, err
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
+	}
+	if req.Namespace == "" {
+		if pwd := os.Getenv("PWD"); pwd != "" {
+			req.Namespace = autocapture.DeriveNamespaceFromPath(pwd)
+		}
 	}
 
 	embedding, err := s.embedder.Embed(ctx, req.Query)
@@ -365,6 +376,11 @@ func (s *Server) toolAsk(ctx context.Context, args json.RawMessage) (any, error)
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
+	}
+	if req.Namespace == "" {
+		if pwd := os.Getenv("PWD"); pwd != "" {
+			req.Namespace = autocapture.DeriveNamespaceFromPath(pwd)
+		}
 	}
 
 	embedding, err := s.embedder.Embed(ctx, req.Query)

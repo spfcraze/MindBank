@@ -15,14 +15,16 @@ import (
 )
 
 type SearchRepo struct {
-	pool   *pgxpool.Pool
-	cache  *EmbeddingCache
+	pool        *pgxpool.Pool
+	cache       *EmbeddingCache
+	resultCache *ResultCache
 }
 
 func NewSearchRepo(pool *pgxpool.Pool) *SearchRepo {
 	return &SearchRepo{
-		pool:  pool,
-		cache: NewEmbeddingCache(),
+		pool:        pool,
+		cache:       NewEmbeddingCache(),
+		resultCache: NewResultCache(),
 	}
 }
 
@@ -208,6 +210,13 @@ func (r *SearchRepo) HybridSearch(ctx context.Context, query string, embedding [
 		limit = 10
 	}
 
+	// Check result cache first (key = query|workspace|namespace|limit)
+	cacheKey := query + "|" + workspace + "|" + namespace + "|" + fmt.Sprintf("%d", limit)
+	if cached, ok := r.resultCache.Get(cacheKey); ok {
+		slog.Debug("result cache hit", "query", query, "workspace", workspace)
+		return cached, nil
+	}
+
 	// Fetch more candidates for RRF fusion
 	candidateLimit := limit * 3
 
@@ -309,7 +318,20 @@ func (r *SearchRepo) HybridSearch(ctx context.Context, query string, embedding [
 	// Graph expansion: boost results with graph-connected nodes
 	results = r.GraphExpand(ctx, results, edgeRepo, limit)
 
+	// Cache the final results before returning
+	r.resultCache.Set(cacheKey, results)
+
 	return results, nil
+}
+
+// ResultCacheStats returns the result cache size and max age.
+func (r *SearchRepo) ResultCacheStats() (int, time.Duration) {
+	return r.resultCache.Stats()
+}
+
+// InvalidateResultCache clears the result cache. Called after node mutations.
+func (r *SearchRepo) InvalidateResultCache() {
+	r.resultCache.InvalidateAll()
 }
 
 // ImportanceScore computes a multi-factor importance score for a node.

@@ -62,7 +62,9 @@ echo "  OK"
 
 # ---- Step 3: Generate secure credentials ----
 echo "[3/7] Generating credentials..."
-DB_PASS=$(openssl rand -hex 16 2>/dev/null || head -c 32 /dev/urandom | base64 | head -c 32)
+# Use a consistent default password for local development
+# Users can change this after installation
+DB_PASS="mindbank"
 API_KEY=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | base64 | head -c 64)
 echo "  Generated DB password and API key"
 
@@ -110,11 +112,32 @@ done
 echo "[6/7] Creating configuration..."
 cat > "$MINDBANK_DIR/.env" << EOF
 # MindBank Configuration
-MB_PORT=${MINDBANK_PORT}
+# This file is sourced by start scripts. Do NOT commit real passwords to git.
+
+# Database password (used by docker-compose.yml)
+MB_POSTGRES_PASSWORD=${DB_PASS}
+
+# Full database DSN (used by mindbank-api and mindbank-mcp binaries)
 MB_DB_DSN=postgres://mindbank:${DB_PASS}@localhost:${MINDBANK_PG_PORT}/mindbank?sslmode=disable
-MB_OLLAMA_URL=http://localhost:11434
-MB_EMBED_MODEL=nomic-embed-text
+
+# Service ports
+MB_PG_PORT=${MINDBANK_PG_PORT}
+MB_OLLAMA_PORT=11434
+MB_PORT=${MINDBANK_PORT}
+
+# MCP server port (Hermes integration)
+MCP_HTTP_PORT=8096
+
+# Logging
 MB_LOG_LEVEL=info
+
+# Embedding model
+MB_EMBED_MODEL=nomic-embed-text
+
+# Ollama URL
+MB_OLLAMA_URL=http://localhost:11434
+
+# API Key (set to require auth)
 MB_API_KEY=${API_KEY}
 EOF
 echo "  OK"
@@ -131,7 +154,16 @@ if [ "$HAS_GO" = true ] && [ -f "$MINDBANK_DIR/cmd/mindbank-mcp/main.go" ]; then
     echo ""
     echo "  MCP Transport Modes:"
     echo "    stdio (default): ./mindbank-mcp"
-    echo "    HTTP mode:       MCP_TRANSPORT=http ./mindbank-mcp --http --http-port 8096"
+    echo "    HTTP mode:       MCP_TRANSPORT=http MCP_HTTP_PORT=8096 ./mindbank-mcp"
+    echo ""
+fi
+
+# Build API binary if Go is available
+if [ "$HAS_GO" = true ] && [ -f "$MINDBANK_DIR/cmd/mindbank/main.go" ]; then
+    echo "  Building API server binary..."
+    cd "$MINDBANK_DIR"
+    go build -o mindbank-api ./cmd/mindbank
+    echo "  Built: $MINDBANK_DIR/mindbank-api"
     echo ""
 fi
 
@@ -172,18 +204,18 @@ echo "╚═══════════════════════�
 echo ""
 echo "  Next steps:"
 echo ""
-echo "  1. Start MindBank API:"
-echo "     cd $MINDBANK_DIR && source .env && ./mindbank-api"
+echo "  1. Start MindBank (API + MCP):"
+echo "     cd $MINDBANK_DIR && bash scripts/start.sh"
 echo ""
 echo "  2. Verify it's running:"
 echo "     curl http://localhost:${MINDBANK_PORT}/api/v1/health"
+echo "     curl http://localhost:8096/mcp"
 echo ""
 echo "  3. Open the dashboard:"
 echo "     http://localhost:${MINDBANK_PORT}"
 echo ""
-echo "  4. For auto-start on boot, run:"
-echo "     bash $MINDBANK_DIR/scripts/setup.sh"
-echo "     (or manually copy and edit the service file)"
+echo "  4. For auto-start on boot, install the systemd service:"
+echo "     bash $MINDBANK_DIR/scripts/install-service.sh"
 echo ""
 echo "  API Key: ${API_KEY}"
 echo "  (Set MB_API_KEY env var to require auth)"
@@ -204,14 +236,12 @@ echo ""
 read -p "Install systemd service for auto-start? (y/N) " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
-    mkdir -p ~/.config/systemd/user
-    sed -e "s|##INSTALL_DIR##|$MINDBANK_DIR|g" \
-        -e "s|##USER##|$USER|g" \
-        -e "s|##DB_PASS##|$DB_PASS|g" \
-        -e "s|##PG_PORT##|$MINDBANK_PG_PORT|g" \
-        -e "s|##PORT##|$MINDBANK_PORT|g" \
-        "$MINDBANK_DIR/scripts/mindbank.service" > ~/.config/systemd/user/mindbank.service
-    systemctl --user daemon-reload
-    systemctl --user enable mindbank
-    echo "  Service installed: systemctl --user start mindbank"
+    if [ -f "$MINDBANK_DIR/scripts/install-service.sh" ]; then
+        bash "$MINDBANK_DIR/scripts/install-service.sh"
+    else
+        echo "  install-service.sh not found. Manual install:"
+        echo "  cp $MINDBANK_DIR/scripts/mindbank.service ~/.config/systemd/user/"
+        echo "  systemctl --user daemon-reload"
+        echo "  systemctl --user enable --now mindbank"
+    fi
 fi
