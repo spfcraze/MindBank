@@ -20,7 +20,7 @@ func TestNamespaceMigrationDryRun(t *testing.T) {
 
 	dsn := os.Getenv("MB_DSN")
 	if dsn == "" {
-		dsn = "postgres://mindbank:mindbank@localhost:5434/mindbank?sslmode=disable"
+		dsn = os.Getenv("MB_DB_DSN", "postgres://mindbank:${MB_POSTGRES_PASSWORD:-mindbank_test}@localhost:5434/mindbank?sslmode=disable"
 	}
 
 	pool, err := pgxpool.New(ctx, dsn)
@@ -142,7 +142,7 @@ func TestNamespaceMigrationCommit(t *testing.T) {
 
 	dsn := os.Getenv("MB_DSN")
 	if dsn == "" {
-		dsn = "postgres://mindbank:mindbank@localhost:5434/mindbank?sslmode=disable"
+		dsn = os.Getenv("MB_DB_DSN", "postgres://mindbank:${MB_POSTGRES_PASSWORD:-mindbank_test}@localhost:5434/mindbank?sslmode=disable"
 	}
 
 	pool, err := pgxpool.New(ctx, dsn)
@@ -226,7 +226,7 @@ func TestNamespaceMigrationIdempotent(t *testing.T) {
 
 	dsn := os.Getenv("MB_DSN")
 	if dsn == "" {
-		dsn = "postgres://mindbank:mindbank@localhost:5434/mindbank?sslmode=disable"
+		dsn = os.Getenv("MB_DB_DSN", "postgres://mindbank:${MB_POSTGRES_PASSWORD:-mindbank_test}@localhost:5434/mindbank?sslmode=disable"
 	}
 
 	pool, err := pgxpool.New(ctx, dsn)
@@ -332,7 +332,7 @@ func TestWorkspaceNameInIngestion(t *testing.T) {
 
 	dsn := os.Getenv("MB_DSN")
 	if dsn == "" {
-		dsn = "postgres://mindbank:mindbank@localhost:5434/mindbank?sslmode=disable"
+		dsn = os.Getenv("MB_DB_DSN", "postgres://mindbank:${MB_POSTGRES_PASSWORD:-mindbank_test}@localhost:5434/mindbank?sslmode=disable"
 	}
 
 	pool, err := pgxpool.New(ctx, dsn)

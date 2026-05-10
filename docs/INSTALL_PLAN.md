@@ -194,7 +194,7 @@ WantedBy=multi-user.target
     <key>EnvironmentVariables</key>
     <dict>
         <key>MB_DB_DSN</key>
-        <string>postgres://mindbank:mindbank_secret@localhost:5434/mindbank?sslmode=disable</string>
+        <string>postgres://mindbank:YOUR_DB_PASSWORD@localhost:5434/mindbank?sslmode=disable</string>
         <key>MB_OLLAMA_URL</key>
         <string>http://localhost:11434</string>
     </dict>

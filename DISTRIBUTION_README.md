@@ -72,7 +72,7 @@ go build -o mindbank ./cmd/mindbank
 go build -o mindbank-mcp ./cmd/mindbank-mcp
 
 # 4. Run
-MB_DB_DSN="postgres://mindbank:mindbank_secret@localhost:5434/mindbank?sslmode=disable" \
+MB_DB_DSN="postgres://mindbank:YOUR_DB_PASSWORD@localhost:5434/mindbank?sslmode=disable" \
   ./mindbank
 
 # 5. Add to Hermes config (~/.hermes/config.yaml)
@@ -80,7 +80,7 @@ mcp_servers:
   mindbank:
     command: "/path/to/mindbank-mcp"
     env:
-      MB_DB_DSN: "postgres://mindbank:mindbank_secret@localhost:5434/mindbank?sslmode=disable"
+      MB_DB_DSN: "postgres://mindbank:YOUR_DB_PASSWORD@localhost:5434/mindbank?sslmode=disable"
       MB_OLLAMA_URL: "http://localhost:11434"
     timeout: 30
 
@@ -133,7 +133,7 @@ curl http://localhost:8095/api/v1/snapshot
 ```bash
 # Test MCP connection
 echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | \
-  MB_DB_DSN="postgres://mindbank:mindbank_secret@localhost:5434/mindbank?sslmode=disable" \
+  MB_DB_DSN="postgres://mindbank:YOUR_DB_PASSWORD@localhost:5434/mindbank?sslmode=disable" \
   ./mindbank-mcp
 ```
 

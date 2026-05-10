@@ -4,7 +4,7 @@
 
 set -e
 
-DB_URL="${1:-postgres://mindbank:mindbank_secret@localhost:5434/mindbank?sslmode=disable}"
+DB_URL="${1:-postgres://mindbank:YOUR_DB_PASSWORD@localhost:5434/mindbank?sslmode=disable}"
 MIGRATIONS_DIR="$(dirname "$0")/../internal/db/migrations"
 
 echo "Running MindBank migrations..."

@@ -46,7 +46,7 @@ func TestCheckDuplicateAndStoreHash(t *testing.T) {
 	// These tests require a live database; skip if no DSN is available.
 	dsn := os.Getenv("TEST_DSN")
 	if dsn == "" {
-		dsn = "postgres://mindbank:mindbank@localhost:5432/mindbank?sslmode=disable"
+		dsn = os.Getenv("MB_DB_DSN", "postgres://mindbank:${MB_POSTGRES_PASSWORD:-mindbank_test}@localhost:5432/mindbank?sslmode=disable"
 	}
 	pool, err := pgxpool.New(context.Background(), dsn)
 	if err != nil {

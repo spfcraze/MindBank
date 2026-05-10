@@ -24,7 +24,7 @@ MINDBANK_SRC="${1:-}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MINDBANK_PORT="${MINDBANK_PORT:-8095}"
 MINDBANK_URL="${MINDBANK_URL:-http://localhost:${MINDBANK_PORT}/api/v1}"
-DB_DSN="${MB_DB_DSN:-postgres://mindbank:mindbank@localhost:5432/mindbank?sslmode=disable}"
+DB_DSN="${MB_DB_DSN:-postgres://mindbank:YOUR_DB_PASSWORD@localhost:5432/mindbank?sslmode=disable}"
 
 echo "╔══════════════════════════════════════════════════╗"
 echo "║  MindBank Installer                              ║"

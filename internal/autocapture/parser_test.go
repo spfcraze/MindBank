@@ -147,4 +147,104 @@ func TestParseSessionForNamespace(t *testing.T) {
 			t.Errorf("ParseSessionForNamespace() = %q, want %q", got, "project")
 		}
 	})
+
+	t.Run("system_prompt with project path", func(t *testing.T) {
+		sessionJSON := `{"system_prompt":"Project AGENTS.md for /home/rat/massagents. You are an AI agent.","messages":[]}`
+		got, err := ParseSessionForNamespace([]byte(sessionJSON))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "massagents" {
+			t.Errorf("ParseSessionForNamespace() = %q, want %q", got, "massagents")
+		}
+	})
+
+	t.Run("system_prompt with multiple projects picks most frequent", func(t *testing.T) {
+		sessionJSON := `{"system_prompt":"Path: /home/rat/mindbank then /home/rat/mindbank again and /home/rat/other once.","messages":[]}`
+		got, err := ParseSessionForNamespace([]byte(sessionJSON))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "mindbank" {
+			t.Errorf("ParseSessionForNamespace() = %q, want %q", got, "mindbank")
+		}
+	})
+
+	t.Run("user messages with project path", func(t *testing.T) {
+		sessionJSON := `{"messages":[{"role":"user","content":"lets work on /home/rat/klixsor project"},{"role":"assistant","content":"ok"}]}`
+		got, err := ParseSessionForNamespace([]byte(sessionJSON))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "klixsor" {
+			t.Errorf("ParseSessionForNamespace() = %q, want %q", got, "klixsor")
+		}
+	})
+
+	t.Run("messages with punctuation after path", func(t *testing.T) {
+		sessionJSON := `{"messages":[{"role":"user","content":"Review /home/rat/kataro. Then check /home/rat/kataro again."}]}`
+		got, err := ParseSessionForNamespace([]byte(sessionJSON))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "kataro" {
+			t.Errorf("ParseSessionForNamespace() = %q, want %q", got, "kataro")
+		}
+	})
+
+	t.Run("system_prompt overrides messages", func(t *testing.T) {
+		sessionJSON := `{"system_prompt":"Project at /home/rat/mindbank","messages":[{"role":"user","content":"work on /home/rat/other"}]}`
+		got, err := ParseSessionForNamespace([]byte(sessionJSON))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "mindbank" {
+			t.Errorf("ParseSessionForNamespace() = %q, want %q", got, "mindbank")
+		}
+	})
+
+	t.Run("no paths falls back to global", func(t *testing.T) {
+		sessionJSON := `{"system_prompt":"Just a normal prompt.","messages":[{"role":"user","content":"hello world"}]}`
+		got, err := ParseSessionForNamespace([]byte(sessionJSON))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "global" {
+			t.Errorf("ParseSessionForNamespace() = %q, want %q", got, "global")
+		}
+	})
+
+	t.Run("working_directory still takes priority over system_prompt", func(t *testing.T) {
+		sessionJSON := `{"working_directory":"/home/rat/hermes","system_prompt":"Project at /home/rat/mindbank","messages":[]}`
+		got, err := ParseSessionForNamespace([]byte(sessionJSON))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "hermes" {
+			t.Errorf("ParseSessionForNamespace() = %q, want %q", got, "hermes")
+		}
+	})
+
+	t.Run("trailing punctuation stripped", func(t *testing.T) {
+		sessionJSON := `{"messages":[{"role":"user","content":"Check /home/rat/mindbank, /home/rat/kataro; /home/rat/klixsor."}]}`
+		got, err := ParseSessionForNamespace([]byte(sessionJSON))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// mindbank, kataro, klixsor each appear once — tiebreaker is alphabetical
+		if got != "kataro" {
+			t.Errorf("ParseSessionForNamespace() = %q, want %q", got, "kataro")
+		}
+	})
+
+	t.Run("common directories are filtered out", func(t *testing.T) {
+		sessionJSON := `{"messages":[{"role":"user","content":"path: /home/rat/go and /home/rat/.config and /home/rat/mindbank"}]}`
+		got, err := ParseSessionForNamespace([]byte(sessionJSON))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "mindbank" {
+			t.Errorf("ParseSessionForNamespace() = %q, want %q", got, "mindbank")
+		}
+	})
 }

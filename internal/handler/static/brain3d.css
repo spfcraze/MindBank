@@ -8,37 +8,36 @@ body {
     height: 100vh;
 }
 
-#app {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-}
+#app { display: flex; flex-direction: column; height: 100vh; }
 
 header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 12px 20px;
-    background: rgba(10, 10, 18, 0.9);
+    padding: 10px 20px;
+    background: rgba(10, 10, 18, 0.95);
     border-bottom: 1px solid rgba(255,255,255,0.05);
     z-index: 10;
+    flex-wrap: wrap;
+    gap: 8px;
 }
 
-header h1 { font-size: 18px; font-weight: 600; }
+header h1 { font-size: 18px; font-weight: 600; flex-shrink: 0; }
 
 .controls {
     display: flex;
-    gap: 12px;
+    gap: 8px;
     align-items: center;
+    flex-wrap: wrap;
 }
 
 .controls select, .controls button, .controls a, .toggle-label {
-    padding: 6px 14px;
+    padding: 6px 12px;
     border-radius: 6px;
     border: 1px solid rgba(255,255,255,0.1);
     background: rgba(255,255,255,0.05);
     color: #e0e0e0;
-    font-size: 13px;
+    font-size: 12px;
     cursor: pointer;
     text-decoration: none;
     display: flex;
@@ -46,35 +45,83 @@ header h1 { font-size: 18px; font-weight: 600; }
     gap: 6px;
 }
 
-.toggle-label input[type="checkbox"] {
-    cursor: pointer;
-    width: 14px;
-    height: 14px;
-}
+.controls button:hover, .controls a:hover { background: rgba(255,255,255,0.1); }
 
-.slider-label {
+/* View Mode Buttons */
+.view-modes { display: flex; gap: 2px; background: rgba(255,255,255,0.05); border-radius: 6px; padding: 2px; }
+.mode-btn {
+    padding: 5px 14px;
+    border: none;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    background: transparent;
+    color: #888;
+    transition: all 0.2s;
+}
+.mode-btn.active { background: #00d4aa; color: #000; }
+.mode-btn:hover:not(.active) { background: rgba(255,255,255,0.1); color: #ccc; }
+
+main { flex: 1; position: relative; overflow: hidden; }
+
+/* Stats Overlay */
+#stats-overlay {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    display: flex;
+    gap: 12px;
+    z-index: 5;
+    pointer-events: none;
+}
+#stats-overlay .stat {
+    background: rgba(0,0,0,0.7);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 11px;
+    color: var(--text-dim, #888);
+    font-family: monospace;
+}
+#stats-overlay .stat-val { color: #00d4aa; font-weight: 700; }
+
+/* Edge Legend */
+#edge-legend {
+    position: absolute;
+    bottom: 12px;
+    left: 12px;
+    background: rgba(0,0,0,0.7);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px;
+    padding: 12px 16px;
+    z-index: 5;
+    font-size: 11px;
+    font-family: monospace;
+}
+.legend-title {
+    color: #888;
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    margin-bottom: 8px;
+    font-weight: 700;
+}
+.legend-item {
     display: flex;
     align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    color: var(--text-dim, #888);
-    cursor: pointer;
+    gap: 8px;
+    margin: 3px 0;
+    color: #aaa;
+}
+.legend-color {
+    width: 20px;
+    height: 2px;
+    border-radius: 1px;
+    flex-shrink: 0;
 }
 
-.slider-label input[type="range"] {
-    width: 60px;
-}
-
-.controls button:hover, .controls a:hover, .toggle-label:hover {
-    background: rgba(255,255,255,0.1);
-}
-
-main {
-    flex: 1;
-    position: relative;
-    overflow: hidden;
-}
-
+/* Info Panel */
 #info-panel {
     position: fixed;
     top: 60px;
@@ -89,10 +136,8 @@ main {
     overflow-y: auto;
     z-index: 20;
 }
-
 #info-panel.visible { transform: translateX(0); }
 #info-panel.hidden { transform: translateX(100%); }
-
 #info-panel .close {
     position: absolute;
     top: 10px;
@@ -103,17 +148,8 @@ main {
     font-size: 24px;
     cursor: pointer;
 }
-
-#info-panel .content {
-    margin-top: 30px;
-}
-
-#info-panel h2 {
-    font-size: 16px;
-    margin-bottom: 8px;
-    color: #00d4aa;
-}
-
+#info-panel .content { margin-top: 30px; }
+#info-panel h2 { font-size: 16px; margin-bottom: 8px; color: #00d4aa; }
 #info-panel .badge {
     display: inline-block;
     padding: 2px 8px;
@@ -122,7 +158,6 @@ main {
     text-transform: uppercase;
     margin-bottom: 12px;
 }
-
 #info-panel .scroll-box {
     max-height: 200px;
     overflow-y: auto;
@@ -133,13 +168,11 @@ main {
     font-size: 13px;
     line-height: 1.5;
 }
-
 #info-panel .actions {
     display: flex;
     gap: 10px;
     margin-top: 15px;
 }
-
 #info-panel .actions button {
     flex: 1;
     padding: 8px;
@@ -149,18 +182,18 @@ main {
     color: #e0e0e0;
     cursor: pointer;
 }
-
-#info-panel .actions button:hover {
-    background: rgba(255,255,255,0.1);
-}
+#info-panel .actions button:hover { background: rgba(255,255,255,0.1); }
 
 #tooltip {
     position: fixed;
     pointer-events: none;
-    background: rgba(0,0,0,0.8);
-    padding: 6px 12px;
-    border-radius: 4px;
+    background: rgba(0,0,0,0.85);
+    padding: 8px 14px;
+    border-radius: 6px;
     font-size: 12px;
+    font-family: monospace;
     display: none;
     z-index: 100;
+    max-width: 300px;
+    line-height: 1.4;
 }

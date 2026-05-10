@@ -19,7 +19,7 @@ var testPool *pgxpool.Pool
 func TestMain(m *testing.M) {
 	dsn := os.Getenv("MB_DB_DSN")
 	if dsn == "" {
-		dsn = "postgres://mindbank:***@localhost:5434/mindbank?sslmode=disable"
+		dsn = os.Getenv("MB_DB_DSN", "postgres://mindbank:${MB_POSTGRES_PASSWORD:-mindbank_test}@localhost:5434/mindbank?sslmode=disable"
 	}
 	pool, err := pgxpool.New(context.Background(), dsn)
 	if err != nil {

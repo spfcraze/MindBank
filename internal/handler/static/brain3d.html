@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MindBank — Brain 3D</title>
-    <link rel="stylesheet" href="brain3d.css">
+    <link rel="stylesheet" href="brain3d.css?v=2">
     <script type="importmap">
     {
         "imports": {
@@ -19,19 +19,17 @@
         <header>
             <h1>🧠 MindBank Brain 3D</h1>
             <div class="controls">
-                <label class="toggle-label">
-                    <input type="checkbox" id="show-global">
-                    <span>Show global</span>
-                </label>
-                <label class="slider-label" title="Show lifecycle events">
-                    <span>Events</span>
-                    <input type="checkbox" id="show-events" checked>
-                </label>
-                <label class="slider-label" title="Namespace clustering strength">
-                    <span>Cluster</span>
-                    <input type="range" id="ns-strength" min="0" max="10" step="0.5" value="5">
-                    <span id="ns-strength-val">5</span>
-                </label>
+                <!-- View Modes -->
+                <div class="view-modes">
+                    <button id="mode-full" class="mode-btn active" onclick="setViewMode('full')">Full</button>
+                    <button id="mode-micro" class="mode-btn" onclick="setViewMode('micro')">Micro</button>
+                    <button id="mode-macro" class="mode-btn" onclick="setViewMode('macro')">Macro</button>
+                </div>
+                <!-- Search -->
+                <input type="text" id="search-input" placeholder="Search nodes..." 
+                       oninput="searchNodes(this.value)"
+                       style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;padding:6px 14px;border-radius:6px;font-size:13px;width:180px;">
+                <!-- Controls -->
                 <select id="topic-filter" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;padding:0.25rem 0.5rem;border-radius:0.25rem;font-size:0.875rem;">
                     <option value="">All Topics</option>
                     <option value="deployment">Deployment</option>
@@ -48,8 +46,7 @@
                 <select id="namespace-filter">
                     <option value="">All namespaces</option>
                 </select>
-                <button id="reset-cam">Reset Camera</button>
-                <button id="toggle-fly">Fly Mode</button>
+                <button id="reset-cam">Reset Cam</button>
                 <a href="/" class="back">← Dashboard</a>
             </div>
         </header>
@@ -57,6 +54,24 @@
         <main id="canvas-container">
             <div id="loading">Loading 3D brain...</div>
             <div id="error-display" style="display:none; color:#ef4444; padding:20px; font-family:monospace;"></div>
+            
+            <!-- Stats Overlay -->
+            <div id="stats-overlay">
+                <div class="stat"><span class="stat-val" id="stat-nodes">-</span> nodes</div>
+                <div class="stat"><span class="stat-val" id="stat-edges">-</span> edges</div>
+                <div class="stat"><span class="stat-val" id="stat-projects">-</span> projects</div>
+                <div class="stat"><span class="stat-val" id="stat-sessions">-</span> sessions</div>
+            </div>
+
+            <!-- Edge Legend -->
+            <div id="edge-legend">
+                <div class="legend-title">Edge Types</div>
+                <div class="legend-item"><span class="legend-color" style="background:#4ecdc4;"></span> depends_on / supports</div>
+                <div class="legend-item"><span class="legend-color" style="background:#a78bfa;"></span> influences</div>
+                <div class="legend-item"><span class="legend-color" style="background:#ff6b35;"></span> contradicts</div>
+                <div class="legend-item"><span class="legend-color" style="background:#404040;"></span> relates_to</div>
+                <div class="legend-item"><span class="legend-color" style="background:#3b82f6;"></span> contains</div>
+            </div>
         </main>
 
         <aside id="info-panel" class="hidden">
@@ -69,40 +84,24 @@
 
     <script type="module">
         import init, { PhysicsEngine } from './pkg/brain3d_physics.js';
-        import { Brain3D } from './brain3d.js';
+        import { Brain3D } from './brain3d.js?v=2';
         import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
         import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
         import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
-        // Expose post-processing classes for Brain3D
         window.EffectComposer = EffectComposer;
         window.RenderPass = RenderPass;
         window.UnrealBloomPass = UnrealBloomPass;
 
         const loading = document.getElementById('loading');
         const errorDisplay = document.getElementById('error-display');
+        let brain;
 
         function showError(msg) {
             loading.style.display = 'none';
             errorDisplay.style.display = 'block';
             errorDisplay.textContent = 'ERROR: ' + msg;
             console.error(msg);
-        }
-
-        function typeToIndex(t) {
-            const map = { decision: 0, fact: 1, problem: 2, preference: 3, project: 4, person: 5 };
-            return map[t] || 6;
-        }
-
-        function nsToIndex(ns) {
-            let h = 0;
-            for (let i = 0; i < ns.length; i++) h = ((h << 5) - h) + ns.charCodeAt(i);
-            return Math.abs(h) % 1000;
-        }
-
-        function edgeTypeToIndex(t) {
-            const map = { depends_on: 0, supports: 1, relates_to: 2, learned_from: 3 };
-            return map[t] || 2;
         }
 
         async function main() {
@@ -112,198 +111,147 @@
                 loading.textContent = 'WASM loaded. Creating 3D scene...';
 
                 const container = document.getElementById('canvas-container');
-                const brain = new Brain3D(container);
+                brain = new Brain3D(container);
+                window.brain = brain;
                 loading.textContent = 'Scene created. Fetching graph data...';
 
-                // Fetch graph data
                 const namespace = new URLSearchParams(location.search).get('namespace') || '';
-                const url = namespace ? `/api/v1/graph?namespace=${encodeURIComponent(namespace)}` : '/api/v1/graph';
+                const url = namespace ? `/api/v1/graph?limit=2000&namespace=${encodeURIComponent(namespace)}` : '/api/v1/graph?limit=2000';
 
                 console.log('[Brain3D] Fetching:', url);
                 let res;
                 try {
                     res = await fetch(url);
                 } catch (fetchErr) {
-                    console.error('[Brain3D] Fetch failed:', fetchErr.message);
-                    throw new Error('Network error fetching graph data: ' + fetchErr.message + '. Is the MindBank API server running on port 8095?');
+                    throw new Error('Network error: ' + fetchErr.message);
                 }
-                if (!res.ok) throw new Error('HTTP ' + res.status + ' fetching graph data');
+                if (!res.ok) throw new Error('HTTP ' + res.status);
                 const data = await res.json();
                 console.log('[Brain3D] Loaded:', data.nodes.length, 'nodes,', data.edges.length, 'edges');
-                loading.textContent = `Loaded ${data.nodes.length} nodes, ${data.edges.length} edges. Building physics...`;
+                loading.textContent = `Loaded ${data.nodes.length} nodes. Building visualization...`;
 
-                // Map node IDs to indices
-                const nodeIdToIndex = {};
-                data.nodes.forEach((n, i) => nodeIdToIndex[n.id] = i);
-                brain.nodeIdToIndex = nodeIdToIndex;
-
-                // NEUROGRID: Separate signal (projects) from noise (sessions)
+                // Separate signal from noise
                 const projectNodes = data.nodes.filter(n => n.node_type === 'project' || n.namespace !== 'global');
                 const sessionNodes = data.nodes.filter(n => n.node_type === 'session' && n.namespace === 'global');
-                console.log(`[Brain3D] Projects: ${projectNodes.length}, Sessions: ${sessionNodes.length}`);
                 
-                // Reorder data: projects first, then sessions
                 const orderedNodes = [...projectNodes, ...sessionNodes];
                 const orderedNodeIdToIndex = {};
                 orderedNodes.forEach((n, i) => orderedNodeIdToIndex[n.id] = i);
                 brain.nodeIdToIndex = orderedNodeIdToIndex;
-                
-                // Calculate neurogrid positions
-                const neuroPositions = calculateNeurogridPositions(projectNodes, sessionNodes, data.edges, orderedNodeIdToIndex);
-                
-                // Create nodes with visual hierarchy
+                brain.nodes = orderedNodes;
+                brain.projectCount = projectNodes.length;
+
+                // Position nodes
+                const positions = calculateLayout(projectNodes, sessionNodes, data.edges, orderedNodeIdToIndex);
+                brain.nodePositions = positions;
+
+                // Build scene
                 brain.createNodes(orderedNodes, projectNodes.length);
-                brain.updateNodePositions(neuroPositions);
-                brain.createEdges(data.edges, neuroPositions);
+                brain.updateNodePositions(positions);
+                brain.createEdges(data.edges, positions);
+
+                // Update stats
+                updateStats(data.nodes.length, data.edges.length, projectNodes.length, sessionNodes.length);
+
                 loading.style.display = 'none';
 
-                // Helper: Calculate neurogrid positions
-                // Projects in triangle formation, sessions clustered around connected projects
-                function calculateNeurogridPositions(projects, sessions, edges, nodeIdToIndex) {
-                    const totalNodes = projects.length + sessions.length;
-                    const positions = new Float32Array(totalNodes * 3);
-                    const projectSpacing = 15;
-                    
-                    // Position projects in triangle/circle formation
-                    projects.forEach((proj, i) => {
-                        const angle = (i / Math.max(projects.length, 1)) * Math.PI * 2 - Math.PI / 2;
-                        positions[i * 3] = Math.cos(angle) * projectSpacing;
-                        positions[i * 3 + 1] = 0;
-                        positions[i * 3 + 2] = Math.sin(angle) * projectSpacing;
-                    });
-                    
-                    // Build edge lookup for session clustering
-                    const sessionConnections = {};
-                    edges.forEach(edge => {
-                        const srcId = edge.source || edge.source_id;
-                        const tgtId = edge.target || edge.target_id;
-                        const srcIdx = nodeIdToIndex[srcId];
-                        const tgtIdx = nodeIdToIndex[tgtId];
-                        if (srcIdx === undefined || tgtIdx === undefined) return;
-                        
-                        // If one end is a session and other is a project, record connection
-                        const srcIsProject = srcIdx < projects.length;
-                        const tgtIsProject = tgtIdx < projects.length;
-                        
-                        if (!srcIsProject && tgtIsProject) {
-                            if (!sessionConnections[srcIdx]) sessionConnections[srcIdx] = [];
-                            sessionConnections[srcIdx].push(tgtIdx);
-                        }
-                        if (!tgtIsProject && srcIsProject) {
-                            if (!sessionConnections[tgtIdx]) sessionConnections[tgtIdx] = [];
-                            sessionConnections[tgtIdx].push(srcIdx);
-                        }
-                    });
-                    
-                    // Extract topic from metadata for better clustering
-                    function getSessionTopic(sess) {
-                        if (sess.metadata && sess.metadata.topic) {
-                            return sess.metadata.topic;
-                        }
-                        return 'general';
-                    }
+                // Initialize view mode
+                brain.setViewMode('full');
 
-                    // Group sessions by topic
-                    const topicGroups = {};
-                    sessions.forEach((sess, i) => {
-                        const topic = getSessionTopic(sess);
-                        if (!topicGroups[topic]) topicGroups[topic] = [];
-                        topicGroups[topic].push({index: projects.length + i, session: sess, topic});
+                // Calculate layout
+                function calculateLayout(projects, sessions, edges, nodeIdToIndex) {
+                    const total = projects.length + sessions.length;
+                    const pos = new Float32Array(total * 3);
+                    const spacing = 15;
+
+                    // Projects in circle
+                    projects.forEach((p, i) => {
+                        const a = (i / Math.max(projects.length, 1)) * Math.PI * 2 - Math.PI / 2;
+                        pos[i * 3] = Math.cos(a) * spacing;
+                        pos[i * 3 + 1] = 0;
+                        pos[i * 3 + 2] = Math.sin(a) * spacing;
                     });
 
-                    // Map topics to most relevant project
+                    // Sessions: cluster around connected projects
                     const topicToProject = {
-                        'deployment': 0,    // CostSync (klixsor)
-                        'database': 0,      // CostSync
-                        'api': 1,           // Hermes Agent
-                        'auth': 1,          // Hermes
-                        'frontend': 1,      // Hermes
-                        'bugfix': 2,        // Autowrkers
-                        'refactoring': 2,   // Autowrkers
-                        'testing': 2,       // Autowrkers
-                        'config': 1,        // Hermes
-                        'architecture': 1,  // Hermes
-                        'general': 0        // Default to CostSync
+                        deployment: 0, database: 0, api: 1, auth: 1, frontend: 1,
+                        bugfix: 2, refactoring: 2, testing: 2, config: 1, architecture: 1, general: 0
                     };
 
-                    // Position sessions in topic clusters around relevant projects
-                    Object.keys(topicGroups).forEach((topic) => {
-                        const group = topicGroups[topic];
-                        const targetProjectIdx = topicToProject[topic] || 0;
-                        
-                        const projX = positions[targetProjectIdx * 3];
-                        const projZ = positions[targetProjectIdx * 3 + 2];
-                        
-                        // Distribute in a circle around the project
-                        const radius = 6 + (Object.keys(topicGroups).indexOf(topic) % 3) * 2;
-                        
-                        group.forEach((item, itemIdx) => {
-                            const angle = (itemIdx / Math.max(group.length, 1)) * Math.PI * 2;
-                            
-                            positions[item.index * 3] = projX + Math.cos(angle) * radius;
-                            positions[item.index * 3 + 1] = (Math.sin(itemIdx * 0.3) * 2) + 1;
-                            positions[item.index * 3 + 2] = projZ + Math.sin(angle) * radius;
+                    const byTopic = {};
+                    sessions.forEach((s, i) => {
+                        const topic = (s.metadata && s.metadata.topic) ? s.metadata.topic : 'general';
+                        if (!byTopic[topic]) byTopic[topic] = [];
+                        byTopic[topic].push({idx: projects.length + i, sess: s});
+                    });
+
+                    Object.entries(byTopic).forEach(([topic, group]) => {
+                        const tp = topicToProject[topic] || 0;
+                        const px = pos[tp * 3], pz = pos[tp * 3 + 2];
+                        const r = 5 + (Object.keys(byTopic).indexOf(topic) % 3) * 2;
+                        group.forEach((item, j) => {
+                            const a = (j / Math.max(group.length, 1)) * Math.PI * 2;
+                            pos[item.idx * 3] = px + Math.cos(a) * r;
+                            pos[item.idx * 3 + 1] = (Math.sin(j * 0.3) * 2) + 1;
+                            pos[item.idx * 3 + 2] = pz + Math.sin(a) * r;
                         });
                     });
-                    
-                    console.log(`[Brain3D] Neurogrid: ${projects.length} projects in triangle, ${sessions.length} sessions in ${Object.keys(topicGroups).length} topic clusters`);
-                    
-                    return positions;
+
+                    return pos;
                 }
+
+                function updateStats(nodes, edges, projects, sessions) {
+                    document.getElementById('stat-nodes').textContent = nodes;
+                    document.getElementById('stat-edges').textContent = edges;
+                    document.getElementById('stat-projects').textContent = projects;
+                    document.getElementById('stat-sessions').textContent = sessions;
+                }
+
+                // Namespace filter
                 const namespaces = [...new Set(data.nodes.map(n => n.namespace))].sort();
-                const filter = document.getElementById('namespace-filter');
+                const nsFilter = document.getElementById('namespace-filter');
                 namespaces.forEach(ns => {
                     const opt = document.createElement('option');
-                    opt.value = ns;
-                    opt.textContent = ns;
-                    filter.appendChild(opt);
+                    opt.value = ns; opt.textContent = ns;
+                    nsFilter.appendChild(opt);
                 });
-                if (namespace) filter.value = namespace;
-
-                filter.addEventListener('change', () => {
-                    const ns = filter.value;
+                nsFilter.addEventListener('change', () => {
+                    const ns = nsFilter.value;
                     location.href = ns ? `/brain-3d?namespace=${encodeURIComponent(ns)}` : '/brain-3d';
                 });
 
-                // Session visibility toggle - default to HIDE sessions (show only projects)
-                const showSessionsCheckbox = document.getElementById('show-global');
-                showSessionsCheckbox.parentElement.querySelector('span').textContent = 'Show sessions';
-                
-                let sessionsVisible = false; // Default: hide sessions
-                showSessionsCheckbox.checked = false;
-                
-                showSessionsCheckbox.addEventListener('change', () => {
-                    sessionsVisible = showSessionsCheckbox.checked;
-                    brain.setSessionVisibility(sessionsVisible);
-                });
-
-                // Show events toggle
-                const showEventsCheckbox = document.getElementById('show-events');
-                showEventsCheckbox.addEventListener('change', () => {
-                    brain.setEventVisibility(showEventsCheckbox.checked);
-                });
-
                 // Topic filter
-                const topicFilter = document.getElementById('topic-filter');
-                topicFilter.addEventListener('change', () => {
-                    brain.setTopicFilter(topicFilter.value);
+                document.getElementById('topic-filter').addEventListener('change', () => {
+                    brain.setTopicFilter(document.getElementById('topic-filter').value);
                 });
 
-                // Set initial camera for neurogrid view (frame project triangle)
-                brain.camera.position.set(0, 25, 20);
-                brain.camera.lookAt(0, 0, 0);
-                brain.controls.target.set(0, 0, 0);
-                brain.controls.update();
-                
+                // Reset camera
                 document.getElementById('reset-cam').addEventListener('click', () => {
                     brain.camera.position.set(0, 25, 20);
                     brain.camera.lookAt(0, 0, 0);
                     brain.controls.target.set(0, 0, 0);
                     brain.controls.update();
                 });
+
             } catch (e) {
                 showError(e.message + '\n' + e.stack);
             }
+        }
+
+        // View mode switcher (global function)
+        function setViewMode(mode) {
+            if (!brain) return;
+            // Update button states
+            document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+            const btn = document.getElementById('mode-' + mode);
+            if (btn) btn.classList.add('active');
+            brain.setViewMode(mode);
+        }
+
+        // Search (global function)
+        function searchNodes(query) {
+            if (!brain) return;
+            brain.searchNodes(query);
         }
 
         main();

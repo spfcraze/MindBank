@@ -196,9 +196,18 @@ func (h *AskHandler) Graph(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Build query for nodes
-	query := `SELECT id, namespace, label, node_type::text, content, summary, importance, access_count, metadata
-		FROM nodes WHERE valid_to IS NULL`
+	// Build query for nodes — include edge_count for orphan detection
+	query := `SELECT n.id, n.namespace, n.label, n.node_type::text, n.content, n.summary, n.importance, n.access_count, n.metadata, n.epistemic_label,
+		COALESCE(e.cnt, 0) AS edge_count
+		FROM nodes n
+		LEFT JOIN (
+			SELECT node_id, COUNT(*) as cnt FROM (
+				SELECT source_id AS node_id FROM edges
+				UNION ALL
+				SELECT target_id AS node_id FROM edges
+			) sub GROUP BY node_id
+		) e ON e.node_id = n.id
+		WHERE n.valid_to IS NULL`
 	args := []any{}
 	argN := 1
 
@@ -223,14 +232,16 @@ func (h *AskHandler) Graph(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type graphNode struct {
-		ID          string          `json:"id"`
-		Label       string          `json:"label"`
-		NodeType    string          `json:"node_type"`
-		Summary     string          `json:"summary"`
-		NS          string          `json:"namespace"`
-		Importance  float32         `json:"importance"`
-		AccessCount int             `json:"access_count"`
-		Metadata    json.RawMessage `json:"metadata,omitempty"`
+		ID              string          `json:"id"`
+		Label           string          `json:"label"`
+		NodeType        string          `json:"node_type"`
+		Summary         string          `json:"summary"`
+		NS              string          `json:"namespace"`
+		Importance      float32         `json:"importance"`
+		AccessCount     int             `json:"access_count"`
+		Metadata        json.RawMessage `json:"metadata,omitempty"`
+		EpistemicLabel  string          `json:"epistemic_label,omitempty"`
+		EdgeCount       int             `json:"edge_count"`
 		// Event-specific fields (omitted for non-event nodes)
 		SessionID string `json:"session_id,omitempty"`
 		EventType string `json:"event_type,omitempty"`
@@ -242,7 +253,7 @@ func (h *AskHandler) Graph(w http.ResponseWriter, r *http.Request) {
 		var n graphNode
 		var content string
 		var metadata json.RawMessage
-		if err := rows.Scan(&n.ID, &n.NS, &n.Label, &n.NodeType, &content, &n.Summary, &n.Importance, &n.AccessCount, &metadata); err != nil {
+		if err := rows.Scan(&n.ID, &n.NS, &n.Label, &n.NodeType, &content, &n.Summary, &n.Importance, &n.AccessCount, &metadata, &n.EpistemicLabel, &n.EdgeCount); err != nil {
 			continue
 		}
 		n.Metadata = metadata
@@ -292,7 +303,7 @@ func (h *AskHandler) Graph(w http.ResponseWriter, r *http.Request) {
 			FROM edges
 			WHERE source_id IN (%s) OR target_id IN (%s)
 			ORDER BY weight DESC
-			LIMIT 1000
+			LIMIT 10000
 		`, placeholders, placeholders)
 
 		edgeRows, err := h.snapshotRepo.Pool().Query(r.Context(), edgeQuery, nodeIDs...)

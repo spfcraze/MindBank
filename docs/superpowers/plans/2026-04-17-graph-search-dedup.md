@@ -614,7 +614,7 @@ cd /home/rat/mindbank && CGO_ENABLED=0 go build -o mindbank-api cmd/mindbank/mai
 ```bash
 pkill mindbank-api 2>/dev/null; sleep 1
 cd /home/rat/mindbank
-MB_DB_DSN="postgres://mindbank:mindbank_secret@localhost:5434/mindbank?sslmode=disable" nohup ./mindbank-api > /tmp/mindbank.log 2>&1 &
+MB_DB_DSN="postgres://mindbank:YOUR_DB_PASSWORD@localhost:5434/mindbank?sslmode=disable" nohup ./mindbank-api > /tmp/mindbank.log 2>&1 &
 sleep 2
 curl -s http://localhost:8095/api/v1/health | python3 -m json.tool
 ```

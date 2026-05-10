@@ -923,7 +923,7 @@ func TestGetObservability(t *testing.T) {
 
 ```bash
 cd /home/rat/mindbank
-MB_DATABASE_URL="postgres://mindbank:mindbank@localhost:5432/mindbank?sslmode=disable" go test ./tests/integration/... -v
+MB_DATABASE_URL="postgres://mindbank:YOUR_DB_PASSWORD@localhost:5432/mindbank?sslmode=disable" go test ./tests/integration/... -v
 ```
 
 Expected: 3 PASS

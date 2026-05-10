@@ -673,10 +673,23 @@ export class Brain3D {
         const tooltip = document.getElementById('tooltip');
 
         if (node) {
+            const typeColors = {
+                decision: '#ff6b35', fact: '#4ecdc4', problem: '#a78bfa',
+                preference: '#ff6b35', project: '#4ecdc4', person: '#a78bfa',
+                session: '#64748b', event: '#f59e0b'
+            };
+            const tc = typeColors[node.node_type] || '#6b7b8f';
+            const epistemic = node.epistemic_label && node.epistemic_label !== 'unknown' 
+                ? `<br><span style="color:#888;">Epistemic:</span> ${node.epistemic_label}` : '';
+            const label = (node.label || node.id).substring(0, 60);
+            const title = node.node_type === 'session' && node.metadata && node.metadata.topic
+                ? `${label} <span style="color:#888;">[${node.metadata.topic}]</span>`
+                : label;
+            
             tooltip.style.display = 'block';
-            tooltip.style.left = (event.clientX + 10) + 'px';
-            tooltip.style.top = (event.clientY + 10) + 'px';
-            tooltip.textContent = (node.label || node.id) + ' (' + node.node_type + ')';
+            tooltip.style.left = (event.clientX + 12) + 'px';
+            tooltip.style.top = (event.clientY + 12) + 'px';
+            tooltip.innerHTML = `<strong style="color:${tc};">[${node.node_type}]</strong> ${title}${epistemic}<br><span style="color:#888;">Recall: ${node.access_count || 0} · Imp: ${'★'.repeat(Math.round((node.importance || 0.5) * 5))}</span>`;
             this.renderer.domElement.style.cursor = 'pointer';
         } else {
             tooltip.style.display = 'none';
@@ -691,6 +704,85 @@ export class Brain3D {
             this.showNodeInfo(node);
             this.focusNode(node);
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // VIEW MODES: Full / Micro / Macro
+    // ═══════════════════════════════════════════════════════════════════════════
+    setViewMode(mode) {
+        this._viewMode = mode;
+        console.log('[Brain3D] View mode:', mode);
+        switch (mode) {
+            case 'full':
+                this.setSessionVisibility(true);
+                this.setEdgeVisibility(true);
+                break;
+            case 'micro':
+                this.setSessionVisibility(false);
+                this.setEdgeVisibility(true);
+                break;
+            case 'macro':
+                this.setSessionVisibility(true);
+                this.setEdgeVisibility(false); // Hide edges for cluster overview
+                break;
+        }
+    }
+
+    setEdgeVisibility(visible) {
+        this.edgeMeshes.forEach(m => m.visible = visible);
+        if (this.signalParticles) this.signalParticles.visible = visible;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SEARCH
+    // ═══════════════════════════════════════════════════════════════════════════
+    searchNodes(query) {
+        if (!query || query.length < 2) {
+            this.clearHighlight();
+            return;
+        }
+        const q = query.toLowerCase();
+        const dummy = new THREE.Object3D();
+        
+        for (let i = 0; i < this.nodes.length; i++) {
+            const node = this.nodes[i];
+            const label = (node.label || '').toLowerCase();
+            const matches = label.includes(q);
+            
+            const mapping = this.nodeIndexMap[i];
+            if (!mapping) continue;
+            
+            const group = this.nodeGroups[mapping.group];
+            const coreMesh = group.children[1];
+            const color = new THREE.Color();
+            
+            if (matches) {
+                const c = new THREE.Color(0x00d4aa); // Highlight cyan
+                coreMesh.getColorAt(mapping.local, color);
+                coreMesh.setColorAt(mapping.local, c);
+            }
+        }
+        this.nodeGroups.forEach(g => {
+            g.children[1].instanceColor.needsUpdate = true;
+        });
+    }
+
+    clearHighlight() {
+        const color = new THREE.Color();
+        for (let i = 0; i < this.nodes.length; i++) {
+            const node = this.nodes[i];
+            const mapping = this.nodeIndexMap[i];
+            if (!mapping) continue;
+            const group = this.nodeGroups[mapping.group];
+            const coreMesh = group.children[1];
+            const typeIdx = this.typeToIndex(node.node_type);
+            const tc = NODE_COLORS[typeIdx] || NODE_COLORS[6];
+            color.setHex(tc);
+            coreMesh.setColorAt(mapping.local, color);
+        }
+        this.nodeGroups.forEach(g => {
+            g.children[1].instanceColor.needsUpdate = true;
+        });
     }
 
     raycastNode() {

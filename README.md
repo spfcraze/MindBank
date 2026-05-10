@@ -491,7 +491,7 @@ POST /api/v1/snapshot/rebuild
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MB_PORT` | `8095` | HTTP server port |
-| `MB_DB_DSN` | `postgres://mindbank:mindbank@localhost:5434/mindbank?sslmode=disable` | PostgreSQL connection string |
+| `MB_DB_DSN` | `postgres://mindbank:YOUR_DB_PASSWORD@localhost:5434/mindbank?sslmode=disable` | PostgreSQL connection string |
 | `MB_POSTGRES_PASSWORD` | `mindbank` | Postgres password (used by docker-compose) |
 | `MB_OLLAMA_URL` | `http://localhost:11434` | Ollama API endpoint |
 | `MB_EMBED_MODEL` | `nomic-embed-text` | Embedding model |

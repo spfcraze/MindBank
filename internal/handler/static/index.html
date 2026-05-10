@@ -350,8 +350,9 @@ div.vis-tooltip{background:var(--bg-panel);border:1px solid var(--border);color:
       <a href="#" onclick="switchTab('questions');return false" data-tab="questions">Questions</a>
       <a href="#" onclick="switchTab('edges');return false" data-tab="edges">Edges</a>
       <a href="#" onclick="switchTab('tools');return false" data-tab="tools">Tools</a>
+      <a href="#" onclick="switchTab('analyze');return false" data-tab="analyze">Analyze</a>
       <a href="#" onclick="switchTab('graph');return false" data-tab="graph">Graph_2D</a>
-      <a href="#" onclick="switchTab('brain');return false" data-tab="brain">Brain_3D</a>
+  <a href="#" data-tab="brain" onclick="switchTab('brain'); return false;">Brain_3D</a>
       <a href="#" onclick="switchTab('observer');return false" data-tab="observer">Observer</a>
       <a href="#" onclick="switchTab('update');return false" data-tab="update">Update</a>
       <a href="#" onclick="switchTab('debug');return false" data-tab="debug">Debug</a>
@@ -961,6 +962,30 @@ div.vis-tooltip{background:var(--bg-panel);border:1px solid var(--border);color:
     </div>
   </div>
 
+
+  <!-- BATCH EPISTEMIC -->
+  <div class="tools-group" id="batch-epistemic-group">
+    <div class="tools-group-hdr">Batch Epistemic Label</div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">Update All Nodes in Namespace</div>
+      <p style="font-size:12px;color:var(--text-dim);margin:0 0 12px 0;line-height:1.4">Set epistemic status for every active node in a namespace. Activates V3 confidence formula for existing data.</p>
+      <div class="form-row">
+        <select id="batch-epistemic-ns" class="form-control" style="flex:1;" onchange="countBatchEpistemic()">
+          <option value="">Select namespace...</option>
+        </select>
+        <select id="batch-epistemic-label" class="form-control" style="flex:1;">
+          <option value="unknown">Unknown (default)</option>
+          <option value="observed">Observed</option>
+          <option value="inferred">Inferred</option>
+          <option value="assumed">Assumed</option>
+          <option value="recommended">Recommended</option>
+        </select>
+        <button onclick="applyBatchEpistemic()" class="btn-cyber btn-cyber-sm">Apply</button>
+      </div>
+      <div id="batch-epistemic-count" style="font-size:11px;color:var(--text-dim);margin-top:8px;"></div>
+    </div>
+  </div>
+
   <!-- SYSTEM -->
   <div class="tools-group">
     <div class="tools-group-hdr">System</div>
@@ -969,6 +994,76 @@ div.vis-tooltip{background:var(--bg-panel);border:1px solid var(--border);color:
       <div id="healthDetail" style="font-size:12px;color:var(--text-dim)"></div>
     </div>
   </div>
+  </section>
+</div>
+
+<!-- ANALYZE TAB -->
+<div class="tab-content" id="tab-analyze">
+  <section style="margin-bottom:80px">
+    <div class="section-header">
+      <div class="section-label">Intelligence</div>
+      <h2 class="section-title">ANALYZE<span>_INSIGHTS</span></h2>
+      <p class="section-desc">Contradictions, knowledge gaps, and system health diagnostics.</p>
+    <!-- NL Ask Bar -->
+    <div class="panel" style="margin-bottom:20px;padding:20px 24px;">
+      <div class="panel-title" style="padding:0;margin-bottom:12px">NATURAL LANGUAGE QUERY</div>
+      <div class="form-row">
+        <input type="text" id="nl-query" class="form-control" placeholder="Ask MindBank anything... (e.g., what do I know about deployment?)" style="flex:2;">
+        <button class="btn-cyber btn-cyber-sm" onclick="askMindBank()">Ask</button>
+      </div>
+      <div id="nl-results" style="margin-top:12px;"></div>
+    </div>
+
+    <!-- Confidence Inspector -->
+    <div class="panel" style="margin-bottom:20px;padding:20px 24px;">
+      <div class="panel-title" style="padding:0;margin-bottom:12px">CONFIDENCE INSPECTOR</div>
+      <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px;">See exactly how confidence is calculated for any node — 8-component breakdown.</p>
+      <div class="form-row">
+        <input type="text" id="conf-inspect-id" placeholder="Node ID or search query..." class="form-control" style="flex:2;">
+        <button class="btn-cyber btn-cyber-sm" onclick="loadConfidenceInspector()">Inspect</button>
+      </div>
+      <div id="confInspectorResults" style="margin-top:12px;font-family:var(--font-mono);font-size:12px;"></div>
+    </div>
+
+    </div>
+
+    <!-- Contradictions Card -->
+    <div class="panel" style="padding:24px;margin-bottom:24px">
+      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:16px">
+        <div class="panel-title" style="margin:0;padding:0">CONTRADICTIONS</div>
+        <button class="btn btn-cyber-sm" onclick="loadContradictions()">Refresh</button>
+        <button class="btn btn-cyber-sm" onclick="mergeDuplicates()" style="border-color:var(--magenta);color:var(--magenta);margin-left:8px;">Merge Duplicates</button>
+        <span id="cx-status" style="font-size:12px;color:var(--text-dim);font-family:var(--font-mono)"></span>
+      </div>
+      <div id="cx-list" style="font-family:var(--font-mono);font-size:12px">
+        <div style="color:var(--text-faint);padding:8px 0">Click "Refresh" to scan for contradictions.</div>
+      </div>
+    </div>
+
+    <!-- Gaps Card -->
+    <div class="panel" style="padding:24px;margin-bottom:24px">
+      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:16px">
+        <div class="panel-title" style="margin:0;padding:0">GAPS</div>
+        <button class="btn btn-cyber-sm" onclick="loadGaps()">Refresh</button>
+        <button class="btn btn-cyber-sm" onclick="linkOrphans()" style="border-color:var(--yellow);color:var(--yellow);margin-left:8px;">Link Orphans</button>
+        <span id="gp-status" style="font-size:12px;color:var(--text-dim);font-family:var(--font-mono)"></span>
+      </div>
+      <div id="gp-list" style="font-family:var(--font-mono);font-size:12px">
+        <div style="color:var(--text-faint);padding:8px 0">Click "Refresh" to scan for knowledge gaps.</div>
+      </div>
+    </div>
+
+    <!-- Observability / Health Card -->
+    <div class="panel" style="padding:24px;margin-bottom:24px">
+      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:16px">
+        <div class="panel-title" style="margin:0;padding:0">HEALTH</div>
+        <button class="btn btn-cyber-sm" onclick="loadObservability()">Refresh</button>
+        <span id="ob-status" style="font-size:12px;color:var(--text-dim);font-family:var(--font-mono)"></span>
+      </div>
+      <div id="ob-list" style="font-family:var(--font-mono);font-size:12px">
+        <div style="color:var(--text-faint);padding:8px 0">Click "Refresh" to load observability metrics.</div>
+      </div>
+    </div>
   </section>
 </div>
 
@@ -1284,11 +1379,11 @@ function switchProfile(profile){
   if (currentTab === 'questions') loadQuestions();
   if (currentTab === 'edges') loadEdges();
   if (currentTab === 'graph') loadGraph();
-  if (currentTab === 'observer' && window.sessionNodesLoader) window.sessionNodesLoader.load();
+  if (currentTab === 'observer') loadObserver();
 }
 
 // === Tabs ===
-let tabLoaded = { dashboard: true, questions: false, edges: false, tools: true, graph: false, brain: false, observer: false, update: false };
+let tabLoaded = { dashboard: false, questions: false, edges: false, tools: true, analyze: false, graph: false, brain: false, observer: false, update: false };
 let currentTab='dashboard';
 function switchTab(name){
   const prevTab=currentTab;
@@ -1307,15 +1402,26 @@ function switchTab(name){
   // Lazy-load on first switch; graph rebuilds fresh each time
   if(!tabLoaded[name]){
     tabLoaded[name]=true;
+    if(name==='dashboard')loadDashboard();
     if(name==='graph')loadGraph();
     if(name==='brain'){const f=document.getElementById('brainFrame');if(!f.dataset.loaded){f.src='/brain-3d?embed=1';f.dataset.loaded='1'}f.style.width='100%';f.style.height=(window.innerHeight-60)+'px';}
     if(name==='questions')loadQuestions();
     if(name==='edges')loadEdges();
+    if(name==='tools'){loadBatchEpistemicNamespaces();}
+    if(name==='analyze')initAnalyzeTab();
     if(name==='update')initUpdateTab();
     if(name==='debug')initDebugTab();
-    if(name==='observer' && window.sessionNodesLoader) window.sessionNodesLoader.load();
+    if(name==='observer')loadObserver();
   }else if(name==='graph'){
     loadGraph();
+  }else if(name==='dashboard'){
+    loadDashboard();
+  }else if(name==='questions'){
+    loadQuestions();
+  }else if(name==='edges'){
+    loadEdges();
+  }else if(name==='observer'){
+    loadObserver();
   }
 }
 
@@ -1696,9 +1802,59 @@ document.addEventListener('keydown',e=>{
   }
 });
 
+// === Dashboard Tab ===
+async function loadDashboard(){
+  const ns = currentNamespaceFilter;
+  let url = '/nodes?limit=50';
+  if (ns) url += '&namespace=' + encodeURIComponent(ns);
+  const nodes = await api(url);
+  const tbody = document.getElementById('nodesTbody');
+  const emptyEl = document.getElementById('tableEmpty');
+  const tableEl = document.getElementById('nodesTable');
+  if (!nodes || !nodes.length) {
+    if (tbody) tbody.innerHTML = '';
+    if (tableEl) tableEl.style.display = 'none';
+    if (emptyEl) emptyEl.style.display = 'block';
+    return;
+  }
+  if (tableEl) tableEl.style.display = '';
+  if (emptyEl) emptyEl.style.display = 'none';
+  if (tbody) {
+    tbody.innerHTML = nodes.map(n => `<tr>
+      <td><span class="type-tag" style="color:${tagBg(n.node_type)};border-color:${tagBg(n.node_type)}66;background:${tagBg(n.node_type)}0D">${n.node_type}</span>${n.deduplicated ? '<span style="font-size:9px;color:var(--green);margin-left:4px" title="Deduplicated">DEDUP</span>' : ''}</td>
+      <td><a href="#" onclick="showDetail('${n.id}');return false" style="color:var(--cyan);text-decoration:none;font-weight:600">${esc(n.label)}</a></td>
+      <td><span class="ns-tag">${esc(n.namespace)}</span></td>
+      <td style="color:var(--text-dim);font-size:12px">${esc((n.summary || n.content || '').substring(0, 50))}</td>
+      <td style="color:var(--text-faint)">v${n.version || 1}</td>
+      <td style="color:var(--text-faint)">${(n.importance || 0).toFixed(2)}</td>
+      <td style="color:var(--text-faint)">${n.access_count || 0}</td>
+      <td style="text-align:right"><button class="btn btn-red btn-sm" onclick="deleteNode('${n.id}')">Del</button></td>
+    </tr>`).join('');
+  }
+  await loadStats();
+  await loadActivityFeed();
+}
+
+// === Observer Tab ===
+async function loadObserver(){
+  const sessions = await api('/sessions?limit=50');
+  const container = document.getElementById('observer-sessions');
+  if (!container) return;
+  if (!sessions || !sessions.length) {
+    container.innerHTML = '<div style="padding:20px;color:var(--text-dim);font-size:13px">No sessions found.</div>';
+    return;
+  }
+  container.innerHTML = sessions.map(s => `<div style="padding:10px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px">
+    <span class="type-tag" style="color:var(--cyan);border-color:var(--cyan)66;background:var(--cyan)0D">session</span>
+    <span style="flex:1;font-size:13px;color:var(--text)">${esc(s.label || s.id.substring(0, 8))}</span>
+    <span style="font-size:11px;color:var(--text-faint)">${s.created_at || '—'}</span>
+    <button class="btn btn-sm" onclick="showDetail('${s.id}')">View</button>
+  </div>`).join('');
+}
+
 // === Questions Tab ===
 async function loadQuestions(){
-  const nodes=await api('/nodes?type=question&limit=100');
+  const nodes=await api('/nodes?node_type=question&limit=50');
   const tbody=document.getElementById('questionsTbody');
   const emptyEl=document.getElementById('questionsEmpty');
   const tableEl=document.getElementById('questionsTable');
@@ -1724,34 +1880,31 @@ async function retrySearch(q){
 // === Edges Tab ===
 async function loadEdges(reset=true){
   if(reset)edgesOffset=0;
-  // Load all nodes first for label lookup — include ALL versions via graph
-  const g=await api('/graph');
-  if(!g)return;
-  const nodeMap={};(g.nodes||[]).forEach(n=>{nodeMap[n.id]=n});
-  let edges=g.edges||[];
-  const nsFilter=document.getElementById('edgeNSFilter').value || currentNamespaceFilter;
-  const typeFilter=document.getElementById('edgeTypeFilter').value;
-  if(typeFilter)edges=edges.filter(e=>e.edge_type===typeFilter);
-  if(nsFilter){
-    const nsNodes=new Set((g.nodes||[]).filter(n=>n.namespace===nsFilter).map(n=>n.id));
-    edges=edges.filter(e=>nsNodes.has(e.source)||nsNodes.has(e.target));
+  let url = '/edges?limit=50';
+  if (edgesOffset > 0) url += '&offset=' + edgesOffset;
+  const typeFilter = document.getElementById('edgeTypeFilter').value;
+  if(typeFilter) url += '&edge_type=' + encodeURIComponent(typeFilter);
+  const edges = await api(url);
+  if(!edges) return;
+  const tbody = document.getElementById('edgesTable');
+  const countEl = document.getElementById('edgeCount');
+  if (countEl) countEl.textContent = (Array.isArray(edges) ? edges.length : 0) + ' edges';
+  if(reset) tbody.innerHTML = '';
+  if (!Array.isArray(edges) || edges.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text-dim)">No edges found.</td></tr>';
+    document.getElementById('edgeLoadMore').style.display = 'none';
+    return;
   }
-  document.getElementById('edgeCount').textContent=edges.length+' edges';
-  const page=edges.slice(edgesOffset,edgesOffset+100);
-  const tbody=document.getElementById('edgesTable');
-  if(reset)tbody.innerHTML='';
-  // Process edges with fallback label lookup
-  for(const e of page){
-    let src=nodeMap[e.source];
-    let tgt=nodeMap[e.target];
-    // Fallback: fetch from API if not in graph
-    if(!src){try{src=await api('/nodes/'+e.source)}catch{}}
-    if(!tgt){try{tgt=await api('/nodes/'+e.target)}catch{}}
-    const srcLabel=src?(src.label||'?').substring(0,30):'[deleted]';
-    const srcNS=src?(src.namespace||'?'):'—';
-    const tgtLabel=tgt?(tgt.label||'?').substring(0,30):'[deleted]';
-    const tgtNS=tgt?(tgt.namespace||'?'):'—';
-    tbody.innerHTML+=`<tr>
+  // Process edges with node label lookup
+  for(const e of edges){
+    let src = null, tgt = null;
+    try { src = await api('/nodes/' + e.source); } catch {}
+    try { tgt = await api('/nodes/' + e.target); } catch {}
+    const srcLabel = src ? (src.label || '?').substring(0,30) : '[deleted]';
+    const srcNS = src ? (src.namespace || '?') : '—';
+    const tgtLabel = tgt ? (tgt.label || '?').substring(0,30) : '[deleted]';
+    const tgtNS = tgt ? (tgt.namespace || '?') : '—';
+    tbody.innerHTML += `<tr>
       <td><span class="type-tag" style="color:var(--text-dim);border-color:rgba(107,123,143,0.3);background:rgba(107,123,143,0.05)">${e.edge_type}</span></td>
       <td><a href="#" onclick="showDetail('${e.source}');return false" style="color:${src?'var(--cyan)':'var(--text-faint)'};text-decoration:none;font-weight:600">${esc(srcLabel)}</a> <span class="ns-tag">${esc(srcNS)}</span></td>
       <td><a href="#" onclick="showDetail('${e.target}');return false" style="color:${tgt?'var(--cyan)':'var(--text-faint)'};text-decoration:none;font-weight:600">${esc(tgtLabel)}</a> <span class="ns-tag">${esc(tgtNS)}</span></td>
@@ -1759,9 +1912,9 @@ async function loadEdges(reset=true){
       <td style="text-align:right"><button class="btn btn-red btn-sm" onclick="deleteEdge('${e.id}')">Del</button></td>
     </tr>`;
   }
-  document.getElementById('edgeLoadMore').style.display=edges.length>edgesOffset+100?'inline-block':'none';
+  document.getElementById('edgeLoadMore').style.display = edges.length >= 50 ? 'inline-block' : 'none';
 }
-function loadMoreEdges(){edgesOffset+=100;loadEdges(false)}
+function loadMoreEdges(){edgesOffset += 50; loadEdges(false)}
 async function deleteEdge(id){if(!confirm('Delete this edge?'))return;await api('/edges/'+id,{method:'DELETE'});toast('Edge deleted');loadEdges()}
 
 // === Tools Tab ===
@@ -2009,7 +2162,7 @@ async function loadGraph(){
   }catch(e){return}
   if(typeof vis==='undefined'){toast('Graph library not loaded',true);return}
   const ns=document.getElementById('graphNS').value || currentNamespaceFilter;
-  let url='/graph?';if(ns)url+='namespace='+encodeURIComponent(ns);
+  let url='/graph?limit=200';if(ns)url+='&namespace='+encodeURIComponent(ns);
   const data=await api(url);if(!data){hideGraphOverlay();return}
   graphData=data;
 
@@ -2348,6 +2501,77 @@ async function loadDebugQueue(){
   el.innerHTML=html;
 }
 
+async function loadContradictions(){
+  const el=document.getElementById('cx-list');
+  const st=document.getElementById('cx-status');
+  if(!el||!st)return;
+  st.textContent='Loading...';
+  const data=await api('/analyze/contradictions');
+  if(!data){st.textContent='Failed';return;}
+  st.textContent=`${(data.contradictions||[]).length} found`;
+  const items=data.contradictions||[];
+  if(items.length===0){el.innerHTML='<div style="color:var(--text-faint);padding:8px 0">No contradictions detected.</div>';return;}
+  let html='<table class="data-table" style="margin-top:8px"><thead><tr><th>Node A</th><th>Relation</th><th>Node B</th><th>Confidence</th></tr></thead><tbody>';
+  for(const cx of items){
+    html+=`<tr><td>${esc(cx.node_a_label||cx.node_a||'-')}</td><td>${esc(cx.relation||'-')}</td><td>${esc(cx.node_b_label||cx.node_b||'-')}</td><td style="color:var(--yellow)">${(cx.confidence*100).toFixed(0)}%</td></tr>`;
+  }
+  html+='</tbody></table>';
+  el.innerHTML=html;
+}
+
+async function loadGaps(){
+  const el=document.getElementById('gp-list');
+  const st=document.getElementById('gp-status');
+  if(!el||!st)return;
+  st.textContent='Loading...';
+  const data=await api('/analyze/gaps');
+  if(!data){st.textContent='Failed';return;}
+  st.textContent=`${(data.gaps||[]).length} found`;
+  const items=data.gaps||[];
+  if(items.length===0){el.innerHTML='<div style="color:var(--text-faint);padding:8px 0">No knowledge gaps detected.</div>';return;}
+  let html='<table class="data-table" style="margin-top:8px"><thead><tr><th>Description</th><th>Type</th><th>Severity</th></tr></thead><tbody>';
+  for(const gp of items){
+    html+=`<tr><td>${esc(gp.description||gp.label||'-')}</td><td>${esc(gp.type||'-')}</td><td style="color:${gp.severity==='high'?'var(--red)':(gp.severity==='medium'?'var(--yellow)':'var(--green)')}">${esc(gp.severity||'-')}</td></tr>`;
+  }
+  html+='</tbody></table>';
+  el.innerHTML=html;
+}
+
+async function loadObservability(){
+  const el=document.getElementById('ob-list');
+  const st=document.getElementById('ob-status');
+  if(!el||!st)return;
+  st.textContent='Loading...';
+  const data=await api('/analyze/observability');
+  if(!data){st.textContent='Failed';return;}
+  st.textContent='Loaded';
+  let html='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:16px">';
+  const metrics=[
+    {k:'total_nodes',l:'Total Nodes'},
+    {k:'total_edges',l:'Total Edges'},
+    {k:'embedding_queue',l:'Embed Queue'},
+    {k:'api_latency_ms',l:'Latency (ms)'}
+  ];
+  for(const m of metrics){
+    const v=data[m.k]!==undefined?data[m.k]:'-';
+    html+=`<div><div style="font-size:10px;color:var(--text-faint);text-transform:uppercase;letter-spacing:0.1em">${m.l}</div><div style="font-size:18px;font-weight:700;color:var(--cyan);font-family:var(--font-mono)">${v}</div></div>`;
+  }
+  html+='</div>';
+  if(data.namespaces){
+    html+='<div style="font-size:11px;color:var(--text-faint);text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px">Namespaces</div>';
+    html+='<div style="display:flex;gap:12px;flex-wrap:wrap">';
+    for(const ns of data.namespaces){
+      html+=`<span class="ns-tag">${esc(ns)}</span>`;
+    }
+    html+='</div>';
+  }
+  el.innerHTML=html;
+}
+
+function initAnalyzeTab(){
+  loadContradictions();loadGaps();loadObservability();
+}
+
 async function loadDebugHealLog(){
   const data=await api('/debug/heal-log');
   if(!data)return;
@@ -2373,7 +2597,7 @@ function initDebugTab(){
 // === Init ===
 loadHealth();loadOllamaStats();updateLastSyncDisplay();initAutoSync();startFileSyncPolling();loadStats().then(()=>{lastDashNodeCount=parseInt(document.getElementById('statNodes').textContent)||0});
 autoCheckUpdate();
-loadNodes();loadSnapshot();loadDQATrend();loadActivityFeed();
+loadDashboard();loadSnapshot();loadDQATrend();
 
 // Load namespace filter from localStorage
 const savedNS = localStorage.getItem('mindbank_namespace_filter');
@@ -2871,10 +3095,16 @@ async function runQualityAnalysis() {
 
   try {
     progressText.textContent = 'Fetching graph...';
-    const graphRes = await fetch(API + '/graph?limit=2000');
-    const graphData = await graphRes.json();
-    const nodes = Array.isArray(graphData.nodes) ? graphData.nodes : (graphData.nodes || []);
-    const allEdgesDqa = Array.isArray(graphData.edges) ? graphData.edges : (graphData.edges || []);
+    const graphData = await api('/graph?limit=2000');
+    if (!graphData || !Array.isArray(graphData.nodes)) {
+      progressText.textContent = 'Error: Failed to fetch graph data. Check server connection.';
+      runBtn.disabled = false;
+      runBtn.textContent = 'Run Analysis';
+      setTimeout(() => { progressEl.style.display = 'none'; }, 4000);
+      return;
+    }
+    const nodes = graphData.nodes;
+    const allEdgesDqa = Array.isArray(graphData.edges) ? graphData.edges : [];
     if (!nodes.length) {
       progressText.textContent = 'No nodes found.';
       runBtn.disabled = false;
@@ -2886,21 +3116,23 @@ async function runQualityAnalysis() {
     progressText.textContent = 'Analyzing data quality...';
     await new Promise(r => setTimeout(r, 300));
 
-    // Build node connection map — normalize ALL ids to strings to avoid type mismatch
+    // Normalize helper
     const _s = (x) => String(x === null || x === undefined ? '' : x).trim();
+
+    // Check 1: Orphan nodes — use server-computed edge_count (accurate for ALL edges, not just returned ones)
+    const orphans = nodes.filter(n => (n.edge_count || 0) === 0);
+
+    // Check 2: Disconnected clusters — BFS on returned edges only (for nodes that have edges)
     const connectedNodes = new Set();
     for (const e of allEdgesDqa) {
       connectedNodes.add(_s(e.source));
       connectedNodes.add(_s(e.target));
     }
+    const nodesWithEdges = nodes.filter(n => connectedNodes.has(_s(n.id)));
 
-    // Check 1: Orphan nodes (0 edges)
-    const orphans = nodes.filter(n => !connectedNodes.has(_s(n.id)));
-
-    // Check 2: Disconnected clusters (groups not connected to main graph)
-    // Build adjacency, find connected components via BFS
+    // BFS on nodesWithEdges to find disconnected clusters
     const adj = new Map();
-    for (const n of nodes) adj.set(_s(n.id), []);
+    for (const n of nodesWithEdges) adj.set(_s(n.id), []);
     for (const e of allEdgesDqa) {
       const src = _s(e.source), tgt = _s(e.target);
       if (adj.has(src)) adj.get(src).push(tgt);
@@ -2908,7 +3140,7 @@ async function runQualityAnalysis() {
     }
     const visited = new Set();
     let components = [];
-    for (const n of nodes) {
+    for (const n of nodesWithEdges) {
       const nid = _s(n.id);
       if (visited.has(nid)) continue;
       const comp = [];
@@ -2930,11 +3162,11 @@ async function runQualityAnalysis() {
       ? components.slice(1).flat().filter(id => !orphanIds.has(id))
       : [];
 
-    // Check 3: Duplicate labels (same workspace + namespace + label + node_type)
-    // Must match backend dedup logic: GROUP BY workspace_name, namespace, label, node_type
+    // Check 3: Duplicate labels (same namespace + label + node_type)
+    // Graph endpoint doesn't return workspace_name — use namespace only
     const labelMap = new Map();
     for (const n of nodes) {
-      const key = _s(n.workspace_name) + '::' + _s(n.namespace) + '::' + _s(n.label).toLowerCase() + '::' + _s(n.node_type);
+      const key = _s(n.namespace) + '::' + _s(n.label).toLowerCase() + '::' + _s(n.node_type);
       if (!labelMap.has(key)) labelMap.set(key, []);
       labelMap.get(key).push(n);
     }
@@ -2945,8 +3177,8 @@ async function runQualityAnalysis() {
       }
     }
 
-    // Check 4: Empty content (no content AND no summary)
-    const emptyContent = nodes.filter(n => !_s(n.content) && !_s(n.summary));
+    // Check 4: Empty content (no summary — /graph only returns summary, not content)
+    const emptyContent = nodes.filter(n => !_s(n.summary));
 
     // Check 5: Low importance
     const lowImportance = nodes.filter(n => (n.importance || 0) < 0.1);
@@ -4457,6 +4689,175 @@ async function checkAutoCaptureStatus(){
 setInterval(checkAutoCaptureStatus,30000);
 checkAutoCaptureStatus();
 </script>
-<script src="observer-tab.js"></script>
+<script src="observer-tab.js">
+function showConfidenceTip(el, nodeId) {
+  api('/analyze/confidence?node_id=' + nodeId).then(data => {
+    const tip = document.createElement('div');
+    tip.id = 'confidenceTip';
+    tip.style.cssText = 'position:fixed;z-index:9999;background:var(--bg-panel);border:1px solid var(--cyan);padding:12px 16px;font-size:11px;font-family:var(--font-mono);min-width:200px;pointer-events:none;';
+    tip.innerHTML = '<div style="color:var(--cyan);font-weight:700;margin-bottom:8px;">Confidence Breakdown</div>' +
+      '<div>Score: ' + ((data.confidence || 0) * 100).toFixed(1) + '%</div>' +
+      '<div>Level: ' + (data.trust_level || 'unknown') + '</div>' +
+      (data.frequency ? '<div>Frequency: ' + (data.frequency * 100).toFixed(0) + '%</div>' : '') +
+      (data.connectivity ? '<div>Connectivity: ' + (data.connectivity * 100).toFixed(0) + '%</div>' : '') +
+      (data.age ? '<div>Age: ' + (data.age * 100).toFixed(0) + '%</div>' : '') +
+      (data.importance ? '<div>Importance: ' + (data.importance * 100).toFixed(0) + '%</div>' : '');
+    document.body.appendChild(tip);
+    const rect = el.getBoundingClientRect();
+    tip.style.left = rect.left + 'px';
+    tip.style.top = (rect.bottom + 8) + 'px';
+  }).catch(e => console.warn('Confidence tip failed', e));
+}
+function hideConfidenceTip() {
+  const t = document.getElementById('confidenceTip');
+  if (t) t.remove();
+}
+
+
+async function loadWorkspaces() {
+  try {
+    const data = await api('/nodes?limit=1&group_by=workspace');
+    const select = document.getElementById('workspaceFilter');
+    if (!select) return;
+    while (select.options.length > 1) select.remove(1);
+    (data.workspaces || []).forEach(ws => {
+      const opt = document.createElement('option');
+      opt.value = ws;
+      opt.textContent = ws;
+      select.appendChild(opt);
+    });
+  } catch (e) { console.warn('Failed to load workspaces', e); }
+}
+function applyFilters() {
+  const ns = document.getElementById('namespaceFilter')?.value || '';
+  const ws = document.getElementById('workspaceFilter')?.value || '';
+  if (typeof loadDashboard === 'function') {
+    loadDashboard(ns, ws);
+  } else if (typeof loadNodes === 'function') {
+    loadNodes({namespace: ns, workspace: ws});
+  }
+}
+
+
+
+// === NL Ask ===
+async function askMindBank() {
+  const query = document.getElementById('nl-query')?.value?.trim();
+  const el = document.getElementById('nl-results');
+  if (!query) { el.innerHTML = ''; return; }
+  el.innerHTML = '<div style="color:var(--text-dim);padding:8px 0;">Searching memory...</div>';
+  try {
+    const data = await api('/ask', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:query,max_tokens:800})});
+    if (!data) { el.innerHTML = '<div style="color:var(--red);padding:8px 0;">No results found</div>'; return; }
+    const results = data.results || data.context || [];
+    if (!results.length) { el.innerHTML = '<div style="color:var(--text-dim);padding:8px 0;">No memories match your query</div>'; return; }
+    el.innerHTML = results.slice(0, 5).map(r => '<div style="padding:8px;margin:4px 0;background:var(--bg);border:1px solid var(--border);"><span class="type-tag" style="border-color:var(--cyan);color:var(--cyan);">'+esc(r.node_type||r.type||'?')+'</span><span style="font-weight:600;color:var(--text);margin-left:8px;">'+esc(r.label||r.title||'Unnamed')+'</span><div style="font-size:11px;color:var(--text-dim);margin-top:4px;">'+esc((r.content||r.context||r.summary||'').substring(0,200))+'</div></div>').join('');
+  } catch(e) { el.innerHTML = '<div style="color:var(--red);padding:8px 0;">Query failed: ' + e.message + '</div>'; }
+}
+
+// === Confidence Inspector ===
+async function loadConfidenceInspector() {
+  const id = document.getElementById('conf-inspect-id')?.value?.trim();
+  const el = document.getElementById('confInspectorResults');
+  if (!id) { el.innerHTML = '<div style="color:var(--yellow);padding:8px 0;">Enter a node ID</div>'; return; }
+  el.innerHTML = '<div style="color:var(--text-dim);padding:8px 0;">Analyzing...</div>';
+  try {
+    const data = await api('/analyze/confidence?node_id=' + encodeURIComponent(id));
+    if (!data) { el.innerHTML = '<div style="color:var(--red);padding:8px 0;">Node not found or analysis failed</div>'; return; }
+    const s = ((data.confidence||0)*100).toFixed(1);
+    const lv = data.trust_level||'unknown';
+    const lc = lv==='high'?'var(--green)':lv==='medium'?'var(--yellow)':'var(--red)';
+    el.innerHTML = '<div style="margin-bottom:12px;"><span style="font-size:24px;font-weight:700;color:'+lc+';">'+s+'%</span><span style="margin-left:8px;text-transform:uppercase;font-size:11px;color:var(--text-dim);">'+lv+' confidence</span></div><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">' +
+      '<div style="padding:8px;background:var(--bg);border:1px solid var(--border);"><div style="font-size:10px;color:var(--text-faint);">Frequency</div><div style="font-size:14px;font-weight:600;color:var(--cyan);margin-top:4px;">'+((data.frequency||0)*100).toFixed(0)+'%</div></div>' +
+      '<div style="padding:8px;background:var(--bg);border:1px solid var(--border);"><div style="font-size:10px;color:var(--text-faint);">Connectivity</div><div style="font-size:14px;font-weight:600;color:var(--cyan);margin-top:4px;">'+((data.connectivity||0)*100).toFixed(0)+'%</div></div>' +
+      '<div style="padding:8px;background:var(--bg);border:1px solid var(--border);"><div style="font-size:10px;color:var(--text-faint);">Age</div><div style="font-size:14px;font-weight:600;color:var(--cyan);margin-top:4px;">'+((data.age_stability||0)*100).toFixed(0)+'%</div></div>' +
+      '<div style="padding:8px;background:var(--bg);border:1px solid var(--border);"><div style="font-size:10px;color:var(--text-faint);">Importance</div><div style="font-size:14px;font-weight:600;color:var(--cyan);margin-top:4px;">'+((data.importance||0)*100).toFixed(0)+'%</div></div>' +
+      '<div style="padding:8px;background:var(--bg);border:1px solid var(--border);"><div style="font-size:10px;color:var(--text-faint);">Grounding</div><div style="font-size:14px;font-weight:600;color:var(--green);margin-top:4px;">'+((data.grounding_score||0)*100).toFixed(0)+'%</div></div>' +
+      '<div style="padding:8px;background:var(--bg);border:1px solid var(--border);"><div style="font-size:10px;color:var(--text-faint);">Epistemic</div><div style="font-size:14px;font-weight:600;color:var(--green);margin-top:4px;">'+((data.epistemic_bonus||0)*100).toFixed(0)+'%</div></div>' +
+      '<div style="padding:8px;background:var(--bg);border:1px solid var(--border);"><div style="font-size:10px;color:var(--text-faint);">Epistemic Label</div><div style="font-size:12px;font-weight:600;color:var(--magenta);margin-top:4px;">'+(data.epistemic_label||'unknown')+'</div></div>' +
+      '<div style="padding:8px;background:var(--bg);border:1px solid var(--border);"><div style="font-size:10px;color:var(--text-faint);">Contradictions</div><div style="font-size:14px;font-weight:600;color:var(--red);margin-top:4px;">-'+((data.contradiction_penalty||0)*100).toFixed(0)+'%</div></div>' +
+    '</div>';
+  } catch(e) { el.innerHTML = '<div style="color:var(--red);padding:8px 0;">Failed: ' + e.message + '</div>'; }
+}
+
+// === Batch Epistemic ===
+async function loadBatchEpistemicNamespaces() {
+  const sel = document.getElementById('batch-epistemic-ns');
+  if (!sel) return;
+  try {
+    const data = await api('/nodes?limit=5000');
+    const nodes = data.nodes || data || [];
+    const namespaces = [...new Set(nodes.map(n => n.namespace || 'global'))].sort();
+    while (sel.options.length > 1) sel.remove(1);
+    for (const ns of namespaces) { const o = document.createElement('option'); o.value = ns; o.textContent = ns; sel.appendChild(o); }
+  } catch(e) { console.warn('Failed to load namespaces', e); }
+}
+async function countBatchEpistemic() {
+  const ns = document.getElementById('batch-epistemic-ns')?.value;
+  const el = document.getElementById('batch-epistemic-count');
+  if (!ns || !el) { el.textContent = ''; return; }
+  try {
+    const data = await api('/nodes?namespace=' + encodeURIComponent(ns) + '&limit=5000');
+    const nodes = data.nodes || data || [];
+    const cur = nodes.filter(n => (n.epistemic_label || 'unknown') !== 'unknown').length;
+    el.textContent = nodes.length + ' nodes in namespace \u00b7 ' + cur + ' already labeled';
+  } catch(e) { el.textContent = 'Failed to count'; }
+}
+async function applyBatchEpistemic() {
+  const ns = document.getElementById('batch-epistemic-ns')?.value;
+  const label = document.getElementById('batch-epistemic-label')?.value;
+  if (!ns || !label) { toast('Select namespace and label first', 'warn'); return; }
+  if (!confirm('Set ALL nodes in "' + ns + '" to "' + label + '"?')) return;
+  try {
+    const r = await fetch(API + '/nodes/epistemic', {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({namespace:ns, epistemic_label:label})});
+    if (!r.ok) throw new Error(await r.text());
+    const result = await r.json();
+    toast('Updated ' + (result.updated||'?') + ' nodes to "' + label + '"', 'success');
+    countBatchEpistemic();
+  } catch(e) { toast('Batch epistemic failed: ' + e.message, 'error'); }
+}
+
+// === Link Orphans + Merge Duplicates ===
+async function linkOrphans() {
+  if (!confirm('Auto-link orphan nodes to nearest neighbors? This may create unexpected connections.')) return;
+  try {
+    const r = await fetch(API + '/analyze/link-orphans', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dry_run:false})});
+    if (!r.ok) throw new Error(await r.text());
+    const data = await r.json();
+    toast('Linked ' + (data.linked||data.count||'?') + ' orphan(s)', 'success');
+    loadGaps();
+  } catch(e) { toast('Link orphans failed: ' + e.message, 'error'); }
+}
+async function mergeDuplicates() {
+  if (!confirm('Merge detected duplicate nodes? This cannot be undone.')) return;
+  try {
+    const r = await fetch(API + '/analyze/merge-duplicates', {method:'POST',headers:{'Content-Type':'application/json'}});
+    if (!r.ok) throw new Error(await r.text());
+    const data = await r.json();
+    toast('Merged ' + (data.merged||data.count||'?') + ' duplicate(s)', 'success');
+    loadContradictions();
+  } catch(e) { toast('Merge failed: ' + e.message, 'error'); }
+}
+
+// === Session Replay ===
+async function replaySession(sessionId) {
+  try {
+    const data = await api('/sessions/' + sessionId + '/replay');
+    if (!data) { toast('Session replay failed', 'error'); return; }
+    const msgs = data.messages || data || [];
+    const el = document.getElementById('observer-stats');
+    el.innerHTML = '<div class="panel" style="padding:16px;"><div class="panel-title" style="padding:0;margin-bottom:16px;">SESSION REPLAY</div>' +
+      msgs.map((m,i) => '<div style="padding:8px;margin:4px 0;background:var(--bg);border-left:3px solid '+(m.role==='user'?'var(--cyan)':'var(--green)')+';">' +
+        '<span style="color:var(--text-faint);font-size:10px;text-transform:uppercase;">'+(m.role||'unknown')+' #'+(i+1)+'</span>' +
+        '<div style="font-size:12px;margin-top:4px;line-height:1.5;">'+esc((m.content||m.text||'').substring(0,500))+'</div></div>').join('') + '</div>';
+  } catch(e) { toast('Replay failed: ' + e.message, 'error'); }
+}
+function showSessionReplayModal() {
+  const id = prompt('Enter session ID to replay:');
+  if (id) replaySession(id);
+}
+
+</script>
+</div>
 </body>
 </html>
