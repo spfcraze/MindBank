@@ -8,18 +8,43 @@ import (
 	"time"
 
 	"mindbank/internal/dedup"
+	"mindbank/internal/forgetting"
 	"mindbank/internal/models"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// withTx executes fn inside a database transaction.
+func withTx(ctx context.Context, pool *pgxpool.Pool, fn func(pgx.Tx) error) error {
+	if pool == nil {
+		return fmt.Errorf("pool is nil")
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if err := fn(tx); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
 type NodeRepo struct {
-	Pool *pgxpool.Pool
+	Pool       *pgxpool.Pool
+	searchRepo *SearchRepo
 }
 
 func NewNodeRepo(pool *pgxpool.Pool) *NodeRepo {
 	return &NodeRepo{Pool: pool}
+}
+
+// SetSearchRepo links the search repo for cache invalidation on writes.
+func (r *NodeRepo) SetSearchRepo(sr *SearchRepo) {
+	r.searchRepo = sr
 }
 
 // SaveDQASnapshot stores a DQA score for trend tracking.
@@ -115,18 +140,25 @@ func (r *NodeRepo) Create(ctx context.Context, req models.NodeCreate) (*models.N
 		}
 	}
 
+	// Auto-calculate expiry if not provided
+	expiresAt := req.ExpiresAt
+	if expiresAt == nil && req.NodeType != "" {
+		tempNode := &models.Node{NodeType: req.NodeType, Metadata: meta}
+		expiresAt = forgetting.CalculateExpiry(tempNode)
+	}
+	
 	n := &models.Node{}
 	err = r.Pool.QueryRow(ctx, `
-		INSERT INTO nodes (workspace_name, namespace, label, node_type, content, summary, metadata, importance, materialized_path)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '/' || gen_random_uuid()::text)
+		INSERT INTO nodes (workspace_name, namespace, label, node_type, content, summary, metadata, importance, expires_at, materialized_path)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, '/' || gen_random_uuid()::text)
 		RETURNING id, workspace_name, namespace, label, node_type, content, summary, metadata,
 		          importance, access_count, last_accessed, valid_from, valid_to, version,
-		          predecessor_id, created_at, updated_at
-	`, ws, ns, req.Label, req.NodeType, req.Content, req.Summary, meta, imp,
+		          predecessor_id, expires_at, created_at, updated_at
+	`, ws, ns, req.Label, req.NodeType, req.Content, req.Summary, meta, imp, expiresAt,
 	).Scan(&n.ID, &n.WorkspaceName, &n.Namespace, &n.Label, &n.NodeType,
 		&n.Content, &n.Summary, &n.Metadata, &n.Importance, &n.AccessCount,
 		&n.LastAccessed, &n.ValidFrom, &n.ValidTo, &n.Version,
-		&n.PredecessorID, &n.CreatedAt, &n.UpdatedAt)
+		&n.PredecessorID, &n.ExpiresAt, &n.CreatedAt, &n.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("insert node: %w", err)
 	}
@@ -137,6 +169,11 @@ func (r *NodeRepo) Create(ctx context.Context, req models.NodeCreate) (*models.N
 	// Store dedup hash (best-effort)
 	if err := dedup.StoreHash(ctx, r.Pool, hash, n.ID); err != nil {
 		slog.Warn("failed to store dedup hash", "error", err, "node_id", n.ID)
+	}
+
+	// Invalidate search result cache on new node creation
+	if r.searchRepo != nil {
+		r.searchRepo.InvalidateResultCache()
 	}
 
 	return n, nil
@@ -398,6 +435,12 @@ func (r *NodeRepo) Update(ctx context.Context, id string, req models.NodeUpdate)
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit: %w", err)
 	}
+
+	// Invalidate search result cache on node update
+	if r.searchRepo != nil {
+		r.searchRepo.InvalidateResultCache()
+	}
+
 	return n, nil
 }
 
@@ -439,6 +482,12 @@ func (r *NodeRepo) Delete(ctx context.Context, id string) (bool, error) {
 	if err := tx.Commit(ctx); err != nil {
 		return false, fmt.Errorf("commit delete tx: %w", err)
 	}
+
+	// Invalidate search result cache on node deletion
+	if r.searchRepo != nil {
+		r.searchRepo.InvalidateResultCache()
+	}
+
 	return true, nil
 }
 

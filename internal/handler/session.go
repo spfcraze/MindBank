@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -165,14 +167,18 @@ func (h *SessionHandler) AddMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, msg := range created {
 			if msg.Role == "user" || msg.Role == "assistant" {
-				_ = h.ruleBased.ProcessAndStore(bgCtx, sessionID, ws, ns, msg.Content)
+				if err := h.ruleBased.ProcessAndStore(bgCtx, sessionID, ws, ns, msg.Content); err != nil {
+					slog.Error("process and store message", "session_id", sessionID, "error", err)
+				}
 			}
 		}
 	}()
 
 	// Enqueue messages for embedding (use background ctx — request may be cancelled)
 	for _, m := range created {
-		_ = embedder.EnqueueMessage(bgCtx, h.ruleBased.Pool(), m.ID)
+		if err := embedder.EnqueueMessage(bgCtx, h.ruleBased.Pool(), m.ID); err != nil {
+			slog.Error("enqueue message for embedding", "message_id", m.ID, "error", err)
+		}
 	}
 
 	if created == nil {
@@ -262,7 +268,9 @@ func (h *SessionHandler) Sync(w http.ResponseWriter, r *http.Request) {
 
 		for _, msg := range msgs {
 			if msg.Role == "user" || msg.Role == "assistant" {
-				_ = h.ruleBased.ProcessAndStore(ctx, sessionID, workspace, ns, msg.Content)
+				if err := h.ruleBased.ProcessAndStore(ctx, sessionID, workspace, ns, msg.Content); err != nil {
+					slog.Error("process and store message", "session_id", sessionID, "error", err)
+				}
 			}
 		}
 		processed++
@@ -390,10 +398,42 @@ func (h *SessionHandler) getSessionMessages(ctx context.Context, sessionID strin
 }
 
 // RegisterSessionRoutes adds session endpoints to the router.
+func (h *SessionHandler) AutoCaptureStatus(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// Check if auto-capture is enabled via env var
+	enabled := os.Getenv("MB_AUTOCAPTURE_ENABLED") == "true" || os.Getenv("MB_MINER_ENABLED") == "true"
+
+	// Check if there are any sessions in the watch path
+	hasSessions := false
+	watchPath := os.Getenv("MB_WATCH_PATH")
+	if watchPath == "" {
+		watchPath = filepath.Join(os.Getenv("HOME"), ".hermes", "sessions")
+	}
+	if entries, err := os.ReadDir(watchPath); err == nil && len(entries) > 0 {
+		hasSessions = true
+	}
+
+	// Also check if we have graph sessions
+	if !hasSessions {
+		if sessions, err := h.repo.List(ctx, "", false, 1, 0); err == nil && len(sessions) > 0 {
+			hasSessions = true
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"enabled":      enabled,
+		"has_sessions": hasSessions,
+		"watch_path":   watchPath,
+	})
+}
+
 func RegisterSessionRoutes(r chi.Router, sh *SessionHandler) {
 	r.Route("/sessions", func(r chi.Router) {
 		r.Post("/", sh.Create)
 		r.Get("/", sh.List)
+		r.Get("/auto-capture-status", sh.AutoCaptureStatus)
 		r.Get("/{id}", sh.Get)
 		r.Post("/{id}/messages", sh.AddMessages)
 		r.Get("/{id}/context", sh.GetContext)

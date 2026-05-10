@@ -24,7 +24,7 @@ MINDBANK_SRC="${1:-}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MINDBANK_PORT="${MINDBANK_PORT:-8095}"
 MINDBANK_URL="${MINDBANK_URL:-http://localhost:${MINDBANK_PORT}/api/v1}"
-DB_DSN="${MB_DB_DSN:-postgres://mindbank:mindbank_secret@localhost:5432/mindbank?sslmode=disable}"
+DB_DSN="${MB_DB_DSN:-postgres://mindbank:mindbank@localhost:5432/mindbank?sslmode=disable}"
 
 echo "╔══════════════════════════════════════════════════╗"
 echo "║  MindBank Installer                              ║"
@@ -74,7 +74,7 @@ fi
 # ---- Check MindBank API ----
 if ! curl -sf --connect-timeout 5 --max-time 10 "http://localhost:${MINDBANK_PORT}/api/v1/health" &>/dev/null; then
     echo "WARNING: MindBank API not running on :${MINDBANK_PORT}"
-    echo "Start it first: cd /path/to/mindbank && make run"
+    echo "Start it first: cd /path/to/mindbank && bash scripts/start.sh"
     # Only prompt if stdin is a terminal (not when called from updater backend)
     if [ -t 0 ]; then
         echo ""

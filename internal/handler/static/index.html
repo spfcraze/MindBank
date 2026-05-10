@@ -319,6 +319,10 @@ div.vis-tooltip{background:var(--bg-panel);border:1px solid var(--border);color:
     /* Scan line animation */
     @keyframes scan{0%{transform:translateY(-100%)}100%{transform:translateY(100vh)}}
     .scan-line::after{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,rgba(0,212,170,0.08),transparent);animation:scan 8s linear infinite}
+
+/* Namespace Filter Tabs */
+
+
 /* Dashboard compact layout */
     .dashboard-grid{display:grid;grid-template-columns:2fr 1fr;gap:20px;margin-bottom:20px}
     @media(max-width:900px){.dashboard-grid{grid-template-columns:1fr}}
@@ -353,6 +357,9 @@ div.vis-tooltip{background:var(--bg-panel);border:1px solid var(--border);color:
       <a href="#" onclick="switchTab('debug');return false" data-tab="debug">Debug</a>
     </div>
   <div class="nav-right">
+    <select id="nsDropdown" onchange="setNamespaceFilter(this.value)" title="Filter by project namespace" style="background:transparent;border:1px solid var(--border);color:var(--text-dim);font-family:var(--font-mono);font-size:11px;padding:2px 6px;border-radius:2px;cursor:pointer;max-width:120px">
+      <option value="">All Projects</option>
+    </select>
     <div class="header-actions">
       <button type="button" class="btn-restart" id="restartBtn" title="Restart Server">Restart Server</button>
       <button type="button" class="btn-sync" id="syncBtn" title="Sync Sessions">Sync Sessions</button>
@@ -601,6 +608,21 @@ div.vis-tooltip{background:var(--bg-panel);border:1px solid var(--border);color:
         <button class="btn" onclick="importGraph()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Import</button>
         <span id="importResult" style="font-size:12px;color:var(--text-dim)"></span>
       </div>
+    </div>
+  </div>
+
+  <!-- SNAPSHOT -->
+  <div class="tools-group">
+    <div class="tools-group-hdr">Snapshot</div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">Wake-Up Context</div>
+      <div class="tool-card-desc">Pre-computed context summary for the selected namespace. Rebuild to refresh.</div>
+      <div class="tool-actions" style="margin-bottom:10px">
+        <select id="snapNS" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px;min-width:160px"><option value="">All Namespaces</option></select>
+        <button class="btn" onclick="rebuildSnapshot()" style="background:var(--magenta);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Rebuild</button>
+        <button class="btn" onclick="loadSnapshot()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Refresh</button>
+      </div>
+      <div id="snapshotContent" class="snapshot">No snapshot yet. Click Rebuild to generate.</div>
     </div>
   </div>
 
@@ -889,6 +911,56 @@ div.vis-tooltip{background:var(--bg-panel);border:1px solid var(--border);color:
     </div>
   </div>
 
+  <!-- USER PROFILES -->
+  <div class="tools-group">
+    <div class="tools-group-hdr">User Profiles</div>
+    <div class="tool-card">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">
+        <div class="tool-card-hdr" style="margin-bottom:0">Profile Facts</div>
+        <div style="margin-left:auto">
+          <button onclick="loadProfiles()" style="background:var(--accent);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Refresh</button>
+        </div>
+      </div>
+      <div id="profilesList" style="font-size:12px;max-height:300px;overflow-y:auto;">
+        <div style="color:var(--text-dim);padding:8px 0;">Click Refresh to load profile facts...</div>
+      </div>
+      <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+        <div style="font-size:13px;font-weight:500;margin-bottom:8px;">Add Fact</div>
+        <div class="tool-actions" style="margin-bottom:8px">
+          <select id="profileCategory" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px;min-width:100px">
+            <option value="preference">Preference</option>
+            <option value="fact">Fact</option>
+            <option value="goal">Goal</option>
+            <option value="project">Project</option>
+            <option value="skill">Skill</option>
+            <option value="constraint">Constraint</option>
+          </select>
+          <input type="text" id="profileFact" placeholder="Enter fact..." style="flex:1;min-width:120px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px">
+          <button onclick="addProfile()" style="background:var(--green);color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px">Add</button>
+        </div>
+        <div id="profileAddStatus" style="font-size:11px;color:var(--text-dim)"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- AUTO FORGETTING -->
+  <div class="tools-group">
+    <div class="tools-group-hdr">Auto Forgetting</div>
+    <div class="tool-card">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">
+        <div class="tool-card-hdr" style="margin-bottom:0">Expiring Soon</div>
+        <div style="margin-left:auto">
+          <button onclick="loadExpiringSoon()" style="background:var(--accent);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Refresh</button>
+          <button onclick="runForgetting()" style="background:var(--red);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;margin-left:6px">Run Now</button>
+        </div>
+      </div>
+      <div id="expiringList" style="font-size:12px;max-height:300px;overflow-y:auto;">
+        <div style="color:var(--text-dim);padding:8px 0;">Click Refresh to see expiring nodes...</div>
+      </div>
+      <div id="forgettingStatus" style="margin-top:8px;font-size:11px;color:var(--text-dim)"></div>
+    </div>
+  </div>
+
   <!-- SYSTEM -->
   <div class="tools-group">
     <div class="tools-group-hdr">System</div>
@@ -1132,6 +1204,52 @@ function esc(s){return s?s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>
 function tagBg(t){return(TC[t]||TC.concept).bg}
 function hl(text,query){if(!query||!text)return esc(text);const q=query.toLowerCase();const idx=text.toLowerCase().indexOf(q);if(idx<0)return esc(text);return esc(text.substring(0,idx))+'<span class="highlight">'+esc(text.substring(idx,idx+q.length))+'</span>'+esc(text.substring(idx+q.length))}
 
+// === Namespace Filter (Compact Dropdown) ===
+let currentNamespaceFilter = '';
+let discoveredNamespaces = new Set();
+
+function setNamespaceFilter(ns) {
+  currentNamespaceFilter = ns || '';
+  localStorage.setItem('mindbank_namespace_filter', currentNamespaceFilter);
+  // Update dropdown if it exists
+  const dd = document.getElementById('nsDropdown');
+  if (dd) dd.value = currentNamespaceFilter;
+  // Update graph NS selector to match (if on graph tab)
+  const graphNS = document.getElementById('graphNS');
+  if (graphNS) graphNS.value = currentNamespaceFilter;
+  // Update filterNS selector to match (dashboard table filter)
+  const filterNS = document.getElementById('filterNS');
+  if (filterNS) filterNS.value = currentNamespaceFilter;
+  // Reload views
+  if (currentTab === 'dashboard') { loadNodes(); loadStats(); }
+  if (currentTab === 'graph') loadGraph();
+  if (currentTab === 'edges') loadEdges();
+  addFeed('search', (ns || 'All') + ' project filter');
+}
+
+function updateNamespaceTabs(nsMap) {
+  const dd = document.getElementById('nsDropdown');
+  if (!dd) return;
+  const namespaces = Object.keys(nsMap).sort();
+  let changed = false;
+  for (const ns of namespaces) {
+    if (!discoveredNamespaces.has(ns)) {
+      discoveredNamespaces.add(ns);
+      changed = true;
+    }
+  }
+  if (changed || dd.options.length <= 1) {
+    const saved = localStorage.getItem('mindbank_namespace_filter') || '';
+    let html = '<option value="">All Projects</option>';
+    for (const ns of namespaces) {
+      html += `<option value="${esc(ns)}"${ns===saved?' selected':''}>${esc(ns)}</option>`;
+    }
+    dd.innerHTML = html;
+    currentNamespaceFilter = saved;
+    dd.value = currentNamespaceFilter;
+  }
+}
+
 // === Profile Management ===
 let currentProfile = '';
 let availableProfiles = [''];
@@ -1190,7 +1308,7 @@ function switchTab(name){
   if(!tabLoaded[name]){
     tabLoaded[name]=true;
     if(name==='graph')loadGraph();
-    if(name==='brain'){const f=document.getElementById('brainFrame');if(!f.dataset.loaded){f.src='/graph-view?embed=1';f.dataset.loaded='1'}f.style.width='100%';f.style.height=(window.innerHeight-60)+'px';}
+    if(name==='brain'){const f=document.getElementById('brainFrame');if(!f.dataset.loaded){f.src='/brain-3d?embed=1';f.dataset.loaded='1'}f.style.width='100%';f.style.height=(window.innerHeight-60)+'px';}
     if(name==='questions')loadQuestions();
     if(name==='edges')loadEdges();
     if(name==='update')initUpdateTab();
@@ -1304,9 +1422,17 @@ async function loadStats(){
   if(nsBarsEl){
     nsBarsEl.innerHTML=Object.entries(nsMap).sort((a,b)=>b[1]-a[1]).map(([ns,cnt])=>{
       const c=nsColors[ns];const pct=(cnt/maxN*100).toFixed(0);
-      return`<div class="ns-bar" title="${esc(ns)}: ${cnt} nodes"><div class="dot" style="background:${c};box-shadow:0 0 6px ${c}"></div><div class="name">${esc(ns)}</div><div class="bar-bg"><div class="bar-fill" style="width:${pct}%;background:${c}"></div></div><div class="cnt">${cnt}</div></div>`
+      const isActive=ns===currentNamespaceFilter;
+      return`<div class="ns-bar" title="${esc(ns)}: ${cnt} nodes" style="cursor:pointer;${isActive?'background:rgba(0,212,170,0.08);border-radius:2px':''}" onclick="setNamespaceFilter('${esc(ns)}')">
+        <div class="dot" style="background:${c};box-shadow:0 0 6px ${c};${isActive?'transform:scale(1.3)':''}"></div>
+        <div class="name" style="${isActive?'color:var(--cyan);font-weight:700':''}">${esc(ns)}</div>
+        <div class="bar-bg"><div class="bar-fill" style="width:${pct}%;background:${c}"></div></div>
+        <div class="cnt">${cnt}</div>
+      </div>`
     }).join('');
   }
+  // Update namespace filter tabs dynamically
+  updateNamespaceTabs(nsMap);
   // Donut chart for node types
   const typeCounts={};
   (g.nodes||[]).forEach(n=>{typeCounts[n.node_type]=(typeCounts[n.node_type]||0)+1});
@@ -1413,7 +1539,7 @@ async function loadActivityFeed(){
 // === Nodes Table ===
 async function loadNodes(reset=true){
   if(reset)nodesOffset=0;
-  const ns=document.getElementById('filterNS').value;
+  const ns=document.getElementById('filterNS').value || currentNamespaceFilter;
   const type=document.getElementById('filterType').value;
   let url=`/nodes?limit=50&offset=${nodesOffset}`;
   if(ns)url+=`&namespace=${ns}`;if(type)url+=`&type=${type}`;
@@ -1478,12 +1604,16 @@ async function doSearch(){
   const el=document.getElementById('searchResults');
   if(!results){el.innerHTML='<div style="padding:12px;color:var(--text-dim);font-family:var(--font-mono);font-size:12px">No results found.</div>';return}
   // Handle both formats: FTS returns array, hybrid returns {nodes:[], total_tokens, budget_exceeded}
-  const nodes=Array.isArray(results)?results:(results.nodes||[]);
+  let nodes=Array.isArray(results)?results:(results.nodes||[]);
+  // Apply namespace filter if active
+  if(currentNamespaceFilter){
+    nodes=nodes.filter(r=>(r.namespace||'')===currentNamespaceFilter);
+  }
   if(!nodes.length){el.innerHTML='<div style="padding:12px;color:var(--text-dim);font-family:var(--font-mono);font-size:12px">No results found.</div>';return}
   const totalTokens=results.total_tokens||0;
   const budgetExceeded=results.budget_exceeded||false;
   el.innerHTML=`<div style="padding:8px 0;font-size:11px;color:var(--text-dim);border-bottom:1px solid rgba(0,212,170,0.1);margin-bottom:8px">
-    ${nodes.length} results · ${totalTokens} tokens · ${budgetExceeded?'⚠️ budget exceeded':'✓ within budget'}
+    ${nodes.length} results${currentNamespaceFilter?' in ['+esc(currentNamespaceFilter)+']':''} · ${totalTokens} tokens · ${budgetExceeded?'⚠️ budget exceeded':'✓ within budget'}
   </div>`+nodes.map(r=>`<div style="padding:10px 0;border-bottom:1px solid rgba(0,212,170,0.06)">
     <span class="type-tag" style="color:${tagBg(r.node_type)};border-color:${tagBg(r.node_type)}66;background:${tagBg(r.node_type)}0D">${r.node_type}</span>
     <a href="#" onclick="showDetail('${r.node_id}');return false" style="color:var(--cyan);text-decoration:none;margin-left:8px;font-weight:600">${hl(r.label,q)}</a>
@@ -1599,7 +1729,7 @@ async function loadEdges(reset=true){
   if(!g)return;
   const nodeMap={};(g.nodes||[]).forEach(n=>{nodeMap[n.id]=n});
   let edges=g.edges||[];
-  const nsFilter=document.getElementById('edgeNSFilter').value;
+  const nsFilter=document.getElementById('edgeNSFilter').value || currentNamespaceFilter;
   const typeFilter=document.getElementById('edgeTypeFilter').value;
   if(typeFilter)edges=edges.filter(e=>e.edge_type===typeFilter);
   if(nsFilter){
@@ -1635,6 +1765,75 @@ function loadMoreEdges(){edgesOffset+=100;loadEdges(false)}
 async function deleteEdge(id){if(!confirm('Delete this edge?'))return;await api('/edges/'+id,{method:'DELETE'});toast('Edge deleted');loadEdges()}
 
 // === Tools Tab ===
+
+// -- User Profiles --
+async function loadProfiles(){
+  const list=document.getElementById('profilesList');
+  list.innerHTML='<span style="color:#ffaa00">Loading...</span>';
+  const r=await api('/profiles');
+  if(!r||!r.length){list.innerHTML='<span style="color:var(--text-dim)">No profile facts yet.</span>';return}
+  const cats={preference:'#00ff88',fact:'#00aaff',goal:'#ffaa00',project:'#ff66aa',skill:'#aa66ff',constraint:'#ff4444'};
+  list.innerHTML=r.map(p=>`
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);"
+      title="Confidence: ${(p.confidence*100).toFixed(0)}%">
+      <span style="font-size:10px;padding:2px 6px;border-radius:4px;background:${cats[p.category]||'#444'}22;color:${cats[p.category]||'#888'};border:1px solid ${cats[p.category]||'#444'}44;text-transform:uppercase;font-weight:600;"
+        >${p.category}</span>
+      <span style="flex:1;" title="${esc(p.fact)}">${esc(p.fact.length>60?p.fact.substring(0,58)+'..':p.fact)}</span>
+      <button onclick="deleteProfile('${p.id}')" style="background:transparent;border:none;color:#ff4444;cursor:pointer;font-size:12px;padding:2px 6px;" title="Delete">×</button>
+    </div>`).join('');
+}
+
+async function addProfile(){
+  const cat=document.getElementById('profileCategory').value;
+  const fact=document.getElementById('profileFact').value.trim();
+  if(!fact){toast('Enter a fact',true);return}
+  const status=document.getElementById('profileAddStatus');
+  status.innerHTML='<span style="color:#ffaa00">Adding...</span>';
+  const r=await api('/profiles',{method:'POST',body:JSON.stringify({category:cat,fact:fact,confidence:0.9})});
+  if(r){
+    status.innerHTML='<span style="color:#00ff88">Added!</span>';
+    document.getElementById('profileFact').value='';
+    loadProfiles();
+  }else{status.innerHTML='<span style="color:#ff4444">Failed</span>'}
+}
+
+async function deleteProfile(id){
+  if(!confirm('Delete this profile fact?'))return;
+  const r=await api('/profiles/'+id,{method:'DELETE'});
+  if(r){toast('Deleted');loadProfiles()}
+}
+
+// -- Auto Forgetting --
+async function loadExpiringSoon(){
+  const list=document.getElementById('expiringList');
+  list.innerHTML='<span style="color:#ffaa00">Loading...</span>';
+  const r=await api('/admin/forgetting/expiring?days=7');
+  if(!r||!r.length){list.innerHTML='<span style="color:var(--text-dim)">No nodes expiring soon.</span>';return}
+  const now=new Date();
+  list.innerHTML=r.map(n=>{
+    const exp=new Date(n.expires_at);
+    const days=Math.ceil((exp-now)/(86400000));
+    const color=days<=1?'#ff4444':days<=3?'#ffaa00':'#ffdd00';
+    return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);">
+      <span style="font-size:10px;padding:2px 6px;border-radius:4px;background:${color}22;color:${color};border:1px solid ${color}44;"
+        >${days}d</span>
+      <span style="flex:1;" title="${esc(n.label||'')}">${esc((n.label||'').substring(0,50))}</span>
+      <span style="font-size:10px;color:var(--text-dim);text-transform:uppercase;">${n.node_type}</span>
+    </div>`;
+  }).join('');
+}
+
+async function runForgetting(){
+  const status=document.getElementById('forgettingStatus');
+  status.innerHTML='<span style="color:#ffaa00">Running expiry job...</span>';
+  const r=await api('/admin/forgetting/run',{method:'POST'});
+  if(r){
+    status.innerHTML=`<span style="color:#00ff88">Expired ${r.expired_count} nodes</span>`;
+    loadExpiringSoon();
+    loadStats();
+  }else{status.innerHTML='<span style="color:#ff4444">Failed</span>'}
+}
+
 async function autoConnect(){
   const ns=document.getElementById('connectNS').value;
   document.getElementById('connectResult').innerHTML='<span style="color:#ffaa00">Running...</span>';
@@ -1809,7 +2008,7 @@ async function loadGraph(){
     await loadVisNetwork();
   }catch(e){return}
   if(typeof vis==='undefined'){toast('Graph library not loaded',true);return}
-  const ns=document.getElementById('graphNS').value;
+  const ns=document.getElementById('graphNS').value || currentNamespaceFilter;
   let url='/graph?';if(ns)url+='namespace='+encodeURIComponent(ns);
   const data=await api(url);if(!data){hideGraphOverlay();return}
   graphData=data;
@@ -2175,6 +2374,12 @@ function initDebugTab(){
 loadHealth();loadOllamaStats();updateLastSyncDisplay();initAutoSync();startFileSyncPolling();loadStats().then(()=>{lastDashNodeCount=parseInt(document.getElementById('statNodes').textContent)||0});
 autoCheckUpdate();
 loadNodes();loadSnapshot();loadDQATrend();loadActivityFeed();
+
+// Load namespace filter from localStorage
+const savedNS = localStorage.getItem('mindbank_namespace_filter');
+if (savedNS !== null) {
+  currentNamespaceFilter = savedNS;
+}
 
 // Load profile from localStorage and fetch available profiles
 const savedProfile = localStorage.getItem('mindbank_profile');

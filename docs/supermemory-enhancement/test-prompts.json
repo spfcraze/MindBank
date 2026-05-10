@@ -1,0 +1,34 @@
+{
+  "test_prompts": [
+    {
+      "id": 1,
+      "prompt": "Store a new memory: 'My favorite database for vector search is pgvector with ivfflat index. I tested it last week and got 50ms query times.'",
+      "expected": "Node created with content, metadata (timestamp, source=session), extracted topic='database/vector-search', no contradictions flagged since this is first mention"
+    },
+    {
+      "id": 2,
+      "prompt": "Store another memory: 'I switched to hnsw index on pgvector and now queries take 10ms. ivfflat was too slow for my dataset.'",
+      "expected": "New node created. Contradiction detected with previous node (ivfflat 50ms vs hnsw 10ms). Both nodes marked with contradiction edge. User profile updated: preference for hnsw over ivfflat."
+    },
+    {
+      "id": 3,
+      "prompt": "Search: 'what database index should I use for vector search?'",
+      "expected": "Returns both nodes (ivfflat and hnsw), with contradiction highlighted. Ranks hnsw higher because it's the more recent statement and user profile shows preference for it."
+    },
+    {
+      "id": 4,
+      "prompt": "After 90 days, query: 'what database index should I use?' with automatic forgetting enabled (default 60-day expiry for preference nodes)",
+      "expected": "The ivfflat node is marked superseded/forgotten. Only hnsw node returned. User profile still shows hnsw preference (profile facts have longer expiry than raw memories)."
+    }
+  ],
+  "dimensions": [
+    {"name": "User Profile Integration", "weight": 15},
+    {"name": "Contradiction Detection", "weight": 15},
+    {"name": "Automatic Forgetting", "weight": 12},
+    {"name": "Hybrid Search Quality", "weight": 12},
+    {"name": "Temporal Versioning", "weight": 10},
+    {"name": "Namespace Isolation", "weight": 10},
+    {"name": "Graph Navigation", "weight": 10},
+    {"name": "Live Test Performance", "weight": 16}
+  ]
+}

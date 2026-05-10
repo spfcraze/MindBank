@@ -9,6 +9,7 @@ Usage:
 """
 import argparse
 import json
+import os
 import re
 import urllib.request
 import urllib.error
@@ -16,6 +17,34 @@ from pathlib import Path
 from datetime import datetime
 
 DEFAULT_API = "http://127.0.0.1:8095/api/v1"
+
+
+def derive_namespace_from_path(path: str) -> str:
+    """Extract leaf folder name from path. Same logic as Go DeriveNamespaceFromPath."""
+    path = path.strip()
+    if not path or path == "/":
+        return "global"
+    path = path.rstrip("/")
+    base = os.path.basename(path)
+    if base in ("/", ".", ""):
+        return "global"
+    return base
+
+
+def extract_namespace_from_session(session_path: str) -> str | None:
+    """Parse session JSON for working_directory or cwd, derive namespace."""
+    try:
+        with open(session_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        wd = data.get("working_directory", "").strip()
+        if wd:
+            return derive_namespace_from_path(wd)
+        cwd = data.get("cwd", "").strip()
+        if cwd:
+            return derive_namespace_from_path(cwd)
+    except Exception:
+        pass
+    return None
 
 
 def extract_knowledge(content: str) -> list[dict]:
@@ -118,8 +147,8 @@ def create_node(api_base: str, node_type: str, label: str, content: str,
 def create_edge(api_base: str, source: str, target: str, edge_type: str) -> bool:
     """Create an edge between two nodes."""
     data = json.dumps({
-        "source_id": source,
-        "target_id": target,
+        "source": source,
+        "target": target,
         "edge_type": edge_type,
     }).encode()
     
@@ -146,6 +175,12 @@ def mine_session_file(session_path: str, api_base: str = DEFAULT_API,
         print(f"Session file not found: {session_path}")
         return
     
+    # Derive namespace from session JSON if available
+    derived_ns = extract_namespace_from_session(session_path)
+    if derived_ns:
+        namespace = derived_ns
+        print(f"Derived namespace from session: {namespace}")
+    
     # Read session content
     content = path.read_text(encoding="utf-8")
     if len(content) < 100:
@@ -158,7 +193,7 @@ def mine_session_file(session_path: str, api_base: str = DEFAULT_API,
     if first_line and len(first_line) < 100:
         session_name = first_line
     
-    print(f"Mining session: {session_name}")
+    print(f"Mining session: {session_name} (namespace: {namespace})")
     
     # Create session node
     session_id = create_node(api_base, "session", session_name, content, workspace, namespace)

@@ -63,6 +63,7 @@ type Node struct {
 	Version       int             `json:"version"`
 	PredecessorID *string         `json:"predecessor_id,omitempty"`
 	Deduplicated  bool            `json:"deduplicated,omitempty"`
+	ExpiresAt     *time.Time      `json:"expires_at,omitempty"`
 	CreatedAt     time.Time       `json:"created_at"`
 	UpdatedAt     time.Time       `json:"updated_at"`
 }
@@ -77,6 +78,7 @@ type NodeCreate struct {
 	Summary       string          `json:"summary,omitempty"`
 	Metadata      json.RawMessage `json:"metadata,omitempty"`
 	Importance    *float32        `json:"importance,omitempty"`
+	ExpiresAt     *time.Time      `json:"expires_at,omitempty"`
 }
 
 // NodeUpdate is the request body for updating a node.
@@ -85,6 +87,7 @@ type NodeUpdate struct {
 	Summary    *string         `json:"summary,omitempty"`
 	Metadata   json.RawMessage `json:"metadata,omitempty"`
 	Importance *float32        `json:"importance,omitempty"`
+	ExpiresAt  *time.Time      `json:"expires_at,omitempty"`
 }
 
 // NodeWithEdge is a node returned from graph traversal, including edge info.
