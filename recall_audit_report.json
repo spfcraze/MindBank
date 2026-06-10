@@ -1,0 +1,150 @@
+{
+  "timestamp": "2026-06-01T20:16:43.237131+00:00",
+  "findings": [
+    {
+      "category": "EMBEDDING",
+      "severity": "MEDIUM",
+      "message": "Embedding failures: 18 with error: fetch content: no rows in result set",
+      "detail": "These nodes won't be found by semantic search",
+      "timestamp": "2026-06-01T20:16:27.077328+00:00"
+    },
+    {
+      "category": "EMBEDDING",
+      "severity": "INFO",
+      "message": "Embedding coverage: 1959/1967 (99.6%)",
+      "detail": "",
+      "timestamp": "2026-06-01T20:16:27.077352+00:00"
+    },
+    {
+      "category": "CONTENT",
+      "severity": "MEDIUM",
+      "message": "4562 session nodes have very short content (<20 chars)",
+      "detail": "These won't be meaningfully searchable",
+      "timestamp": "2026-06-01T20:16:33.175251+00:00"
+    },
+    {
+      "category": "EPISTEMIC",
+      "severity": "HIGH",
+      "message": "1966/1967 nodes have 'unknown' epistemic label",
+      "detail": "Auto-classification not working - all nodes treated equally",
+      "timestamp": "2026-06-01T20:16:35.189826+00:00"
+    }
+  ],
+  "discriminating_matrix": [
+    {
+      "name": "Simple Fact",
+      "queries": [
+        {
+          "query": "python list comprehension",
+          "found": true,
+          "rank": 1,
+          "total_results": 1
+        },
+        {
+          "query": "how to create lists in python",
+          "found": true,
+          "rank": 1,
+          "total_results": 1
+        },
+        {
+          "query": "[x*2 for x in range]",
+          "found": true,
+          "rank": 1,
+          "total_results": 1
+        }
+      ]
+    },
+    {
+      "name": "Decision",
+      "queries": [
+        {
+          "query": "database choice",
+          "found": true,
+          "rank": 1,
+          "total_results": 2
+        },
+        {
+          "query": "postgresql vs sqlite",
+          "found": true,
+          "rank": 1,
+          "total_results": 1
+        },
+        {
+          "query": "production database",
+          "found": true,
+          "rank": 1,
+          "total_results": 2
+        }
+      ]
+    },
+    {
+      "name": "Advice",
+      "queries": [
+        {
+          "query": "database transactions",
+          "found": true,
+          "rank": 2,
+          "total_results": 2
+        },
+        {
+          "query": "ensure data consistency",
+          "found": true,
+          "rank": 1,
+          "total_results": 1
+        },
+        {
+          "query": "BEGIN COMMIT",
+          "found": false,
+          "rank": null,
+          "total_results": 0
+        }
+      ]
+    },
+    {
+      "name": "Problem",
+      "queries": [
+        {
+          "query": "race condition",
+          "found": true,
+          "rank": 1,
+          "total_results": 1
+        },
+        {
+          "query": "caching issue",
+          "found": true,
+          "rank": 1,
+          "total_results": 1
+        },
+        {
+          "query": "multiple threads update",
+          "found": true,
+          "rank": 1,
+          "total_results": 1
+        }
+      ]
+    },
+    {
+      "name": "Concept",
+      "queries": [
+        {
+          "query": "idempotency",
+          "found": true,
+          "rank": 1,
+          "total_results": 1
+        },
+        {
+          "query": "retry safety",
+          "found": true,
+          "rank": 1,
+          "total_results": 1
+        },
+        {
+          "query": "same result multiple times",
+          "found": true,
+          "rank": 1,
+          "total_results": 1
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "deploy": [
+    "deployment",
+    "deploying",
+    "release",
+    "ship"
+  ],
+  "test": [
+    "testing",
+    "tests",
+    "validation",
+    "verify"
+  ],
+  "error": [
+    "exception",
+    "failure",
+    "bug",
+    "issue",
+    "problem"
+  ],
+  "database": [
+    "db",
+    "postgres",
+    "sql",
+    "storage"
+  ],
+  "api": [
+    "endpoint",
+    "interface",
+    "service",
+    "rest"
+  ],
+  "config": [
+    "configuration",
+    "settings",
+    "env",
+    "environment"
+  ],
+  "git": [
+    "version control",
+    "commit",
+    "branch",
+    "repository"
+  ],
+  "docker": [
+    "container",
+    "image",
+    "compose",
+    "kubernetes"
+  ]
+}

@@ -248,9 +248,78 @@ func (h *DebugHandler) Heal(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		case "link_orphans":
-			results = append(results, map[string]any{"fix": fix, "status": "not_implemented", "note": "Use /api/v1/analyze/link-orphans instead"})
+			if req.DryRun {
+				var count int
+				h.pool.QueryRow(r.Context(), `
+					SELECT COUNT(*) FROM nodes n
+					WHERE n.valid_to IS NULL
+					AND NOT EXISTS (SELECT 1 FROM edges e WHERE e.source_id = n.id OR e.target_id = n.id)
+				`).Scan(&count)
+				results = append(results, map[string]any{"fix": fix, "status": "dry_run", "would_link": count})
+			} else {
+				// Find or create a root anchor node for isolated nodes
+				var rootID string
+				err := h.pool.QueryRow(r.Context(), `
+					SELECT id FROM nodes WHERE label = 'Root Anchor' AND valid_to IS NULL LIMIT 1
+				`).Scan(&rootID)
+				if err != nil {
+					// Create root anchor node
+					err = h.pool.QueryRow(r.Context(), `
+						INSERT INTO nodes (label, node_type, namespace, content, summary, created_at, valid_from)
+						VALUES ('Root Anchor', 'concept', 'system', 'Auto-created anchor for isolated nodes', 'System anchor node', NOW(), NOW())
+						RETURNING id
+					`).Scan(&rootID)
+					if err != nil {
+						results = append(results, map[string]any{"fix": fix, "status": "error", "error": "failed to create anchor: " + err.Error()})
+						break
+					}
+				}
+				// Link isolated nodes to root anchor with relates_to edges
+				res, err := h.pool.Exec(r.Context(), `
+					INSERT INTO edges (source_id, target_id, edge_type, weight, created_at, workspace_name)
+					SELECT $1, n.id, 'relates_to', 0.1, NOW(), 'hermes'
+					FROM nodes n
+					WHERE n.valid_to IS NULL
+					AND n.id != $1
+					AND NOT EXISTS (SELECT 1 FROM edges e WHERE e.source_id = n.id OR e.target_id = n.id)
+					ON CONFLICT DO NOTHING
+				`, rootID)
+				if err != nil {
+					results = append(results, map[string]any{"fix": fix, "status": "error", "error": err.Error()})
+				} else {
+					count := res.RowsAffected()
+					results = append(results, map[string]any{"fix": fix, "status": "ok", "linked": count})
+				}
+			}
 		case "merge_duplicates":
-			results = append(results, map[string]any{"fix": fix, "status": "not_implemented", "note": "Use /api/v1/analyze/merge-duplicates instead"})
+			if req.DryRun {
+				var count int
+				h.pool.QueryRow(r.Context(), `
+					SELECT COUNT(*) FROM (
+						SELECT source_id, target_id, edge_type, COUNT(*) as cnt
+						FROM edges
+						GROUP BY source_id, target_id, edge_type
+						HAVING COUNT(*) > 1
+					) t
+				`).Scan(&count)
+				results = append(results, map[string]any{"fix": fix, "status": "dry_run", "would_merge": count})
+			} else {
+				// Delete duplicate edges keeping the oldest one
+				res, err := h.pool.Exec(r.Context(), `
+					DELETE FROM edges
+					WHERE ctid NOT IN (
+						SELECT MIN(ctid)
+						FROM edges
+						GROUP BY source_id, target_id, edge_type
+					)
+				`)
+				if err != nil {
+					results = append(results, map[string]any{"fix": fix, "status": "error", "error": err.Error()})
+				} else {
+					count := res.RowsAffected()
+					results = append(results, map[string]any{"fix": fix, "status": "ok", "merged": count})
+				}
+			}
 		case "recalculate_embeddings":
 			results = append(results, map[string]any{"fix": fix, "status": "not_implemented", "note": "Use /api/v1/nodes/recalculate instead"})
 		default:

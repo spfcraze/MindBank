@@ -3,8 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MindBank — Brain 3D</title>
-    <link rel="stylesheet" href="brain3d.css?v=2">
+    <title>MIND_BANK // BRAIN_3D</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="brain3d.css?v=4">
     <script type="importmap">
     {
         "imports": {
@@ -16,21 +17,24 @@
 </head>
 <body>
     <div id="app">
+        <!-- TOP HEADER -->
         <header>
-            <h1>🧠 MindBank Brain 3D</h1>
+            <h1><a href="/" style="color:var(--amber);text-decoration:none;">MIND_BANK // BRAIN_3D</a></h1>
             <div class="controls">
-                <!-- View Modes -->
                 <div class="view-modes">
                     <button id="mode-full" class="mode-btn active" onclick="setViewMode('full')">Full</button>
                     <button id="mode-micro" class="mode-btn" onclick="setViewMode('micro')">Micro</button>
                     <button id="mode-macro" class="mode-btn" onclick="setViewMode('macro')">Macro</button>
+                    <button id="mode-dissolve" class="mode-btn" onclick="setViewMode('dissolve')">Dissolve</button>
                 </div>
-                <!-- Search -->
+                <label style="display:flex;align-items:center;gap:6px;font-size:10px;color:var(--text-dim);cursor:pointer;font-family:var(--font-mono);">
+                    <input type="checkbox" id="show-sessions" onchange="toggleSessions(this.checked)" style="cursor:pointer;">
+                    Show Sessions
+                </label>
                 <input type="text" id="search-input" placeholder="Search nodes..." 
                        oninput="searchNodes(this.value)"
-                       style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;padding:6px 14px;border-radius:6px;font-size:13px;width:180px;">
-                <!-- Controls -->
-                <select id="topic-filter" style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;padding:0.25rem 0.5rem;border-radius:0.25rem;font-size:0.875rem;">
+                       style="background:rgba(255,176,0,0.04);color:var(--text);border:1px solid var(--border);padding:5px 12px;border-radius:4px;font-size:10px;width:160px;font-family:var(--font-mono);">
+                <select id="topic-filter" style="background:rgba(255,176,0,0.04);color:var(--text);border:1px solid var(--border);padding:5px 10px;border-radius:4px;font-size:10px;font-family:var(--font-mono);">
                     <option value="">All Topics</option>
                     <option value="deployment">Deployment</option>
                     <option value="database">Database</option>
@@ -43,37 +47,211 @@
                     <option value="config">Config</option>
                     <option value="architecture">Architecture</option>
                 </select>
-                <select id="namespace-filter">
+                <select id="namespace-filter" style="background:rgba(255,176,0,0.04);color:var(--text);border:1px solid var(--border);padding:5px 10px;border-radius:4px;font-size:10px;font-family:var(--font-mono);">
                     <option value="">All namespaces</option>
                 </select>
-                <button id="reset-cam">Reset Cam</button>
-                <a href="/" class="back">← Dashboard</a>
+                <button id="reset-cam" title="Reset camera" style="background:rgba(255,176,0,0.04);color:var(--text);border:1px solid var(--border);font-family:var(--font-mono);">Reset Cam</button>
+                <button id="capture-btn" title="Capture screenshot" style="background:rgba(255,176,0,0.04);color:var(--text);border:1px solid var(--border);font-family:var(--font-mono);">Capture</button>
+                <a href="/" class="back" style="background:rgba(255,176,0,0.04);color:var(--text);border:1px solid var(--border);font-family:var(--font-mono);">← Dashboard</a>
             </div>
         </header>
 
-        <main id="canvas-container">
-            <div id="loading">Loading 3D brain...</div>
-            <div id="error-display" style="display:none; color:#ef4444; padding:20px; font-family:monospace;"></div>
-            
-            <!-- Stats Overlay -->
-            <div id="stats-overlay">
-                <div class="stat"><span class="stat-val" id="stat-nodes">-</span> nodes</div>
-                <div class="stat"><span class="stat-val" id="stat-edges">-</span> edges</div>
-                <div class="stat"><span class="stat-val" id="stat-projects">-</span> projects</div>
-                <div class="stat"><span class="stat-val" id="stat-sessions">-</span> sessions</div>
-            </div>
+        <!-- MAIN 3-PANEL LAYOUT -->
+        <div id="workspace">
+            <!-- LEFT SIDEBAR: Graph Overview & Analytics -->
+            <aside id="left-sidebar">
+                <div class="sidebar-section">
+                    <div class="sidebar-title">📊 Graph Overview</div>
+                    <div class="metric-grid">
+                        <div class="metric-box">
+                            <div class="metric-num" id="sb-nodes">-</div>
+                            <div class="metric-label">Nodes</div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="metric-num" id="sb-edges">-</div>
+                            <div class="metric-label">Edges</div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="metric-num" id="sb-projects">-</div>
+                            <div class="metric-label">Projects</div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="metric-num" id="sb-namespaces">-</div>
+                            <div class="metric-label">Namespaces</div>
+                        </div>
+                    </div>
+                </div>
 
-            <!-- Edge Legend -->
-            <div id="edge-legend">
-                <div class="legend-title">Edge Types</div>
-                <div class="legend-item"><span class="legend-color" style="background:#4ecdc4;"></span> depends_on / supports</div>
-                <div class="legend-item"><span class="legend-color" style="background:#a78bfa;"></span> influences</div>
-                <div class="legend-item"><span class="legend-color" style="background:#ff6b35;"></span> contradicts</div>
-                <div class="legend-item"><span class="legend-color" style="background:#404040;"></span> relates_to</div>
-                <div class="legend-item"><span class="legend-color" style="background:#3b82f6;"></span> contains</div>
-            </div>
-        </main>
+                <div class="sidebar-section">
+                    <div class="sidebar-title">🎨 Node Types</div>
+                    <div id="node-type-bars" class="bar-chart"></div>
+                </div>
 
+                <div class="sidebar-section">
+                    <div class="sidebar-title">🏷️ Namespaces</div>
+                    <div id="namespace-bars" class="bar-chart"></div>
+                </div>
+
+                <div class="sidebar-section">
+                    <div class="sidebar-title">🔗 Edge Types</div>
+                    <div id="edge-type-bars" class="bar-chart"></div>
+                </div>
+
+                <div class="sidebar-section">
+                    <div class="sidebar-title">⚡ Recent Activity</div>
+                    <div id="activity-feed" class="activity-feed">
+                        <div class="activity-empty">Waiting for activity...</div>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- CENTER: 3D Canvas -->
+            <main id="canvas-container">
+                <div id="loading">Loading 3D brain...</div>
+                <div id="error-display" style="display:none; color:#ef4444; padding:20px; font-family:monospace;"></div>
+                
+                <!-- Stats Overlay -->
+                <div id="stats-overlay">
+                    <div class="stat"><span class="stat-val" id="stat-nodes">-</span> nodes</div>
+                    <div class="stat"><span class="stat-val" id="stat-edges">-</span> edges</div>
+                    <div class="stat"><span class="stat-val" id="stat-projects">-</span> projects</div>
+                    <div class="stat"><span class="stat-val" id="stat-sessions">-</span> sessions</div>
+                </div>
+
+                <!-- Activity Indicator -->
+                <div id="activity-indicator">
+                    <span class="pulse-dot"></span>Live
+                </div>
+
+                <!-- Edge Legend -->
+                <div id="edge-legend">
+                    <div class="legend-title">Edge Types</div>
+                    <div class="legend-item"><span class="legend-color" style="background:#4ecdc4;"></span> depends_on / supports</div>
+                    <div class="legend-item"><span class="legend-color" style="background:#a78bfa;"></span> influences</div>
+                    <div class="legend-item"><span class="legend-color" style="background:#ff6b35;"></span> contradicts</div>
+                    <div class="legend-item"><span class="legend-color" style="background:#404040;"></span> relates_to</div>
+                    <div class="legend-item"><span class="legend-color" style="background:#3b82f6;"></span> contains</div>
+                </div>
+
+                <!-- Hover Info Panel (floating) -->
+                <div id="hover-info" style="display:none;">
+                    <div class="hover-title" id="hover-title">Node</div>
+                    <div class="hover-meta" id="hover-meta"></div>
+                </div>
+            </main>
+
+            <!-- RIGHT SIDEBAR: Node Details & Insights -->
+            <aside id="right-sidebar">
+                <div class="sidebar-section" id="node-detail-section" style="display:none;">
+                    <div class="sidebar-title">🔍 Node Details</div>
+                    <div id="node-detail-content">
+                        <div class="detail-row">
+                            <span class="detail-key">Label</span>
+                            <span class="detail-val" id="nd-label">-</span>
+                        </div>
+                        <div class="detail-row">
+                            <span class="detail-key">Type</span>
+                            <span class="detail-val" id="nd-type">-</span>
+                        </div>
+                        <div class="detail-row">
+                            <span class="detail-key">Namespace</span>
+                            <span class="detail-val" id="nd-namespace">-</span>
+                        </div>
+                        <div class="detail-row">
+                            <span class="detail-key">Importance</span>
+                            <span class="detail-val" id="nd-importance">-</span>
+                        </div>
+                        <div class="detail-row">
+                            <span class="detail-key">Accessed</span>
+                            <span class="detail-val" id="nd-accessed">-</span>
+                        </div>
+                        <div class="detail-row">
+                            <span class="detail-key">Created</span>
+                            <span class="detail-val" id="nd-created">-</span>
+                        </div>
+                        <div class="detail-row">
+                            <span class="detail-key">Epistemic</span>
+                            <span class="detail-val" id="nd-epistemic">-</span>
+                        </div>
+                        <div class="detail-content" id="nd-content"></div>
+                        <div class="detail-summary" id="nd-summary"></div>
+                    </div>
+                </div>
+
+                <div class="sidebar-section" id="connections-section" style="display:none;">
+                    <div class="sidebar-title">🔗 Connections <span id="conn-count"></span></div>
+                    <div id="connections-list" class="connections-list"></div>
+                </div>
+
+                <div class="sidebar-section">
+                    <div class="sidebar-title">📈 Graph Health</div>
+                    <div class="health-grid">
+                        <div class="health-item">
+                            <div class="health-bar-bg">
+                                <div class="health-bar-fill" id="health-density" style="width:0%"></div>
+                            </div>
+                            <div class="health-label">Edge Density</div>
+                            <div class="health-val" id="health-density-val">-</div>
+                        </div>
+                        <div class="health-item">
+                            <div class="health-bar-bg">
+                                <div class="health-bar-fill" id="health-avg-degree" style="width:0%"></div>
+                            </div>
+                            <div class="health-label">Avg Degree</div>
+                            <div class="health-val" id="health-avg-degree-val">-</div>
+                        </div>
+                        <div class="health-item">
+                            <div class="health-bar-bg">
+                                <div class="health-bar-fill" id="health-components" style="width:0%"></div>
+                            </div>
+                            <div class="health-label">Components</div>
+                            <div class="health-val" id="health-components-val">-</div>
+                        </div>
+                        <div class="health-item">
+                            <div class="health-bar-bg">
+                                <div class="health-bar-fill" id="health-orphans" style="width:0%"></div>
+                            </div>
+                            <div class="health-label">Orphan Nodes</div>
+                            <div class="health-val" id="health-orphans-val">-</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="sidebar-section">
+                    <div class="sidebar-title">🏆 Top Nodes</div>
+                    <div id="top-nodes-list" class="top-nodes"></div>
+                </div>
+
+                <div class="sidebar-section">
+                    <div class="sidebar-title">🎯 Quick Actions</div>
+                    <div class="action-buttons">
+                        <button onclick="focusRandomNode()">🎲 Random Node</button>
+                        <button onclick="focusHighestDegree()">⭐ Hub Node</button>
+                        <button onclick="focusRecentNode()">🕐 Recent</button>
+                        <button onclick="resetView()">🔄 Reset View</button>
+                    </div>
+                </div>
+            </aside>
+        </div>
+
+        <!-- BOTTOM STATUS BAR -->
+        <footer id="status-bar">
+            <div class="status-left">
+                <span class="status-item" id="status-db">DB: ONLINE</span>
+                <span class="status-item" id="status-ollama">OLLAMA: CONNECTED</span>
+                <span class="status-item" id="status-version">V0.5.1</span>
+            </div>
+            <div class="status-center">
+                <span id="status-message">READY</span>
+            </div>
+            <div class="status-right">
+                <span class="status-item" id="status-fps">FPS: -</span>
+                <span class="status-item" id="status-particles">PARTICLES: -</span>
+                <span class="status-item" id="status-camera">CAM: -</span>
+            </div>
+        </footer>
+
+        <!-- Info Panel (slide-in for detailed view) -->
         <aside id="info-panel" class="hidden">
             <button class="close">×</button>
             <div class="content"></div>
@@ -83,8 +261,7 @@
     </div>
 
     <script type="module">
-        import init, { PhysicsEngine } from './pkg/brain3d_physics.js';
-        import { Brain3D } from './brain3d.js?v=2';
+        import { Brain3D } from './brain3d.js?v=7';
         import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
         import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
         import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -96,6 +273,7 @@
         const loading = document.getElementById('loading');
         const errorDisplay = document.getElementById('error-display');
         let brain;
+        let graphData = null;
 
         function showError(msg) {
             loading.style.display = 'none';
@@ -106,9 +284,7 @@
 
         async function main() {
             try {
-                loading.textContent = 'Initializing WASM physics...';
-                await init();
-                loading.textContent = 'WASM loaded. Creating 3D scene...';
+                loading.textContent = 'Creating 3D scene...';
 
                 const container = document.getElementById('canvas-container');
                 brain = new Brain3D(container);
@@ -127,85 +303,48 @@
                 }
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 const data = await res.json();
+                graphData = data;
                 console.log('[Brain3D] Loaded:', data.nodes.length, 'nodes,', data.edges.length, 'edges');
                 loading.textContent = `Loaded ${data.nodes.length} nodes. Building visualization...`;
 
-                // Separate signal from noise
-                const projectNodes = data.nodes.filter(n => n.node_type === 'project' || n.namespace !== 'global');
-                const sessionNodes = data.nodes.filter(n => n.node_type === 'session' && n.namespace === 'global');
+                const knowledgeTypes = new Set(['fact', 'decision', 'problem', 'preference', 'advice', 'topic', 'project', 'person', 'concept', 'event', 'agent', 'question']);
+                const knowledgeNodes = data.nodes.filter(n => knowledgeTypes.has(n.node_type));
+                const sessionNodes = data.nodes.filter(n => n.node_type === 'session');
                 
-                const orderedNodes = [...projectNodes, ...sessionNodes];
+                const displayNodes = knowledgeNodes.length > 0 ? knowledgeNodes : data.nodes;
+                
+                console.log('[Brain3D] Knowledge nodes:', knowledgeNodes.length, '| Session nodes:', sessionNodes.length, '| Displaying:', displayNodes.length);
+                
                 const orderedNodeIdToIndex = {};
-                orderedNodes.forEach((n, i) => orderedNodeIdToIndex[n.id] = i);
+                displayNodes.forEach((n, i) => orderedNodeIdToIndex[n.id] = i);
                 brain.nodeIdToIndex = orderedNodeIdToIndex;
-                brain.nodes = orderedNodes;
-                brain.projectCount = projectNodes.length;
+                brain.nodes = displayNodes;
+                brain.allNodes = data.nodes;
+                brain.sessionNodes = sessionNodes;
+                brain.knowledgeNodes = knowledgeNodes;
+                brain.projectCount = displayNodes.filter(n => n.node_type === 'project').length;
 
-                // Position nodes
-                const positions = calculateLayout(projectNodes, sessionNodes, data.edges, orderedNodeIdToIndex);
-                brain.nodePositions = positions;
+                brain.createNodes(displayNodes, brain.projectCount);
+                const displayNodeIds = new Set(displayNodes.map(n => n.id));
+                const displayEdges = data.edges.filter(e => displayNodeIds.has(e.source) && displayNodeIds.has(e.target));
+                brain.initForcePhysics(displayNodes, displayEdges, orderedNodeIdToIndex);
+                brain.createEdges(displayEdges);
 
-                // Build scene
-                brain.createNodes(orderedNodes, projectNodes.length);
-                brain.updateNodePositions(positions);
-                brain.createEdges(data.edges, positions);
-
+                // Populate sidebars
+                populateLeftSidebar(data, displayNodes, displayEdges);
+                populateRightSidebar(data, displayNodes, displayEdges);
+                
                 // Update stats
-                updateStats(data.nodes.length, data.edges.length, projectNodes.length, sessionNodes.length);
+                updateStats(displayNodes.length, displayEdges.length, brain.projectCount, sessionNodes.length);
+                window.updateStats = updateStats;
+                
+                brain.displayNodeIds = displayNodeIds;
+                brain.displayEdges = displayEdges;
+                brain.allEdges = data.edges;
 
                 loading.style.display = 'none';
 
-                // Initialize view mode
                 brain.setViewMode('full');
-
-                // Calculate layout
-                function calculateLayout(projects, sessions, edges, nodeIdToIndex) {
-                    const total = projects.length + sessions.length;
-                    const pos = new Float32Array(total * 3);
-                    const spacing = 15;
-
-                    // Projects in circle
-                    projects.forEach((p, i) => {
-                        const a = (i / Math.max(projects.length, 1)) * Math.PI * 2 - Math.PI / 2;
-                        pos[i * 3] = Math.cos(a) * spacing;
-                        pos[i * 3 + 1] = 0;
-                        pos[i * 3 + 2] = Math.sin(a) * spacing;
-                    });
-
-                    // Sessions: cluster around connected projects
-                    const topicToProject = {
-                        deployment: 0, database: 0, api: 1, auth: 1, frontend: 1,
-                        bugfix: 2, refactoring: 2, testing: 2, config: 1, architecture: 1, general: 0
-                    };
-
-                    const byTopic = {};
-                    sessions.forEach((s, i) => {
-                        const topic = (s.metadata && s.metadata.topic) ? s.metadata.topic : 'general';
-                        if (!byTopic[topic]) byTopic[topic] = [];
-                        byTopic[topic].push({idx: projects.length + i, sess: s});
-                    });
-
-                    Object.entries(byTopic).forEach(([topic, group]) => {
-                        const tp = topicToProject[topic] || 0;
-                        const px = pos[tp * 3], pz = pos[tp * 3 + 2];
-                        const r = 5 + (Object.keys(byTopic).indexOf(topic) % 3) * 2;
-                        group.forEach((item, j) => {
-                            const a = (j / Math.max(group.length, 1)) * Math.PI * 2;
-                            pos[item.idx * 3] = px + Math.cos(a) * r;
-                            pos[item.idx * 3 + 1] = (Math.sin(j * 0.3) * 2) + 1;
-                            pos[item.idx * 3 + 2] = pz + Math.sin(a) * r;
-                        });
-                    });
-
-                    return pos;
-                }
-
-                function updateStats(nodes, edges, projects, sessions) {
-                    document.getElementById('stat-nodes').textContent = nodes;
-                    document.getElementById('stat-edges').textContent = edges;
-                    document.getElementById('stat-projects').textContent = projects;
-                    document.getElementById('stat-sessions').textContent = sessions;
-                }
 
                 // Namespace filter
                 const namespaces = [...new Set(data.nodes.map(n => n.namespace))].sort();
@@ -227,32 +366,311 @@
 
                 // Reset camera
                 document.getElementById('reset-cam').addEventListener('click', () => {
-                    brain.camera.position.set(0, 25, 20);
+                    brain.camera.position.set(0, 30, 60);
                     brain.camera.lookAt(0, 0, 0);
                     brain.controls.target.set(0, 0, 0);
                     brain.controls.update();
                 });
+
+                // Screenshot capture
+                document.getElementById('capture-btn').addEventListener('click', () => {
+                    brain.captureScreenshot();
+                });
+
+                // Show live indicator
+                document.getElementById('activity-indicator').classList.add('active');
+
+                // Start FPS counter
+                startFpsCounter();
+
+                // Wire hover to right sidebar
+                brain.onNodeHover = (node) => {
+                    if (node) showNodeDetail(node);
+                };
+                brain.onNodeSelect = (node) => {
+                    if (node) {
+                        showNodeDetail(node);
+                        showConnections(node);
+                    }
+                };
 
             } catch (e) {
                 showError(e.message + '\n' + e.stack);
             }
         }
 
-        // View mode switcher (global function)
-        function setViewMode(mode) {
+        function updateStats(nodes, edges, projects, sessions) {
+            document.getElementById('stat-nodes').textContent = nodes;
+            document.getElementById('stat-edges').textContent = edges;
+            document.getElementById('stat-projects').textContent = projects;
+            document.getElementById('stat-sessions').textContent = sessions;
+            document.getElementById('sb-nodes').textContent = nodes;
+            document.getElementById('sb-edges').textContent = edges;
+            document.getElementById('sb-projects').textContent = projects;
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // LEFT SIDEBAR: Graph Overview
+        // ═══════════════════════════════════════════════════════════════════════
+        function populateLeftSidebar(data, nodes, edges) {
+            // Node type breakdown
+            const typeCounts = {};
+            nodes.forEach(n => { typeCounts[n.node_type] = (typeCounts[n.node_type] || 0) + 1; });
+            const maxType = Math.max(...Object.values(typeCounts), 1);
+            
+            const typeColors = {
+                project: '#4ecdc4', decision: '#ff6b35', fact: '#4ecdc4', problem: '#a78bfa',
+                preference: '#ff6b35', person: '#a78bfa', session: '#64748b', event: '#f59e0b',
+                agent: '#d48ab0', concept: '#9aa0d4', topic: '#7a8fd4', advice: '#7bc47b', question: '#d4a85a'
+            };
+
+            const typeBars = document.getElementById('node-type-bars');
+            typeBars.innerHTML = Object.entries(typeCounts)
+                .sort((a, b) => b[1] - a[1])
+                .map(([type, count]) => {
+                    const pct = (count / maxType * 100).toFixed(0);
+                    const color = typeColors[type] || '#888';
+                    return `<div class="bar-row">
+                        <span class="bar-name">${type}</span>
+                        <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${color}"></div></div>
+                        <span class="bar-count">${count}</span>
+                    </div>`;
+                }).join('');
+
+            // Namespace breakdown
+            const nsCounts = {};
+            nodes.forEach(n => { nsCounts[n.namespace] = (nsCounts[n.namespace] || 0) + 1; });
+            const maxNs = Math.max(...Object.values(nsCounts), 1);
+            
+            const nsBars = document.getElementById('namespace-bars');
+            nsBars.innerHTML = Object.entries(nsCounts)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 10)
+                .map(([ns, count], i) => {
+                    const pct = (count / maxNs * 100).toFixed(0);
+                    const hues = [160, 200, 280, 20, 120, 240, 300, 60, 180, 320];
+                    const color = `hsl(${hues[i % hues.length]}, 70%, 60%)`;
+                    return `<div class="bar-row">
+                        <span class="bar-name" title="${ns}">${ns.substring(0, 12)}${ns.length > 12 ? '...' : ''}</span>
+                        <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${color}"></div></div>
+                        <span class="bar-count">${count}</span>
+                    </div>`;
+                }).join('');
+
+            document.getElementById('sb-namespaces').textContent = Object.keys(nsCounts).length;
+
+            // Edge type breakdown
+            const edgeTypeCounts = {};
+            edges.forEach(e => { edgeTypeCounts[e.edge_type] = (edgeTypeCounts[e.edge_type] || 0) + 1; });
+            const maxEdgeType = Math.max(...Object.values(edgeTypeCounts), 1);
+            
+            const edgeColors = {
+                depends_on: '#4ecdc4', supports: '#4ecdc4', relates_to: '#808080',
+                learned_from: '#4ecdc4', influences: '#a78bfa', contradicts: '#ff6b35', contains: '#3b82f6'
+            };
+
+            const edgeBars = document.getElementById('edge-type-bars');
+            edgeBars.innerHTML = Object.entries(edgeTypeCounts)
+                .sort((a, b) => b[1] - a[1])
+                .map(([type, count]) => {
+                    const pct = (count / maxEdgeType * 100).toFixed(0);
+                    const color = edgeColors[type] || '#888';
+                    return `<div class="bar-row">
+                        <span class="bar-name">${type}</span>
+                        <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${color}"></div></div>
+                        <span class="bar-count">${count}</span>
+                    </div>`;
+                }).join('');
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // RIGHT SIDEBAR: Node Details & Insights
+        // ═══════════════════════════════════════════════════════════════════════
+        function populateRightSidebar(data, nodes, edges) {
+            // Graph health metrics
+            const nodeCount = nodes.length;
+            const edgeCount = edges.length;
+            const density = nodeCount > 1 ? (edgeCount / (nodeCount * (nodeCount - 1) / 2) * 100).toFixed(2) : 0;
+            
+            const degrees = {};
+            edges.forEach(e => {
+                degrees[e.source] = (degrees[e.source] || 0) + 1;
+                degrees[e.target] = (degrees[e.target] || 0) + 1;
+            });
+            const avgDegree = nodeCount > 0 ? (Object.values(degrees).reduce((a, b) => a + b, 0) / nodeCount).toFixed(1) : 0;
+            const orphanCount = nodes.filter(n => !degrees[n.id]).length;
+            
+            document.getElementById('health-density').style.width = Math.min(density * 10, 100) + '%';
+            document.getElementById('health-density-val').textContent = density + '%';
+            document.getElementById('health-avg-degree').style.width = Math.min(avgDegree * 20, 100) + '%';
+            document.getElementById('health-avg-degree-val').textContent = avgDegree;
+            document.getElementById('health-components').style.width = '100%';
+            document.getElementById('health-components-val').textContent = '1';
+            document.getElementById('health-orphans').style.width = Math.min(orphanCount / nodeCount * 100, 100) + '%';
+            document.getElementById('health-orphans-val').textContent = orphanCount;
+
+            // Top nodes by degree
+            const nodeDegrees = nodes.map(n => ({ node: n, degree: degrees[n.id] || 0 }))
+                .sort((a, b) => b.degree - a.degree)
+                .slice(0, 8);
+            
+            const topList = document.getElementById('top-nodes-list');
+            topList.innerHTML = nodeDegrees.map(({ node, degree }) => {
+                const typeColors = {
+                    project: '#4ecdc4', decision: '#ff6b35', fact: '#4ecdc4', problem: '#a78bfa',
+                    preference: '#ff6b35', person: '#a78bfa', concept: '#9aa0d4', topic: '#7a8fd4'
+                };
+                const color = typeColors[node.node_type] || '#888';
+                return `<div class="top-node-item" onclick="focusNodeById('${node.id}')">
+                    <span class="top-node-dot" style="background:${color}"></span>
+                    <span class="top-node-label">${(node.label || node.id).substring(0, 25)}</span>
+                    <span class="top-node-degree">${degree}</span>
+                </div>`;
+            }).join('');
+        }
+
+        function showNodeDetail(node) {
+            document.getElementById('node-detail-section').style.display = 'block';
+            document.getElementById('nd-label').textContent = node.label || node.id;
+            document.getElementById('nd-type').textContent = node.node_type;
+            document.getElementById('nd-namespace').textContent = node.namespace || 'global';
+            document.getElementById('nd-importance').textContent = (node.importance || 0.5).toFixed(2) + ' / 1.0';
+            document.getElementById('nd-accessed').textContent = (node.access_count || 0) + '×';
+            document.getElementById('nd-created').textContent = node.created_at ? new Date(node.created_at).toLocaleDateString() : '—';
+            document.getElementById('nd-epistemic').textContent = node.epistemic_label || 'unknown';
+            document.getElementById('nd-content').textContent = node.content ? node.content.substring(0, 300) + (node.content.length > 300 ? '...' : '') : 'No content';
+            document.getElementById('nd-summary').textContent = node.summary || 'No summary';
+        }
+
+        function showConnections(node) {
+            if (!graphData) return;
+            const connected = graphData.edges.filter(e => e.source === node.id || e.target === node.id);
+            document.getElementById('connections-section').style.display = 'block';
+            document.getElementById('conn-count').textContent = `(${connected.length})`;
+            
+            const list = document.getElementById('connections-list');
+            list.innerHTML = connected.slice(0, 20).map(e => {
+                const otherId = e.source === node.id ? e.target : e.source;
+                const other = graphData.nodes.find(n => n.id === otherId);
+                const direction = e.source === node.id ? '→' : '←';
+                return `<div class="conn-item" onclick="focusNodeById('${otherId}')">
+                    <span class="conn-dir">${direction}</span>
+                    <span class="conn-type">${e.edge_type}</span>
+                    <span class="conn-label">${other ? (other.label || otherId).substring(0, 20) : otherId.substring(0, 12)}</span>
+                </div>`;
+            }).join('');
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // GLOBAL FUNCTIONS
+        // ═══════════════════════════════════════════════════════════════════════
+        window.setViewMode = function(mode) {
             if (!brain) return;
-            // Update button states
             document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
             const btn = document.getElementById('mode-' + mode);
             if (btn) btn.classList.add('active');
             brain.setViewMode(mode);
-        }
+        };
 
-        // Search (global function)
-        function searchNodes(query) {
+        window.searchNodes = function(query) {
             if (!brain) return;
             brain.searchNodes(query);
+        };
+
+        window.toggleSessions = function(show) {
+            if (!brain) return;
+            brain.toggleSessions(show);
+        };
+
+        window.focusNodeById = function(id) {
+            if (!brain) return;
+            const node = brain.nodes.find(n => n.id === id);
+            if (node) {
+                brain.focusNode(node);
+                showNodeDetail(node);
+                showConnections(node);
+            }
+        };
+
+        window.focusRandomNode = function() {
+            if (!brain || !brain.nodes.length) return;
+            const node = brain.nodes[Math.floor(Math.random() * brain.nodes.length)];
+            brain.focusNode(node);
+            showNodeDetail(node);
+            showConnections(node);
+        };
+
+        window.focusHighestDegree = function() {
+            if (!brain || !graphData) return;
+            const degrees = {};
+            graphData.edges.forEach(e => {
+                degrees[e.source] = (degrees[e.source] || 0) + 1;
+                degrees[e.target] = (degrees[e.target] || 0) + 1;
+            });
+            let bestId = null, bestDeg = -1;
+            for (const [id, deg] of Object.entries(degrees)) {
+                if (deg > bestDeg) { bestDeg = deg; bestId = id; }
+            }
+            if (bestId) focusNodeById(bestId);
+        };
+
+        window.focusRecentNode = function() {
+            if (!brain || !brain.nodes.length) return;
+            const sorted = [...brain.nodes].sort((a, b) => {
+                const da = a.created_at ? new Date(a.created_at) : new Date(0);
+                const db = b.created_at ? new Date(b.created_at) : new Date(0);
+                return db - da;
+            });
+            if (sorted[0]) focusNodeById(sorted[0].id);
+        };
+
+        window.resetView = function() {
+            if (!brain) return;
+            brain.camera.position.set(0, 30, 60);
+            brain.camera.lookAt(0, 0, 0);
+            brain.controls.target.set(0, 0, 0);
+            brain.controls.update();
+            document.getElementById('node-detail-section').style.display = 'none';
+            document.getElementById('connections-section').style.display = 'none';
+        };
+
+        function startFpsCounter() {
+            let lastTime = performance.now();
+            let frames = 0;
+            function tick() {
+                frames++;
+                const now = performance.now();
+                if (now - lastTime >= 1000) {
+                    document.getElementById('status-fps').textContent = 'FPS: ' + frames;
+                    frames = 0;
+                    lastTime = now;
+                    
+                    if (brain) {
+                        const cam = brain.camera.position;
+                        document.getElementById('status-camera').textContent = `Cam: ${Math.round(cam.x)},${Math.round(cam.y)},${Math.round(cam.z)}`;
+                        document.getElementById('status-particles').textContent = 'Particles: ' + (brain._particleMax || 0);
+                    }
+                }
+                requestAnimationFrame(tick);
+            }
+            tick();
         }
+
+        // Add activity to feed
+        window.addActivity = function(type, message) {
+            const feed = document.getElementById('activity-feed');
+            const empty = feed.querySelector('.activity-empty');
+            if (empty) empty.remove();
+            
+            const colors = { create: '#7bc47b', update: '#3b82f6', link: '#f59e0b', recall: '#00d4aa', delete: '#ef4444' };
+            const item = document.createElement('div');
+            item.className = 'activity-item';
+            item.innerHTML = `<span class="activity-dot" style="background:${colors[type] || '#888'}"></span>
+                <span class="activity-text">${message}</span>
+                <span class="activity-time">${new Date().toLocaleTimeString()}</span>`;
+            feed.insertBefore(item, feed.firstChild);
+            while (feed.children.length > 20) feed.removeChild(feed.lastChild);
+        };
 
         main();
     </script>

@@ -14,6 +14,17 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+func sanitizeSearchQuery(q string) string {
+	// Remove characters that could cause tsquery injection or parsing errors
+	q = strings.ReplaceAll(q, "'", " ")
+	q = strings.ReplaceAll(q, "\\", " ")
+	q = strings.ReplaceAll(q, ";", " ")
+	q = strings.ReplaceAll(q, "--", " ")
+	q = strings.ReplaceAll(q, "/*", " ")
+	q = strings.ReplaceAll(q, "*/", " ")
+	return strings.TrimSpace(q)
+}
+
 type SearchRepo struct {
 	pool        *pgxpool.Pool
 	cache       *EmbeddingCache
@@ -33,6 +44,8 @@ func (r *SearchRepo) FullTextSearch(ctx context.Context, query string, workspace
 	if limit <= 0 || limit > 100 {
 		limit = 10
 	}
+
+	query = sanitizeSearchQuery(query)
 
 	// Expand query with synonyms
 	expandedQuery, terms := ExpandQuery(query)
@@ -82,7 +95,7 @@ func (r *SearchRepo) FullTextSearch(ctx context.Context, query string, workspace
 
 	// If FTS returned nothing, try trigram with original + expanded terms
 	if len(results) == 0 {
-		// Try each synonym term
+		// Try each synonym term individually with trigram
 		for _, term := range terms {
 			trigResults, err := r.trigramSearch(ctx, term, workspace, namespace, limit)
 			if err == nil && len(trigResults) > 0 {
@@ -92,6 +105,7 @@ func (r *SearchRepo) FullTextSearch(ctx context.Context, query string, workspace
 				}
 			}
 		}
+		// If still nothing, try original query with trigram
 		if len(results) == 0 {
 			return r.trigramSearch(ctx, query, workspace, namespace, limit)
 		}
@@ -289,14 +303,10 @@ func (r *SearchRepo) HybridSearch(ctx context.Context, query string, embedding [
 	for id, score := range scores {
 		sorted = append(sorted, scoredNode{id, score})
 	}
-	// Simple sort (descending)
-	for i := 0; i < len(sorted); i++ {
-		for j := i + 1; j < len(sorted); j++ {
-			if sorted[j].score > sorted[i].score {
-				sorted[i], sorted[j] = sorted[j], sorted[i]
-			}
-		}
-	}
+	// Sort by RRF score (descending) using sort.Slice for O(n log n)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].score > sorted[j].score
+	})
 
 	// Take top N
 	if len(sorted) > limit {

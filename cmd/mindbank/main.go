@@ -88,14 +88,18 @@ func main() {
 		slog.Warn("failed to get home dir for auto-capture", "error", err)
 	} else {
 		watchPath := homeDir + "/.hermes/sessions"
-		watcher := autocapture.NewWatcher(nodeRepo, watchPath)
-		if err := watcher.Start(context.Background()); err != nil {
-			slog.Warn("failed to start auto-capture watcher", "error", err)
-		} else {
-			slog.Info("auto-capture watcher started", "path", watchPath)
-			// Start background scanning for new files
-			go watcher.Watch(context.Background())
-		}
+		sessionRepo := repository.NewSessionRepo(pool)
+		watcher := autocapture.NewWatcher(sessionRepo, nodeRepo, watchPath)
+		// Run initial scan in background so HTTP server starts immediately
+		go func() {
+			if err := watcher.Start(context.Background()); err != nil {
+				slog.Warn("failed to start auto-capture watcher", "error", err)
+			} else {
+				slog.Info("auto-capture watcher started", "path", watchPath)
+				// Start continuous scanning for new files
+				go watcher.Watch(context.Background())
+			}
+		}()
 	}
 
 	// HTTP server

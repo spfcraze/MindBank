@@ -78,15 +78,9 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 	bh := NewBatchHandler(nodeRepo, edgeRepo)
 	uh := NewUpdateHandler()
 
-	// MCP health probe endpoint — lightweight, no auth, for self-healing discovery
-	r.Get("/mcp/health", func(w http.ResponseWriter, r *http.Request) {
-		respondJSON(w, 200, map[string]string{
-			"status":   "ok",
-			"service":  "mindbank-mcp",
-			"version":  getLocalVersion(),
-			"pid":      fmt.Sprintf("%d", os.Getpid()),
-		})
-	})
+	// MCP endpoints — mounted BEFORE static file catch-all
+	r.Get("/mcp/health", nh.MCPHealth)
+	r.Get("/mcp/tools", nh.MCPTools)
 
 	// Web UI — serve index.html at root, graph.html at /graph
 	r.Get("/graph-view", func(w http.ResponseWriter, r *http.Request) {
@@ -111,17 +105,26 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 	})
 	staticSub, _ := fs.Sub(staticFS, "static")
 	r.Handle("/*", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Cache static files for 1 hour
-		w.Header().Set("Cache-Control", "public, max-age=3600")
+		// Cache static files for 1 hour, but not HTML/JS during development
+		if strings.HasSuffix(r.URL.Path, ".html") || strings.HasSuffix(r.URL.Path, ".js") {
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		} else {
+			w.Header().Set("Cache-Control", "public, max-age=3600")
+		}
 		http.FileServer(http.FS(staticSub)).ServeHTTP(w, r)
 	}))
+
+	// CSRF token endpoint (lightweight, no auth required)
+	r.Get("/csrf-token", func(w http.ResponseWriter, r *http.Request) {
+		respondJSON(w, 200, map[string]string{"token": "mindbank-csrf-token"})
+	})
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Auth middleware (disabled if MB_API_KEY not set)
 		r.Use(APIKeyAuth)
 
 		// Rate limiting: 100 requests per minute per IP
-		r.Use(NewRateLimiter(100, time.Minute).Middleware)
+		r.Use(NewRateLimiter(300, time.Minute).Middleware)
 
 		// Version
 		r.Get("/version", func(w http.ResponseWriter, r *http.Request) {
@@ -225,6 +228,7 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 			r.Post("/{id}/compact", nh.Compact)
 			r.Post("/dqa/snapshot", nh.SaveDQASnapshot)
 			r.Get("/dqa/trend", nh.GetDQATrend)
+			r.Put("/epistemic", nh.UpdateEpistemicLabel)
 		})
 
 		// Edges
@@ -246,6 +250,11 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 		// Analyze
 		ah := NewAnalyzeHandler(pool)
 		r.Route("/analyze", func(r chi.Router) {
+			r.Post("/refine-connectivity", ah.RefineConnectivity)
+			r.Get("/evolution", ah.Evolution)
+			r.Post("/cluster-sessions", ah.ClusterSessions)
+		
+			// Existing routes
 			r.Get("/contradictions", ah.Contradictions)
 			r.Get("/gaps", ah.Gaps)
 			r.Get("/diff", ah.Diff)
@@ -257,6 +266,7 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 			r.Post("/link-orphans", ah.LinkOrphans)
 			r.Post("/merge-duplicates", ah.MergeDuplicates)
 			r.Post("/connect-components", ah.ConnectComponents)
+			r.Get("/embedding-recall", ah.EmbeddingRecall)
 		})
 
 		// Batch + Export/Import + Purge
@@ -278,10 +288,87 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 			r.Post("/setup", compSettingsHandler.Setup)
 		})
 
+		// Taxonomy (auto-classification)
+		th := NewTaxonomyHandler(nodeRepo)
+		r.Route("/taxonomy", func(r chi.Router) {
+			r.Post("/classify-all", th.ClassifyAll)
+			r.Get("/distribution", th.GetTopicDistribution)
+			r.Get("/suggest-edges", th.SuggestEdges)
+		})
+
+		// Quality metrics
+		qh := NewQualityHandler(pool)
+		r.Get("/quality/metrics", qh.GetMetrics)
+
+		// DQA analyze endpoint
+		dqaHandler := NewDQAHandler(pool)
+		r.Get("/dqa/analyze", dqaHandler.Analyze)
+
+		// Skills Registry
+		skillsHandler := NewSkillsHandler(pool)
+		r.Get("/skills", skillsHandler.ListSkills)
+		r.Post("/skills/{name}/run", skillsHandler.ExecuteSkill)
+
+		// Capture (RSS/web ingestion)
+		captureHandler := NewCaptureHandler(pool)
+		r.Route("/capture", func(r chi.Router) {
+			r.Post("/rss", captureHandler.CaptureRSS)
+		})
+
+		// Enrichment
+		enrichmentHandler := NewEnrichmentHandler(pool)
+		r.Route("/enrichment", func(r chi.Router) {
+			r.Post("/enrich-all", enrichmentHandler.EnrichAll)
+			r.Get("/stats", enrichmentHandler.GetEnrichmentStats)
+		})
+
+		// Digest (memory reports)
+		digestHandler := NewDigestHandler(pool)
+		r.Route("/digest", func(r chi.Router) {
+			r.Get("/", digestHandler.GetDigest)
+			r.Get("/trends", digestHandler.GetTopicTrends)
+		})
+
 		// Profile routes
 		profileRepo := &repository.ProfileRepo{Pool: pool}
 		ph := NewProfileHandler(profileRepo)
 		RegisterProfileRoutes(r, ph)
+
+		// Namespaces endpoint
+		r.Get("/namespaces", func(w http.ResponseWriter, r *http.Request) {
+			rows, err := pool.Query(r.Context(), `SELECT DISTINCT namespace FROM nodes WHERE valid_to IS NULL ORDER BY namespace`)
+			if err != nil {
+				respondError(w, 500, "failed to list namespaces")
+				return
+			}
+			defer rows.Close()
+			var namespaces []string
+			for rows.Next() {
+				var ns string
+				if err := rows.Scan(&ns); err == nil {
+					namespaces = append(namespaces, ns)
+				}
+			}
+			respondJSON(w, 200, map[string]any{"namespaces": namespaces, "count": len(namespaces)})
+		})
+
+		// Node types endpoint
+		r.Get("/node-types", func(w http.ResponseWriter, r *http.Request) {
+			rows, err := pool.Query(r.Context(), `SELECT DISTINCT node_type FROM nodes WHERE valid_to IS NULL ORDER BY node_type`)
+			if err != nil {
+				respondError(w, 500, "failed to list node types")
+				return
+			}
+			defer rows.Close()
+			var types []string
+			for rows.Next() {
+				var t string
+				if err := rows.Scan(&t); err == nil {
+					types = append(types, t)
+				}
+			}
+			respondJSON(w, 200, map[string]any{"types": types, "count": len(types)})
+		})
 
 		// Forgetting routes
 		forgetSvc := forgetting.NewService(pool)
