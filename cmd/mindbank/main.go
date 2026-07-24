@@ -37,19 +37,25 @@ func main() {
 
 	slog.Info("mindbank starting", "port", cfg.Port)
 
+	// Root context cancelled on SIGINT/SIGTERM: background workers (embed
+	// worker, autocapture watcher) hang off it so shutdown stops them
+	// between batches instead of killing them mid-write.
+	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	// Security warning: auth disabled by default
 	if os.Getenv("MB_API_KEY") == "" {
 		slog.Warn("API authentication is disabled — set MB_API_KEY to enable auth in production")
 	}
 
-	// Connect to database
-	pool, err := db.Connect(cfg.DBDSN)
+	// Connect to database with explicit pool configuration
+	pool, err := db.ConnectWithConfig(cfg.DBDSN, 20, 5)
 	if err != nil {
 		slog.Error("failed to connect to database", "error", err)
 		os.Exit(1)
 	}
 	defer pool.Close()
-	slog.Info("database connected")
+	slog.Info("database connected", "max_conns", 20, "min_conns", 5)
 
 	// Run migrations
 	if err := db.Migrate(context.Background(), pool); err != nil {
@@ -80,7 +86,7 @@ func main() {
 	}()
 
 	// Setup router
-	router := handler.NewRouter(pool, cfg)
+	router := handler.NewRouter(rootCtx, pool, cfg)
 
 	// Start namespace-aware auto-capture watcher
 	homeDir, err := os.UserHomeDir()
@@ -92,18 +98,18 @@ func main() {
 		watcher := autocapture.NewWatcher(sessionRepo, nodeRepo, watchPath)
 		// Run initial scan in background so HTTP server starts immediately
 		go func() {
-			if err := watcher.Start(context.Background()); err != nil {
+			if err := watcher.Start(rootCtx); err != nil {
 				slog.Warn("failed to start auto-capture watcher", "error", err)
 			} else {
 				slog.Info("auto-capture watcher started", "path", watchPath)
 				// Start continuous scanning for new files
-				go watcher.Watch(context.Background())
+				go watcher.Watch(rootCtx)
 			}
 		}()
 	}
 
 	// HTTP server
-	addr := fmt.Sprintf(":%d", cfg.Port)
+	addr := fmt.Sprintf("127.0.0.1:%d", cfg.Port)
 	srv := &http.Server{
 		Addr:         addr,
 		Handler:      router,
@@ -113,9 +119,6 @@ func main() {
 	}
 
 	// Graceful shutdown
-	done := make(chan os.Signal, 1)
-	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
-
 	go func() {
 		slog.Info("server listening", "addr", addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -124,7 +127,7 @@ func main() {
 		}
 	}()
 
-	<-done
+	<-rootCtx.Done()
 	slog.Info("shutting down...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

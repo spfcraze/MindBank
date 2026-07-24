@@ -12,10 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"mindbank/internal/autocapture"
 	"mindbank/internal/embedder"
 	"mindbank/internal/models"
 	"mindbank/internal/repository"
+	"mindbank/internal/utils"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -31,11 +31,12 @@ type Server struct {
 	depRepo     *repository.DependenceRepo
 	embedder    *embedder.Client
 	writeMu     sync.Mutex // protects stdout writes
+	embedCache  *EmbeddingCache // LRU cache for query embeddings
 }
 
 // NewServer creates an MCP server.
 func NewServer(pool *pgxpool.Pool, emb *embedder.Client) *Server {
-	return &Server{
+	s := &Server{
 		pool:        pool,
 		nodeRepo:    repository.NewNodeRepo(pool),
 		edgeRepo:    repository.NewEdgeRepo(pool),
@@ -44,7 +45,14 @@ func NewServer(pool *pgxpool.Pool, emb *embedder.Client) *Server {
 		sessionRepo: repository.NewSessionRepo(pool),
 		depRepo:     repository.NewDependenceRepo(pool),
 		embedder:    emb,
+		embedCache:  NewEmbeddingCache(1000),
 	}
+	// Mirror the HTTP router's wiring: without these, MCP-side writes never
+	// invalidate this process's own result/snapshot caches, so an agent that
+	// saves a memory and re-searches within the cache TTL doesn't see it.
+	s.nodeRepo.SetSearchRepo(s.searchRepo)
+	s.nodeRepo.SetSnapshotRepo(s.snapRepo)
+	return s
 }
 
 // MCP protocol types
@@ -71,8 +79,11 @@ type MCPError struct {
 func (s *Server) Run(ctx context.Context) {
 	slog.Info("mcp server started (stdio)")
 
-	// Create a fresh stdin reader for each connection attempt
-	// This handles cases where the client reconnects
+	// One reader for the lifetime of the process: bufio buffers past the
+	// first newline, so recreating the reader per message silently dropped
+	// any pipelined requests already sitting in its buffer (e.g.
+	// initialize + tools/list sent in a single client write).
+	reader := bufio.NewReader(os.Stdin)
 	for {
 		select {
 		case <-ctx.Done():
@@ -80,43 +91,17 @@ func (s *Server) Run(ctx context.Context) {
 		default:
 		}
 
-		// Check if stdin is still readable
-		stat, err := os.Stdin.Stat()
-		if err != nil {
-			slog.Error("stdin stat error", "error", err)
-			// Wait a bit and retry — client may reconnect
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(100 * time.Millisecond):
-				continue
-			}
-		}
-
-		// If stdin is a pipe and has no data, wait for input
-		if stat.Mode()&os.ModeNamedPipe != 0 && stat.Size() == 0 {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(50 * time.Millisecond):
-				continue
-			}
-		}
-
-		reader := bufio.NewReader(os.Stdin)
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
-				// EOF might mean client disconnected — wait and retry
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(100 * time.Millisecond):
-					continue
-				}
+				// Stdio transport: EOF means the spawning client closed our
+				// stdin and is gone. Exit instead of busy-polling forever —
+				// a "reconnecting" client spawns a fresh process. (Service
+				// deployments use the HTTP transport, not this path.)
+				slog.Info("stdin closed, mcp stdio server exiting")
+				return
 			}
 			slog.Error("stdin read error", "error", err)
-			// On error, wait briefly then retry — client may reconnect
 			select {
 			case <-ctx.Done():
 				return
@@ -136,7 +121,11 @@ func (s *Server) Run(ctx context.Context) {
 			continue
 		}
 
-		resp := s.handleRequest(ctx, &req)
+		// Bound each request so one hung DB/Ollama call can't wedge the
+		// loop and stall every subsequent recall.
+		reqCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		resp := s.handleRequest(reqCtx, &req)
+		cancel()
 		if resp != nil {
 			s.writeResponse(resp)
 		}
@@ -249,6 +238,22 @@ func (s *Server) handleToolCall(ctx context.Context, req *MCPRequest) *MCPRespon
 		result, err = s.toolCreateEdge(ctx, params.Arguments)
 	case "dependence":
 		result, err = s.toolDependence(ctx, params.Arguments)
+	case "refine_connectivity":
+		result, err = s.toolRefineConnectivity(ctx, params.Arguments)
+	case "evolution":
+		result, err = s.toolEvolution(ctx, params.Arguments)
+	case "cluster_sessions":
+		result, err = s.toolClusterSessions(ctx, params.Arguments)
+	case "update_node":
+		result, err = s.toolUpdateNode(ctx, params.Arguments)
+	case "mine_sessions":
+		result, err = s.toolMineSessions(ctx, params.Arguments)
+	case "dream_status":
+		result, err = s.toolDreamStatus(ctx, params.Arguments)
+	case "list_namespaces":
+		result, err = s.toolListNamespaces(ctx, params.Arguments)
+	case "conflicts":
+		result, err = s.toolConflicts(ctx, params.Arguments)
 	default:
 		return s.error(req, -32601, fmt.Sprintf("unknown tool: %s", params.Name))
 	}
@@ -268,18 +273,19 @@ func (s *Server) handleToolCall(ctx context.Context, req *MCPRequest) *MCPRespon
 
 func (s *Server) toolCreateNode(ctx context.Context, args json.RawMessage) (any, error) {
 	var req struct {
-		Label    string `json:"label"`
-		Type     string `json:"type"`
-		Content  string `json:"content,omitempty"`
-		Summary  string `json:"summary,omitempty"`
-		Workspace string `json:"workspace,omitempty"`
-		Namespace string `json:"namespace,omitempty"`
+		Label          string `json:"label"`
+		Type           string `json:"type"`
+		Content        string `json:"content,omitempty"`
+		Summary        string `json:"summary,omitempty"`
+		Workspace      string `json:"workspace,omitempty"`
+		Namespace      string `json:"namespace,omitempty"`
+		EpistemicLabel string `json:"epistemic_label,omitempty"`
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
-	if req.Label == "" {
-		return nil, fmt.Errorf("label is required")
+	if err := validateLabel(req.Label); err != nil {
+		return nil, err
 	}
 	if req.Type == "" {
 		return nil, fmt.Errorf("type is required")
@@ -288,18 +294,22 @@ func (s *Server) toolCreateNode(ctx context.Context, args json.RawMessage) (any,
 	if !nodeType.IsValid() {
 		return nil, fmt.Errorf("invalid node_type: %s", req.Type)
 	}
-	if req.Namespace == "" {
-		if pwd := os.Getenv("PWD"); pwd != "" {
-			req.Namespace = autocapture.DeriveNamespaceFromPath(pwd)
-		}
+	// Do NOT derive the namespace from the server's PWD: this MCP runs as a
+	// long-lived HTTP service (WorkingDirectory=/home/rat/mindbank), so PWD is
+	// fixed and would mis-tag every memory as "mindbank" regardless of the
+	// agent's actual project. Callers that want project isolation must pass an
+	// explicit namespace; otherwise it defaults to "global" in NodeRepo.Create.
+	if req.Workspace == "" {
+		req.Workspace = "hermes"
 	}
 	node, err := s.nodeRepo.Create(ctx, models.NodeCreate{
-		WorkspaceName: req.Workspace,
+		WorkspaceName:  req.Workspace,
 		Namespace:     req.Namespace,
 		Label:         req.Label,
 		NodeType:      nodeType,
 		Content:       req.Content,
 		Summary:       req.Summary,
+		EpistemicLabel: req.EpistemicLabel,
 	})
 	if err != nil {
 		return nil, err
@@ -318,15 +328,26 @@ func (s *Server) toolSearch(ctx context.Context, args json.RawMessage) (any, err
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
-	if req.Namespace == "" {
-		if pwd := os.Getenv("PWD"); pwd != "" {
-			req.Namespace = autocapture.DeriveNamespaceFromPath(pwd)
-		}
+	if err := validateLimit(req.Limit); err != nil {
+		return nil, err
+	}
+	// Do NOT auto-derive namespace from PWD — search ALL namespaces by default.
+	// Only filter if the caller explicitly provides a namespace.
+	if req.Workspace == "" {
+		req.Workspace = "hermes"
 	}
 
-	embedding, err := s.embedder.Embed(ctx, req.Query)
-	if err != nil {
-		return nil, fmt.Errorf("embedding failed: %w (try a different query or retry)", err)
+	// Try cache first
+	var embedding []float32
+	var err error
+	if cached, ok := s.embedCache.Get(req.Query); ok {
+		embedding = cached
+	} else {
+		embedding, err = s.embedder.Embed(ctx, req.Query)
+		if err != nil {
+			return nil, fmt.Errorf("embedding failed: %w (try a different query or retry)", err)
+		}
+		s.embedCache.Set(req.Query, embedding)
 	}
 
 	results, err := s.searchRepo.HybridSearch(ctx, req.Query, embedding, req.Workspace, req.Namespace, req.Limit, s.edgeRepo)
@@ -344,7 +365,7 @@ func (s *Server) toolSearch(ctx context.Context, args json.RawMessage) (any, err
 				existing[r.NodeID] = true
 			}
 			for _, p := range precursors {
-				if !existing[p.NodeID] {
+				if !existing[p.NodeID] && !isShellNodeType(p.NodeType) {
 					results = append(results, p)
 					existing[p.NodeID] = true
 				}
@@ -356,15 +377,67 @@ func (s *Server) toolSearch(ctx context.Context, args json.RawMessage) (any, err
 		return "No results found.", nil
 	}
 
+	s.reinforceRecall(ctx, results)
+
+	// Token-lean output: dedupe by node, drop internal scores, one tight
+	// snippet per memory. This text goes straight into the agent's context.
 	out := ""
+	seen := make(map[string]bool)
 	for _, r := range results {
-		content := r.Content
-		if len(content) > 150 {
-			content = content[:150] + "..."
+		key := strings.ToLower(strings.TrimSpace(r.Label))
+		if seen[key] {
+			continue // collapse duplicate-label memories (regex-era dupes)
 		}
-		out += fmt.Sprintf("- [%s] %s: %s (score: %.3f)\n", r.NodeType, r.Label, content, r.RRFScore)
+		seen[key] = true
+		out += "- " + memoryLine(r.NodeType, r.Label, r.Content, 130) + "\n"
 	}
 	return out, nil
+}
+
+// snippet returns a compact, single-line preview of a memory's content: the
+// first sentence, capped at maxLen, rune-safe. Keeps recall output cheap.
+func snippet(s string, maxLen int) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	s = strings.Join(strings.Fields(s), " ") // collapse whitespace
+	if i := strings.IndexAny(s, ".!?"); i > 20 && i < maxLen {
+		return s[:i+1]
+	}
+	if len(s) > maxLen {
+		return utils.TruncateUTF8(s, maxLen) + "…"
+	}
+	return s
+}
+
+// memoryLine formats one memory as a compact recall line, omitting the content
+// snippet when it just repeats the label (common in old regex-mined nodes where
+// label == content) so we never pay tokens for the same text twice.
+func memoryLine(nodeType, label, content string, maxLen int) string {
+	label = strings.TrimSpace(label)
+	snip := snippet(content, maxLen)
+	base := fmt.Sprintf("[%s] %s", nodeType, label)
+	if snip == "" {
+		return base
+	}
+	ll, ss := strings.ToLower(label), strings.ToLower(snip)
+	if strings.HasPrefix(ss, ll) || strings.HasPrefix(ll, ss) {
+		return base // snippet is redundant with the label
+	}
+	return base + " — " + snip
+}
+
+// reinforceRecall strengthens memories the agent just recalled (fire-and-forget
+// so it never slows the response). Recalled memories rise; unused ones decay.
+func (s *Server) reinforceRecall(ctx context.Context, results []models.SearchResult) {
+	if s.nodeRepo == nil || len(results) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(results))
+	for _, r := range results {
+		ids = append(ids, r.NodeID)
+	}
+	go func() {
+		_ = s.nodeRepo.ReinforceRecall(context.WithoutCancel(ctx), ids)
+	}()
 }
 
 func (s *Server) toolAsk(ctx context.Context, args json.RawMessage) (any, error) {
@@ -377,15 +450,22 @@ func (s *Server) toolAsk(ctx context.Context, args json.RawMessage) (any, error)
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
-	if req.Namespace == "" {
-		if pwd := os.Getenv("PWD"); pwd != "" {
-			req.Namespace = autocapture.DeriveNamespaceFromPath(pwd)
-		}
+	// Do NOT auto-derive namespace from PWD — search ALL namespaces by default.
+	if req.Workspace == "" {
+		req.Workspace = "hermes"
 	}
 
-	embedding, err := s.embedder.Embed(ctx, req.Query)
-	if err != nil {
-		return nil, fmt.Errorf("embedding failed: %w (try a different query or retry)", err)
+	// Try cache first
+	var embedding []float32
+	var err error
+	if cached, ok := s.embedCache.Get(req.Query); ok {
+		embedding = cached
+	} else {
+		embedding, err = s.embedder.Embed(ctx, req.Query)
+		if err != nil {
+			return nil, fmt.Errorf("embedding failed: %w (try a different query or retry)", err)
+		}
+		s.embedCache.Set(req.Query, embedding)
 	}
 
 	results, err := s.searchRepo.HybridSearch(ctx, req.Query, embedding, req.Workspace, req.Namespace, 5, s.edgeRepo)
@@ -403,7 +483,7 @@ func (s *Server) toolAsk(ctx context.Context, args json.RawMessage) (any, error)
 				existing[r.NodeID] = true
 			}
 			for _, p := range precursors {
-				if !existing[p.NodeID] {
+				if !existing[p.NodeID] && !isShellNodeType(p.NodeType) {
 					results = append(results, p)
 					existing[p.NodeID] = true
 				}
@@ -415,9 +495,20 @@ func (s *Server) toolAsk(ctx context.Context, args json.RawMessage) (any, error)
 		return "No relevant information found.", nil
 	}
 
+	s.reinforceRecall(ctx, results)
+
+	// Token-lean: dedupe by node and cap each memory's snippet. Previously
+	// this dumped FULL untruncated content (a single node could be 10KB),
+	// which burned the agent's context on every ask.
 	out := fmt.Sprintf("Context for: %s\n\n", req.Query)
+	seen := make(map[string]bool)
 	for _, r := range results {
-		out += fmt.Sprintf("[%s] %s: %s\n", r.NodeType, r.Label, r.Content)
+		key := strings.ToLower(strings.TrimSpace(r.Label))
+		if seen[key] {
+			continue // collapse duplicate-label memories (regex-era dupes)
+		}
+		seen[key] = true
+		out += memoryLine(r.NodeType, r.Label, r.Content, 240) + "\n"
 	}
 	return out, nil
 }
@@ -447,7 +538,8 @@ func (s *Server) toolSnapshot(ctx context.Context, args json.RawMessage) (any, e
 		}
 	}
 
-	return fmt.Sprintf("%s\n\n(Tokens: %d)", content, tokenCount), nil
+	_ = tokenCount
+	return content, nil
 }
 
 func (s *Server) toolNeighbors(ctx context.Context, args json.RawMessage) (any, error) {
@@ -474,36 +566,62 @@ func (s *Server) toolNeighbors(ctx context.Context, args json.RawMessage) (any, 
 		return "No neighbors found.", nil
 	}
 
+	// Drop session/event shells: they're transcript wrappers ("session_…json"),
+	// not memories, and only leak into recall through their `produced` edges.
+	// The search/snapshot paths already exclude them; do the same here so the
+	// neighbors tool returns real connected knowledge, not filenames.
 	out := ""
 	for _, n := range nodes {
+		if isShellNodeType(string(n.NodeType)) {
+			continue
+		}
 		out += fmt.Sprintf("- [%s] %s (%s, depth %d)\n", n.NodeType, n.Label, n.EdgeType, n.Depth)
+	}
+	if out == "" {
+		return "No neighbors found.", nil
 	}
 	return out, nil
 }
 
+// isShellNodeType reports whether a node is a transcript container (session or
+// event) rather than a distilled memory. Recall paths exclude these.
+func isShellNodeType(nodeType string) bool {
+	return nodeType == "session" || nodeType == "event"
+}
+
 func (s *Server) toolCreateEdge(ctx context.Context, args json.RawMessage) (any, error) {
 	var req struct {
-		SourceID  string  `json:"source_id"`
-		TargetID  string  `json:"target_id"`
-		EdgeType  string  `json:"edge_type"`
-		Weight    float32 `json:"weight,omitempty"`
-		Workspace string  `json:"workspace,omitempty"`
+		SourceID  string   `json:"source_id"`
+		TargetID  string   `json:"target_id"`
+		EdgeType  string   `json:"edge_type"`
+		Weight    *float32 `json:"weight,omitempty"`
+		Workspace string   `json:"workspace,omitempty"`
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
+	if err := validateUUID(req.SourceID); err != nil {
+		return nil, fmt.Errorf("source_id: %w", err)
+	}
+	if err := validateUUID(req.TargetID); err != nil {
+		return nil, fmt.Errorf("target_id: %w", err)
+	}
 
-	w := req.Weight
 	edgeType := models.EdgeType(req.EdgeType)
 	if !edgeType.IsValid() {
 		return nil, fmt.Errorf("invalid edge_type: %s", req.EdgeType)
 	}
+	// Pass the weight pointer straight through: nil (weight omitted) lets
+	// EdgeRepo.Create apply its 1.0 default. Previously a plain float32 was
+	// always sent as a non-nil pointer, so an omitted weight became 0.0 — and
+	// a 0-weight edge scores 0 in graph expansion (edge_weight*0.5), making
+	// MCP-created edges invisible to recall.
 	edge, err := s.edgeRepo.Create(ctx, models.EdgeCreate{
 		WorkspaceName: req.Workspace,
 		SourceID:      req.SourceID,
 		TargetID:      req.TargetID,
 		EdgeType:      edgeType,
-		Weight:        &w,
+		Weight:        req.Weight,
 	})
 	if err != nil {
 		return nil, err
@@ -579,12 +697,13 @@ func (s *Server) tools() []map[string]any {
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"label":     map[string]string{"type": "string", "description": "Node label/name"},
-					"type":      map[string]string{"type": "string", "description": "Node type: person, agent, project, topic, decision, fact, event, preference, advice, problem, concept, question, session"},
-					"content":   map[string]string{"type": "string", "description": "Full content"},
-					"summary":   map[string]string{"type": "string", "description": "Short summary"},
-					"workspace": map[string]string{"type": "string", "description": "Workspace name (default: hermes)"},
-					"namespace": map[string]string{"type": "string", "description": "Project namespace (default: global)"},
+			"label":     map[string]string{"type": "string", "description": "Node label/name"},
+				"type":      map[string]string{"type": "string", "description": "Node type: person, agent, project, topic, decision, fact, event, preference, advice, problem, concept, question, session"},
+				"content":   map[string]string{"type": "string", "description": "Full content"},
+				"summary":   map[string]string{"type": "string", "description": "Short summary"},
+				"workspace": map[string]string{"type": "string", "description": "Workspace name (default: hermes)"},
+				"namespace": map[string]string{"type": "string", "description": "Project namespace (default: global)"},
+				"epistemic_label": map[string]string{"type": "string", "description": "Epistemic classification: observed, inferred, assumed, recommended, unknown (default: unknown)"},
 				},
 				"required": []string{"label", "type"},
 			},
@@ -667,6 +786,93 @@ func (s *Server) tools() []map[string]any {
 					"workspace": map[string]string{"type": "string", "description": "Workspace name"},
 				},
 				"required": []string{"source_id", "target_id", "edge_type"},
+			},
+		},
+		{
+			"name":        "refine_connectivity",
+			"description": "Feedback-driven topological editing: expand missing links, prune noise, or review content granularity. Creates or deletes edges based on semantic similarity.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"node_id":  map[string]string{"type": "string", "description": "Node ID to refine"},
+					"feedback": map[string]string{"type": "string", "description": "Feedback type: missing_context (find similar unconnected nodes), too_much_noise (prune weak edges), granularity_mismatch (review content length)"},
+				},
+				"required": []string{"node_id", "feedback"},
+			},
+		},
+		{
+			"name":        "evolution",
+			"description": "Get the evolution maturity score for a node. Returns PEMS-inspired metrics: evolution_score, maturity_level (stable/evolving/volatile), version_count, and convergence_delta.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"node_id": map[string]string{"type": "string", "description": "Node ID to analyze"},
+				},
+				"required": []string{"node_id"},
+			},
+		},
+		{
+			"name":        "cluster_sessions",
+			"description": "Group session nodes by embedding similarity into episodic clusters. Returns clusters with member IDs, labels, and centroid previews.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"namespace": map[string]string{"type": "string", "description": "Namespace to cluster (default: global)"},
+					"threshold": map[string]string{"type": "number", "description": "Cosine similarity threshold 0-1 (default: 0.85)"},
+				},
+			},
+		},
+		{
+			"name":        "update_node",
+			"description": "Update an existing node's fields (label, content, summary, importance, epistemic_label, status). Use this to classify nodes or correct information.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"node_id":          map[string]string{"type": "string", "description": "Node ID to update"},
+					"label":            map[string]string{"type": "string", "description": "New label (optional)"},
+					"content":          map[string]string{"type": "string", "description": "New content (optional)"},
+					"summary":          map[string]string{"type": "string", "description": "New summary (optional)"},
+					"importance":       map[string]string{"type": "number", "description": "Importance 0.0-1.0 (optional)"},
+					"epistemic_label":  map[string]string{"type": "string", "description": "Epistemic classification: observed, inferred, assumed, recommended, unknown (optional)"},
+					"status":           map[string]string{"type": "string", "description": "Status: open, supported, refuted, inconclusive, blocked (optional)"},
+				},
+				"required": []string{"node_id"},
+			},
+		},
+		{
+			"name":        "list_namespaces",
+			"description": "List all namespaces in MindBank with their node counts. Use this to discover what projects/knowledge areas are available.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{},
+			},
+		},
+		{
+			"name":        "dream_status",
+			"description": "Check the status of the Dream Engine (Neural Consolidation). Shows the latest cycle metrics: edges strengthened, clusters found, etc.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{},
+			},
+		},
+		{
+			"name":        "mine_sessions",
+			"description": "Check session mining status. Shows how many session nodes exist in MindBank.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"workspace": map[string]string{"type": "string", "description": "Workspace name (default: hermes)"},
+				},
+			},
+		},
+		{
+			"name":        "conflicts",
+			"description": "List or detect knowledge conflicts. Conflicts are nodes with high semantic similarity but contradictory attributes.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"action": map[string]string{"type": "string", "description": "Action: 'list' (show open conflicts) or 'detect' (trigger detection). Default: list"},
+				},
 			},
 		},
 	}

@@ -35,6 +35,60 @@ func (h *EdgeHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate source and target nodes exist and belong to the same workspace/namespace
+	source, err := h.nodeRepo.Get(r.Context(), req.SourceID)
+	if err != nil {
+		respondError(w, 404, "source node not found")
+		return
+	}
+	target, err := h.nodeRepo.Get(r.Context(), req.TargetID)
+	if err != nil {
+		respondError(w, 404, "target node not found")
+		return
+	}
+	if source.Namespace != target.Namespace {
+		respondError(w, 400, "source and target nodes must be in the same namespace")
+		return
+	}
+	if source.WorkspaceName != target.WorkspaceName {
+		respondError(w, 400, "source and target nodes must be in the same workspace")
+		return
+	}
+	// Ensure edge workspace matches node workspace
+	if req.WorkspaceName == "" {
+		req.WorkspaceName = source.WorkspaceName
+	} else if req.WorkspaceName != source.WorkspaceName {
+		respondError(w, 400, "edge workspace must match node workspace")
+		return
+	}
+
+	// Prevent self-referencing edges
+	if req.SourceID == req.TargetID {
+		respondError(w, 400, "self-referencing edges are not allowed")
+		return
+	}
+
+	// Check edge count limit per node (BUG-P048)
+	const maxEdgesPerNode = 1000
+	var edgeCount int
+	edgeCountErr := h.nodeRepo.Pool.QueryRow(r.Context(), `
+		SELECT COUNT(*) FROM edges 
+		WHERE source_id = $1 OR target_id = $1
+	`, req.SourceID).Scan(&edgeCount)
+	if edgeCountErr == nil && edgeCount >= maxEdgesPerNode {
+		respondError(w, 429, "edge count limit reached for source node (max 1000)")
+		return
+	}
+	var targetEdgeCount int
+	edgeCountErr = h.nodeRepo.Pool.QueryRow(r.Context(), `
+		SELECT COUNT(*) FROM edges 
+		WHERE source_id = $1 OR target_id = $1
+	`, req.TargetID).Scan(&targetEdgeCount)
+	if edgeCountErr == nil && targetEdgeCount >= maxEdgesPerNode {
+		respondError(w, 429, "edge count limit reached for target node (max 1000)")
+		return
+	}
+
 	edge, err := h.repo.Create(r.Context(), req)
 	if err != nil {
 		slog.Error("create edge", "error", err)
@@ -60,11 +114,13 @@ func (h *EdgeHandler) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *EdgeHandler) List(w http.ResponseWriter, r *http.Request) {
-	// List all edges (with optional type filter and limits)
+	// List edges with optional namespace/workspace/type filters and limits
+	ns := r.URL.Query().Get("namespace")
+	ws := r.URL.Query().Get("workspace")
 	edgeType := models.EdgeType(r.URL.Query().Get("type"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 {
-		limit = 500
+	if limit <= 0 || limit > 100 {
+		limit = 100
 	}
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 
@@ -83,6 +139,21 @@ func (h *EdgeHandler) List(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		respondJSON(w, 200, map[string]interface{}{"count": count})
+		return
+	}
+
+	// Filter by namespace/workspace if provided
+	if ns != "" || ws != "" {
+		edges, err := h.repo.GetByNamespaceWorkspace(r.Context(), ns, ws, edgeType, limit, offset)
+		if err != nil {
+			slog.Error("list edges filtered", "error", err)
+			respondError(w, 500, "failed to list edges")
+			return
+		}
+		if edges == nil {
+			edges = []models.Edge{}
+		}
+		respondJSON(w, 200, edges)
 		return
 	}
 
@@ -119,6 +190,10 @@ func (h *EdgeHandler) GetNeighbors(w http.ResponseWriter, r *http.Request) {
 
 	if depthStr != "" {
 		depth, _ := strconv.Atoi(depthStr)
+		if depth <= 0 || depth > 6 {
+			respondError(w, 400, "depth must be between 1 and 6")
+			return
+		}
 		nodes, err := h.repo.GetNeighborsDeep(r.Context(), nodeID, depth)
 		if err != nil {
 			slog.Error("get neighbors deep", "error", err)

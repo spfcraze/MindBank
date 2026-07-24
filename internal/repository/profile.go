@@ -13,7 +13,7 @@ type ProfileRepo struct {
 	Pool *pgxpool.Pool
 }
 
-// Create inserts a new profile.
+// Create inserts a new profile (deduplicates by category+fact).
 func (r *ProfileRepo) Create(ctx context.Context, req models.ProfileCreate) (*models.Profile, error) {
 	meta := req.Metadata
 	if meta == nil {
@@ -24,8 +24,32 @@ func (r *ProfileRepo) Create(ctx context.Context, req models.ProfileCreate) (*mo
 		conf = req.Confidence
 	}
 
+	// Check for existing identical profile
+	var existingID string
+	err := r.Pool.QueryRow(ctx,
+		"SELECT id FROM profiles WHERE category = $1 AND fact = $2 AND valid_to IS NULL",
+		req.Category, req.Fact).Scan(&existingID)
+	if err == nil {
+		// Duplicate exists — update confidence instead of creating new
+		_, err = r.Pool.Exec(ctx,
+			"UPDATE profiles SET confidence = GREATEST(confidence, $1), updated_at = now() WHERE id = $2",
+			conf, existingID)
+		if err != nil {
+			return nil, fmt.Errorf("update existing profile: %w", err)
+		}
+		// Return updated profile
+		p := &models.Profile{}
+		err = r.Pool.QueryRow(ctx, "SELECT id, category, fact, confidence, source_node_id, valid_from, valid_to, metadata, created_at, updated_at FROM profiles WHERE id = $1", existingID).Scan(
+			&p.ID, &p.Category, &p.Fact, &p.Confidence, &p.SourceNodeID,
+			&p.ValidFrom, &p.ValidTo, &p.Metadata, &p.CreatedAt, &p.UpdatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("fetch updated profile: %w", err)
+		}
+		return p, nil
+	}
+
 	p := &models.Profile{}
-	err := r.Pool.QueryRow(ctx, `
+	err = r.Pool.QueryRow(ctx, `
 		INSERT INTO profiles (category, fact, confidence, source_node_id, metadata)
 		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id, category, fact, confidence, source_node_id, valid_from, valid_to,

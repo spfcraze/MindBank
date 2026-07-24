@@ -28,7 +28,7 @@ func (h *AnalyzeHandler) LinkOrphans(w http.ResponseWriter, r *http.Request) {
 	args = append(args, limit)
 
 	orphanQuery := `
-		SELECT n.id, n.label, n.namespace, n.node_type::text, COALESCE(n.content, '') AS content
+		SELECT n.id, n.label, n.namespace, n.workspace_name, n.node_type::text, COALESCE(n.content, '') AS content
 		FROM nodes n
 		WHERE n.valid_to IS NULL` + nsFilter + `
 		AND NOT EXISTS (
@@ -58,8 +58,8 @@ func (h *AnalyzeHandler) LinkOrphans(w http.ResponseWriter, r *http.Request) {
 	linkedCount := 0
 
 	for rows.Next() {
-		var id, label, namespace, nodeType, content string
-		if err := rows.Scan(&id, &label, &namespace, &nodeType, &content); err != nil {
+		var id, label, namespace, workspace, nodeType, content string
+		if err := rows.Scan(&id, &label, &namespace, &workspace, &nodeType, &content); err != nil {
 			continue
 		}
 
@@ -76,23 +76,25 @@ func (h *AnalyzeHandler) LinkOrphans(w http.ResponseWriter, r *http.Request) {
 			searchQuery += " " + content[:50]
 		}
 
+		// Match within the orphan's workspace only: linking across tenants
+		// leaks one workspace's memories into another's recall traversals.
 		searchRows, searchErr := h.pool.Query(r.Context(), `
 			SELECT id, label, node_type::text, similarity(label, $1) AS sim
-			FROM nodes WHERE valid_to IS NULL AND id != $2
+			FROM nodes WHERE valid_to IS NULL AND id != $2 AND workspace_name = $3
 			ORDER BY similarity(label, $1) DESC LIMIT 1
-		`, searchQuery, id)
+		`, searchQuery, id, workspace)
 
 		if searchErr == nil && searchRows.Next() {
 			var matchID, matchLabel, matchType string
 			var sim float32
-			if err := searchRows.Scan(&matchID, &matchLabel, &matchType, &sim); err == nil && sim > 0.1 {
+			if err := searchRows.Scan(&matchID, &matchLabel, &matchType, &sim); err == nil && sim > 0.3 {
 				ol.LinkedTo = matchID
 				ol.LinkedToLabel = matchLabel
 				if !dryRun {
 					_, insertErr := h.pool.Exec(r.Context(), `
 						INSERT INTO edges (workspace_name, source_id, target_id, edge_type, weight)
-						VALUES ('hermes', $1, $2, 'relates_to', 0.5) ON CONFLICT DO NOTHING
-					`, id, matchID)
+						VALUES ($3, $1, $2, 'relates_to', 0.5) ON CONFLICT DO NOTHING
+					`, id, matchID, workspace)
 					if insertErr == nil {
 						ol.Status = "linked"
 						linkedCount++
@@ -140,11 +142,15 @@ func (h *AnalyzeHandler) MergeDuplicates(w http.ResponseWriter, r *http.Request)
 		args = append(args, ns)
 	}
 
+	// Duplicates must match on workspace and content, not just label:
+	// label-only grouping merged distinct memories (and across tenants),
+	// destroying the newer content.
 	dupQuery := `
-		SELECT a.label, a.node_type::text, a.namespace, COUNT(*) AS dup_count
+		SELECT a.workspace_name, a.label, a.node_type::text, a.namespace,
+		       md5(a.content) AS chash, md5(a.summary) AS shash, COUNT(*) AS dup_count
 		FROM nodes a
 		WHERE a.valid_to IS NULL` + nsFilter + `
-		GROUP BY a.namespace, a.label, a.node_type
+		GROUP BY a.workspace_name, a.namespace, a.label, a.node_type, md5(a.content), md5(a.summary)
 		HAVING COUNT(*) > 1
 		ORDER BY COUNT(*) DESC
 		LIMIT $1`
@@ -170,20 +176,34 @@ func (h *AnalyzeHandler) MergeDuplicates(w http.ResponseWriter, r *http.Request)
 	var results []mergeResult
 	mergedCount := 0
 
+	type dupGroup struct {
+		workspace, label, nodeType, namespace string
+		chash, shash                          string
+		dupCount                              int
+	}
+	var dupGroups []dupGroup
 	for rows.Next() {
-		var label, nodeType, namespace string
-		var dupCount int
-		if err := rows.Scan(&label, &nodeType, &namespace, &dupCount); err != nil {
+		var g dupGroup
+		if err := rows.Scan(&g.workspace, &g.label, &g.nodeType, &g.namespace, &g.chash, &g.shash, &g.dupCount); err != nil {
 			continue
 		}
+		dupGroups = append(dupGroups, g)
+	}
+	rows.Close()
 
-		// Fetch the actual duplicate node IDs
+	for _, g := range dupGroups {
+		label, nodeType, namespace, dupCount := g.label, g.nodeType, g.namespace, g.dupCount
+
+		// Fetch the duplicate node IDs, scoped to the group's workspace and
+		// exact content. Keep the newest copy (matches the Dedup endpoint;
+		// keeping the oldest silently discarded the most recent save).
 		idRows, idErr := h.pool.Query(r.Context(), `
 			SELECT id FROM nodes
-			WHERE valid_to IS NULL AND namespace = $1
-			AND label = $2 AND node_type::text = $3
+			WHERE valid_to IS NULL AND workspace_name = $1 AND namespace = $2
+			AND label = $3 AND node_type::text = $4
+			AND md5(content) = $5 AND md5(summary) = $6
 			ORDER BY created_at DESC
-		`, namespace, label, nodeType)
+		`, g.workspace, namespace, label, nodeType, g.chash, g.shash)
 
 		if idErr != nil {
 			continue
@@ -224,10 +244,16 @@ func (h *AnalyzeHandler) MergeDuplicates(w http.ResponseWriter, r *http.Request)
 			txSuccess := true
 
 			for _, oldID := range toMerge {
-				// Transfer edges where old node is source
-				tag, execErr := tx.Exec(r.Context(),
-					`UPDATE edges SET source_id=$1 WHERE source_id=$2 AND target_id!=$1`,
-					keepID, oldID)
+				// Transfer edges via insert-select + delete: an UPDATE hits
+				// the UNIQUE(source,target,type) constraint whenever the
+				// keeper already has the equivalent edge, rolling back the
+				// whole group; ON CONFLICT DO NOTHING absorbs those.
+				tag, execErr := tx.Exec(r.Context(), `
+					INSERT INTO edges (workspace_name, source_id, target_id, edge_type, weight, metadata)
+					SELECT workspace_name, $1, target_id, edge_type, weight, metadata
+					FROM edges WHERE source_id = $2 AND target_id <> $1 AND valid_to IS NULL
+					ON CONFLICT (source_id, target_id, edge_type) DO NOTHING
+				`, keepID, oldID)
 				if execErr != nil {
 					slog.Error("merge: transfer source edges", "old_id", oldID, "error", execErr)
 					tx.Rollback(r.Context())
@@ -236,10 +262,12 @@ func (h *AnalyzeHandler) MergeDuplicates(w http.ResponseWriter, r *http.Request)
 				}
 				edgesMoved += int(tag.RowsAffected())
 
-				// Transfer edges where old node is target
-				tag, execErr = tx.Exec(r.Context(),
-					`UPDATE edges SET target_id=$1 WHERE target_id=$2 AND source_id!=$1`,
-					keepID, oldID)
+				tag, execErr = tx.Exec(r.Context(), `
+					INSERT INTO edges (workspace_name, source_id, target_id, edge_type, weight, metadata)
+					SELECT workspace_name, source_id, $1, edge_type, weight, metadata
+					FROM edges WHERE target_id = $2 AND source_id <> $1 AND valid_to IS NULL
+					ON CONFLICT (source_id, target_id, edge_type) DO NOTHING
+				`, keepID, oldID)
 				if execErr != nil {
 					slog.Error("merge: transfer target edges", "old_id", oldID, "error", execErr)
 					tx.Rollback(r.Context())
@@ -247,6 +275,37 @@ func (h *AnalyzeHandler) MergeDuplicates(w http.ResponseWriter, r *http.Request)
 					break
 				}
 				edgesMoved += int(tag.RowsAffected())
+
+				// Drop the duplicate's edges (including old<->keep ones,
+				// which would otherwise dangle on an invalidated node).
+				if _, execErr = tx.Exec(r.Context(),
+					`DELETE FROM edges WHERE source_id=$1 OR target_id=$1`, oldID); execErr != nil {
+					slog.Error("merge: drop old edges", "old_id", oldID, "error", execErr)
+					tx.Rollback(r.Context())
+					txSuccess = false
+					break
+				}
+
+				// Transfer session/collection membership and repoint the
+				// dedup hash so future saves of this content dedup against
+				// the keeper instead of a dead node.
+				if _, execErr = tx.Exec(r.Context(), `
+					INSERT INTO session_nodes (session_id, node_id, mention_count, first_mentioned, last_mentioned)
+					SELECT session_id, $1, mention_count, first_mentioned, last_mentioned
+					FROM session_nodes WHERE node_id = $2
+					ON CONFLICT (session_id, node_id) DO NOTHING
+				`, keepID, oldID); execErr == nil {
+					_, _ = tx.Exec(r.Context(), `DELETE FROM session_nodes WHERE node_id=$1`, oldID)
+				}
+				if _, execErr = tx.Exec(r.Context(), `
+					INSERT INTO collection_nodes (collection_id, node_id)
+					SELECT collection_id, $1 FROM collection_nodes WHERE node_id = $2
+					ON CONFLICT (collection_id, node_id) DO NOTHING
+				`, keepID, oldID); execErr == nil {
+					_, _ = tx.Exec(r.Context(), `DELETE FROM collection_nodes WHERE node_id=$1`, oldID)
+				}
+				_, _ = tx.Exec(r.Context(), `UPDATE node_hashes SET node_id=$1 WHERE node_id=$2`, keepID, oldID)
+				_, _ = tx.Exec(r.Context(), `DELETE FROM node_embeddings WHERE node_id=$1`, oldID)
 
 				// Soft-delete duplicate node
 				_, execErr = tx.Exec(r.Context(),
@@ -302,7 +361,7 @@ func (h *AnalyzeHandler) ConnectComponents(w http.ResponseWriter, r *http.Reques
 
 	// Fetch all current nodes and edges for the namespace
 	nodeRows, err := h.pool.Query(ctx, `
-		SELECT id, label, namespace, node_type::text, COALESCE(content, '') AS content
+		SELECT id, label, namespace, workspace_name, node_type::text, COALESCE(content, '') AS content
 		FROM nodes WHERE valid_to IS NULL
 		AND ($1 = '' OR namespace = $1)
 	`, ns)
@@ -316,6 +375,7 @@ func (h *AnalyzeHandler) ConnectComponents(w http.ResponseWriter, r *http.Reques
 		ID        string
 		Label     string
 		Namespace string
+		Workspace string
 		NodeType  string
 		Content   string
 	}
@@ -324,7 +384,7 @@ func (h *AnalyzeHandler) ConnectComponents(w http.ResponseWriter, r *http.Reques
 	nodeIDs := []string{}
 	for nodeRows.Next() {
 		var n nodeInfo
-		if err := nodeRows.Scan(&n.ID, &n.Label, &n.Namespace, &n.NodeType, &n.Content); err != nil {
+		if err := nodeRows.Scan(&n.ID, &n.Label, &n.Namespace, &n.Workspace, &n.NodeType, &n.Content); err != nil {
 			continue
 		}
 		nodes[n.ID] = n
@@ -424,12 +484,16 @@ func (h *AnalyzeHandler) ConnectComponents(w http.ResponseWriter, r *http.Reques
 			searchQuery += " " + on.Content[:50]
 		}
 
-		// Find most similar node in main component by label similarity
+		// Find most similar node in the main component, restricted to the
+		// orphan's workspace — connecting across tenants leaks memories
+		// into other workspaces' recall traversals.
 		var bestID string
 		var bestSim float32
 		for _, mainID := range mainComponent {
 			mn := nodes[mainID]
-			// Simple trigram-like similarity: count common substrings of length 3
+			if mn.Workspace != on.Workspace {
+				continue
+			}
 			sim := similarity(searchQuery, mn.Label)
 			if sim > bestSim {
 				bestSim = sim
@@ -437,12 +501,12 @@ func (h *AnalyzeHandler) ConnectComponents(w http.ResponseWriter, r *http.Reques
 			}
 		}
 
-		if bestID != "" && bestSim > 0.05 {
+		if bestID != "" && bestSim > 0.3 {
 			if !dryRun {
 				_, err := h.pool.Exec(ctx, `
 					INSERT INTO edges (workspace_name, source_id, target_id, edge_type, weight)
-					VALUES ('hermes', $1, $2, 'relates_to', 0.5) ON CONFLICT DO NOTHING
-				`, on.ID, bestID)
+					VALUES ($3, $1, $2, 'relates_to', 0.5) ON CONFLICT DO NOTHING
+				`, on.ID, bestID, on.Workspace)
 				if err == nil {
 					created++
 				}

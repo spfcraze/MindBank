@@ -8,10 +8,10 @@ import (
 
 // calculateConfidence computes a V3 confidence score and trust level.
 // It is a pure function with no side effects.
-func calculateConfidence(accessCount, edgeCount, ageDays int, importance float64, evidenceCount int, epistemicLabel string, contradictionCount int) (float64, string) {
-	frequency := min(float64(accessCount)/50.0, 1.0)
-	connectivity := min(float64(edgeCount)/10.0, 1.0)
-	ageStability := 1.0 - min(float64(ageDays)/365.0, 1.0)
+func calculateConfidence(accessCount, edgeCount, ageDays int, importance float64, evidenceCount int, epistemicLabel string, contradictionCount int, confirmationCount int, status string) (float64, string) {
+	frequency := minFloat(float64(accessCount)/50.0, 1.0)
+	connectivity := minFloat(float64(edgeCount)/10.0, 1.0)
+	ageStability := 1.0 - minFloat(float64(ageDays)/365.0, 1.0)
 
 	importanceClamped := importance
 	if importanceClamped < 0.0 {
@@ -21,7 +21,7 @@ func calculateConfidence(accessCount, edgeCount, ageDays int, importance float64
 		importanceClamped = 1.0
 	}
 
-	groundingScore := min(float64(evidenceCount)/5.0, 1.0)
+	groundingScore := minFloat(float64(evidenceCount)/5.0, 1.0)
 
 	epistemicBonus := 0.0
 	switch epistemicLabel {
@@ -35,9 +35,29 @@ func calculateConfidence(accessCount, edgeCount, ageDays int, importance float64
 		epistemicBonus = 0.0
 	}
 
-	contradictionPenalty := min(float64(contradictionCount)*0.10, 0.30)
+	contradictionPenalty := minFloat(float64(contradictionCount)*0.10, 0.30)
 
-	score := 0.25*frequency + 0.20*connectivity + 0.15*ageStability + 0.10*importanceClamped + 0.15*groundingScore + 0.15*epistemicBonus - 0.05*contradictionPenalty
+	// Status multiplier: supported memories get confidence boost, refuted get penalty
+	statusMultiplier := 1.0
+	switch status {
+	case "supported":
+		statusMultiplier = 1.3
+	case "open":
+		statusMultiplier = 1.0
+	case "inconclusive":
+		statusMultiplier = 0.8
+	case "refuted":
+		statusMultiplier = 0.3
+	case "blocked":
+		statusMultiplier = 0.0
+	}
+
+	// Confirmation count bonus: each confirmation up to 3 adds confidence
+	confirmationBonus := minFloat(float64(confirmationCount)*0.05, 0.15)
+
+	score := 0.25*frequency + 0.20*connectivity + 0.15*ageStability + 0.10*importanceClamped + 0.15*groundingScore + 0.15*epistemicBonus - 0.05*contradictionPenalty + confirmationBonus
+	score *= statusMultiplier
+
 	if score < 0.0 {
 		score = 0.0
 	}
@@ -55,6 +75,13 @@ func calculateConfidence(accessCount, edgeCount, ageDays int, importance float64
 	return score, trust
 }
 
+func minFloat(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // Confidence handles GET /api/v1/analyze/confidence
 func (h *AnalyzeHandler) Confidence(w http.ResponseWriter, r *http.Request) {
 	nodeID := r.URL.Query().Get("node_id")
@@ -66,7 +93,7 @@ func (h *AnalyzeHandler) Confidence(w http.ResponseWriter, r *http.Request) {
 			SELECT n.id, n.label, n.node_type::text, n.namespace,
 				n.access_count, n.importance,
 				n.created_at, n.last_accessed,
-				n.epistemic_label,
+				n.epistemic_label, n.status, n.confirmation_count,
 				(SELECT COUNT(*) FROM edges WHERE source_id = n.id OR target_id = n.id) AS edge_count,
 				(SELECT COUNT(*) FROM edges WHERE (source_id = n.id OR target_id = n.id) AND edge_type = 'contradicts') AS contradiction_count,
 				COUNT(CASE WHEN e.edge_type IN ('supports', 'derived_from', 'tested_by') THEN 1 END) as evidence_count
@@ -74,37 +101,39 @@ func (h *AnalyzeHandler) Confidence(w http.ResponseWriter, r *http.Request) {
 			LEFT JOIN edges e ON (e.source_id = n.id OR e.target_id = n.id)
 			WHERE n.id = $1 AND n.valid_to IS NULL
 			GROUP BY n.id
-		`, nodeID)
+			`, nodeID)
 
-		var id, label, nodeType, namespace string
-		var accessCount int
-		var importance float32
-		var createdAt time.Time
-		var lastAccessed *time.Time
-		var edgeCount, contradictionCount int
-		var evidenceCount int
-		var epistemicLabel string
+			var id, label, nodeType, namespace string
+			var accessCount int
+			var importance float32
+			var createdAt time.Time
+			var lastAccessed *time.Time
+			var edgeCount, contradictionCount int
+			var evidenceCount int
+			var epistemicLabel string
+			var status string
+			var confirmationCount int
 
-		if err := row.Scan(&id, &label, &nodeType, &namespace,
-			&accessCount, &importance, &createdAt, &lastAccessed,
-			&epistemicLabel, &edgeCount, &contradictionCount, &evidenceCount); err != nil {
-			respondError(w, 404, "node not found")
-			return
-		}
+			if err := row.Scan(&id, &label, &nodeType, &namespace,
+				&accessCount, &importance, &createdAt, &lastAccessed,
+				&epistemicLabel, &status, &confirmationCount, &edgeCount, &contradictionCount, &evidenceCount); err != nil {
+				respondError(w, 404, "node not found")
+				return
+			}
 
-		ageDays := int(time.Since(createdAt).Hours() / 24)
-		confidence, trustLevel := calculateConfidence(accessCount, edgeCount, ageDays, float64(importance), evidenceCount, epistemicLabel, contradictionCount)
+			ageDays := int(time.Since(createdAt).Hours() / 24)
+			confidence, trustLevel := calculateConfidence(accessCount, edgeCount, ageDays, float64(importance), evidenceCount, epistemicLabel, contradictionCount, confirmationCount, status)
 
 		lastAcc := ""
 		if lastAccessed != nil {
 			lastAcc = lastAccessed.Format(time.RFC3339)
 		}
 
-		frequency := min(float64(accessCount)/50.0, 1.0)
-		connectivity := min(float64(edgeCount)/10.0, 1.0)
-		ageStability := 1.0 - min(float64(ageDays)/365.0, 1.0)
-		groundingScore := min(float64(evidenceCount)/5.0, 1.0)
-		contradictionPenalty := min(float64(contradictionCount)*0.10, 0.30)
+		frequency := minFloat(float64(accessCount)/50.0, 1.0)
+		connectivity := minFloat(float64(edgeCount)/10.0, 1.0)
+		ageStability := 1.0 - minFloat(float64(ageDays)/365.0, 1.0)
+		groundingScore := minFloat(float64(evidenceCount)/5.0, 1.0)
+		contradictionPenalty := minFloat(float64(contradictionCount)*0.10, 0.30)
 		epistemicBonus := 0.0
 		switch epistemicLabel {
 		case "observed":
@@ -114,6 +143,20 @@ func (h *AnalyzeHandler) Confidence(w http.ResponseWriter, r *http.Request) {
 		case "assumed":
 			epistemicBonus = -0.15
 		}
+		statusMultiplier := 1.0
+		switch status {
+		case "supported":
+			statusMultiplier = 1.3
+		case "open":
+			statusMultiplier = 1.0
+		case "inconclusive":
+			statusMultiplier = 0.8
+		case "refuted":
+			statusMultiplier = 0.3
+		case "blocked":
+			statusMultiplier = 0.0
+		}
+		confirmationBonus := minFloat(float64(confirmationCount)*0.05, 0.15)
 
 		respondJSON(w, 200, map[string]any{
 			"node_id":              id,
@@ -128,6 +171,8 @@ func (h *AnalyzeHandler) Confidence(w http.ResponseWriter, r *http.Request) {
 			"age_days":             ageDays,
 			"importance":           importance,
 			"last_accessed":        lastAcc,
+			"status":               status,
+			"confirmation_count":   confirmationCount,
 			"breakdown": map[string]float64{
 				"frequency":            float64(int(frequency*1000)) / 1000,
 				"connectivity":         float64(int(connectivity*1000)) / 1000,
@@ -136,6 +181,8 @@ func (h *AnalyzeHandler) Confidence(w http.ResponseWriter, r *http.Request) {
 				"grounding_score":      float64(int(groundingScore*1000)) / 1000,
 				"epistemic_bonus":      float64(int(epistemicBonus*1000)) / 1000,
 				"contradiction_penalty": float64(int(contradictionPenalty*1000)) / 1000,
+				"status_multiplier":    float64(int(statusMultiplier*1000)) / 1000,
+				"confirmation_bonus":  float64(int(confirmationBonus*1000)) / 1000,
 			},
 		})
 		return
@@ -152,7 +199,7 @@ func (h *AnalyzeHandler) Confidence(w http.ResponseWriter, r *http.Request) {
 	query := `
 		SELECT n.id, n.label, n.node_type::text, n.namespace,
 			n.access_count, n.importance,
-			n.created_at, n.epistemic_label,
+			n.created_at, n.epistemic_label, n.status, n.confirmation_count,
 			(SELECT COUNT(*) FROM edges WHERE source_id = n.id OR target_id = n.id) AS edge_count,
 			(SELECT COUNT(*) FROM edges WHERE (source_id = n.id OR target_id = n.id) AND edge_type = 'contradicts') AS contradiction_count,
 			COUNT(CASE WHEN e.edge_type IN ('supports', 'derived_from', 'tested_by') THEN 1 END) as evidence_count
@@ -191,16 +238,18 @@ func (h *AnalyzeHandler) Confidence(w http.ResponseWriter, r *http.Request) {
 		var createdAt time.Time
 		var edgeCount, contradictionCount, evidenceCount int
 		var epistemicLabel string
+		var status string
+		var confirmationCount int
 
 		if err := rows.Scan(&id, &label, &nodeType, &namespace,
-			&accessCount, &importance, &createdAt, &epistemicLabel,
+			&accessCount, &importance, &createdAt, &epistemicLabel, &status, &confirmationCount,
 			&edgeCount, &contradictionCount, &evidenceCount); err != nil {
 			log.Printf("confidence scan error: %v", err)
 			continue
 		}
 
 		ageDays := int(time.Since(createdAt).Hours() / 24)
-		confidence, trustLevel := calculateConfidence(accessCount, edgeCount, ageDays, float64(importance), evidenceCount, epistemicLabel, contradictionCount)
+		confidence, trustLevel := calculateConfidence(accessCount, edgeCount, ageDays, float64(importance), evidenceCount, epistemicLabel, contradictionCount, confirmationCount, status)
 
 		results = append(results, nodeConfidence{
 			NodeID:             id,

@@ -42,8 +42,14 @@ func (w *EventWriter) WriteEvent(sessionID, eventType string, sequence int, payl
 	filename := fmt.Sprintf("event_%04d_%s.json", sequence, eventType)
 	path := filepath.Join(sessionDir, filename)
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	// Write temp + rename so the watcher can never observe (and ingest) a
+	// half-written event file.
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
 		return fmt.Errorf("write event file: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("rename event file: %w", err)
 	}
 
 	return nil

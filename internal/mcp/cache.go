@@ -32,18 +32,17 @@ func NewEmbeddingCache(capacity int) *EmbeddingCache {
 
 // Get retrieves an embedding from cache.
 func (c *EmbeddingCache) Get(key string) ([]float32, bool) {
-	c.mu.RLock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	el, ok := c.items[key]
-	c.mu.RUnlock()
 	if !ok {
 		return nil, false
 	}
-	
-	// Promote to front (LRU)
-	c.mu.Lock()
 	c.order.MoveToFront(el)
-	c.mu.Unlock()
-	
+	// The value must be read under the lock: a concurrent Set on the same
+	// key rewrites this field, and an unlocked read is a data race that can
+	// hand a torn slice header to the search path.
 	return el.Value.(*cacheEntry).value, true
 }
 

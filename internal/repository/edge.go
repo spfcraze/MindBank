@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"mindbank/internal/models"
@@ -80,19 +81,19 @@ func (r *EdgeRepo) GetByTriple(ctx context.Context, sourceID, targetID string, e
 
 // Delete removes an edge by ID.
 func (r *EdgeRepo) Delete(ctx context.Context, id string) (bool, error) {
-	tag, err := r.pool.Exec(ctx, `DELETE FROM edges WHERE id = $1`, id)
+	tag, err := r.pool.Exec(ctx, `UPDATE edges SET valid_to = now() WHERE id = $1 AND valid_to IS NULL`, id)
 	if err != nil {
 		return false, fmt.Errorf("delete edge: %w", err)
 	}
 	return tag.RowsAffected() > 0, nil
 }
 
-// DeleteOrphaned deletes edges where source or target node is soft-deleted (valid_to IS NOT NULL).
+// DeleteOrphaned soft-deletes edges where source or target node is soft-deleted (valid_to IS NOT NULL).
 func (r *EdgeRepo) DeleteOrphaned(ctx context.Context) (int64, error) {
 	tag, err := r.pool.Exec(ctx, `
-		DELETE FROM edges
-		WHERE source_id IN (SELECT id FROM nodes WHERE valid_to IS NOT NULL)
-		   OR target_id IN (SELECT id FROM nodes WHERE valid_to IS NOT NULL)
+		UPDATE edges SET valid_to = now()
+		WHERE valid_to IS NULL AND (source_id IN (SELECT id FROM nodes WHERE valid_to IS NOT NULL)
+		   OR target_id IN (SELECT id FROM nodes WHERE valid_to IS NOT NULL))
 	`)
 	if err != nil {
 		return 0, fmt.Errorf("delete orphan edges: %w", err)
@@ -100,9 +101,9 @@ func (r *EdgeRepo) DeleteOrphaned(ctx context.Context) (int64, error) {
 	return tag.RowsAffected(), nil
 }
 
-// DeleteByType removes all edges of a given type.
+// DeleteByType soft-deletes all edges of a given type.
 func (r *EdgeRepo) DeleteByType(ctx context.Context, edgeType models.EdgeType) (int64, error) {
-	tag, err := r.pool.Exec(ctx, `DELETE FROM edges WHERE edge_type = $1`, edgeType)
+	tag, err := r.pool.Exec(ctx, `UPDATE edges SET valid_to = now() WHERE edge_type = $1 AND valid_to IS NULL`, edgeType)
 	if err != nil {
 		return 0, fmt.Errorf("delete edges by type: %w", err)
 	}
@@ -127,7 +128,7 @@ func (r *EdgeRepo) GetByNode(ctx context.Context, nodeID string) ([]models.Edge,
 
 // GetByType returns edges filtered by type.
 func (r *EdgeRepo) GetByType(ctx context.Context, edgeType models.EdgeType, limit, offset int) ([]models.Edge, error) {
-	if limit <= 0 || limit > 1000 {
+	if limit <= 0 || limit > 5000 {
 		limit = 50
 	}
 	rows, err := r.pool.Query(ctx, `
@@ -145,8 +146,47 @@ func (r *EdgeRepo) GetByType(ctx context.Context, edgeType models.EdgeType, limi
 }
 
 // GetAll returns all edges up to limit.
+func (r *EdgeRepo) GetByNamespaceWorkspace(ctx context.Context, ns, ws string, edgeType models.EdgeType, limit, offset int) ([]models.Edge, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	
+	// Build query dynamically based on filters
+	args := []any{limit, offset}
+	conditions := []string{"1=1"}
+	
+	if ns != "" {
+		conditions = append(conditions, "(s.namespace = $3 OR t.namespace = $3)")
+		args = append(args, ns)
+	}
+	if ws != "" {
+		conditions = append(conditions, "e.workspace_name = $"+strconv.Itoa(len(args)+1))
+		args = append(args, ws)
+	}
+	if edgeType != "" {
+		conditions = append(conditions, "e.edge_type = $"+strconv.Itoa(len(args)+1))
+		args = append(args, edgeType)
+	}
+	
+	query := `
+		SELECT e.id, e.workspace_name, e.source_id, e.target_id, e.edge_type, e.weight, e.metadata, e.created_at
+		FROM edges e
+		JOIN nodes s ON e.source_id = s.id AND s.valid_to IS NULL
+		JOIN nodes t ON e.target_id = t.id AND t.valid_to IS NULL
+		WHERE ` + strings.Join(conditions, " AND ") + `
+		ORDER BY e.created_at DESC
+		LIMIT $1 OFFSET $2`
+	
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("get edges by namespace/workspace: %w", err)
+	}
+	defer rows.Close()
+	return scanEdges(rows)
+}
+
 func (r *EdgeRepo) GetAll(ctx context.Context, limit, offset int) ([]models.Edge, error) {
-	if limit <= 0 || limit > 1000 {
+	if limit <= 0 || limit > 5000 {
 		limit = 500
 	}
 	rows, err := r.pool.Query(ctx, `
@@ -169,11 +209,13 @@ func (r *EdgeRepo) GetNeighbors(ctx context.Context, nodeID string) ([]models.No
 			n.id, n.workspace_name, n.namespace, n.label, n.node_type, n.content, n.summary,
 			n.metadata, n.importance, n.access_count, n.last_accessed, n.valid_from, n.valid_to,
 			n.version, n.predecessor_id, n.created_at, n.updated_at,
-			e.edge_type::text, e.weight, 1 AS depth
+			e.edge_type::text, e.weight, COALESCE(e.salience, 1.0), 1 AS depth,
+			CASE WHEN e.source_id = $1 THEN 'outgoing' ELSE 'incoming' END AS direction
 		FROM edges e
 		JOIN nodes n ON n.id = CASE WHEN e.source_id = $1 THEN e.target_id ELSE e.source_id END
 		WHERE (e.source_id = $1 OR e.target_id = $1)
 		  AND n.valid_to IS NULL
+		  AND e.valid_to IS NULL
 		ORDER BY e.weight DESC
 	`, nodeID)
 	if err != nil {
@@ -189,7 +231,7 @@ func (r *EdgeRepo) GetNeighbors(ctx context.Context, nodeID string) ([]models.No
 			&nw.Content, &nw.Summary, &nw.Metadata, &nw.Importance, &nw.AccessCount,
 			&nw.LastAccessed, &nw.ValidFrom, &nw.ValidTo, &nw.Version,
 			&nw.PredecessorID, &nw.CreatedAt, &nw.UpdatedAt,
-			&nw.EdgeType, &nw.EdgeWeight, &nw.Depth,
+			&nw.EdgeType, &nw.EdgeWeight, &nw.Salience, &nw.Depth, &nw.Direction,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan neighbor: %w", err)
@@ -224,11 +266,12 @@ func (r *EdgeRepo) GetNeighborsByNodeIDs(ctx context.Context, nodeIDs []string) 
 			n.id, n.workspace_name, n.namespace, n.label, n.node_type, n.content, n.summary,
 			n.metadata, n.importance, n.access_count, n.last_accessed, n.valid_from, n.valid_to,
 			n.version, n.predecessor_id, n.created_at, n.updated_at,
-			e.edge_type::text, e.weight, 1 AS depth
+			e.edge_type::text, e.weight, COALESCE(e.salience, 1.0), 1 AS depth
 		FROM edges e
 		JOIN nodes n ON n.id = CASE WHEN e.source_id IN (%s) THEN e.target_id ELSE e.source_id END
 		WHERE (e.source_id IN (%s) OR e.target_id IN (%s))
 		  AND n.valid_to IS NULL
+		  AND e.valid_to IS NULL
 		ORDER BY e.weight DESC
 	`, inClause, inClause, inClause, inClause)
 
@@ -247,7 +290,7 @@ func (r *EdgeRepo) GetNeighborsByNodeIDs(ctx context.Context, nodeIDs []string) 
 			&nw.Content, &nw.Summary, &nw.Metadata, &nw.Importance, &nw.AccessCount,
 			&nw.LastAccessed, &nw.ValidFrom, &nw.ValidTo, &nw.Version,
 			&nw.PredecessorID, &nw.CreatedAt, &nw.UpdatedAt,
-			&nw.EdgeType, &nw.EdgeWeight, &nw.Depth,
+			&nw.EdgeType, &nw.EdgeWeight, &nw.Salience, &nw.Depth,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan neighbor by node IDs: %w", err)

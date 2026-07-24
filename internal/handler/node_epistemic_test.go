@@ -13,7 +13,7 @@ import (
 func setupTestPool(t testing.TB) *pgxpool.Pool {
 	dsn := os.Getenv("MB_DB_DSN")
 	if dsn == "" {
-		dsn = "postgres://mindbank:***@localhost:5434/mindbank?sslmode=disable"
+		dsn = "postgres://mindbank:mindbank@localhost:5434/mindbank?sslmode=disable"
 	}
 	pool, err := pgxpool.New(context.Background(), dsn)
 	if err != nil {

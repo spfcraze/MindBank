@@ -72,3 +72,32 @@ func TestExtractTopic(t *testing.T) {
 		t.Errorf("Expected database or bugfix topic, got: %s", topic)
 	}
 }
+
+func TestQualityGates(t *testing.T) {
+	w := &Watcher{}
+
+	// Test low quality labels
+	if !w.isLowQualityLabel("Sim: test session") {
+		t.Error("expected Sim: prefix to be low quality")
+	}
+	if !w.isLowQualityLabel("worker session") {
+		t.Error("expected worker to be low quality")
+	}
+	if !w.isLowQualityLabel("Test: deployment") {
+		t.Error("expected Test: prefix to be low quality")
+	}
+	if w.isLowQualityLabel("Deploy Kubernetes to production") {
+		t.Error("expected meaningful label to pass")
+	}
+
+	// Test meaningful content
+	emptyData := []byte(`{"messages":[{"role":"user","content":"hi"}]}`)
+	if w.hasMeaningfulContent(emptyData) {
+		t.Error("expected empty content to be rejected")
+	}
+
+	goodData := []byte(`{"messages":[{"role":"user","content":"This is a meaningful request about deploying Kubernetes clusters to production with proper monitoring"}]}`)
+	if !w.hasMeaningfulContent(goodData) {
+		t.Error("expected meaningful content to pass")
+	}
+}

@@ -33,7 +33,11 @@ func (h *SearchHandler) FTS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 || limit > 100 {
+	if limit < 0 || limit > 100 {
+		respondError(w, 400, "limit must be between 0 and 100")
+		return
+	}
+	if limit == 0 {
 		limit = 10
 	}
 	workspace := r.URL.Query().Get("workspace")
@@ -108,21 +112,26 @@ func (h *SearchHandler) Hybrid(w http.ResponseWriter, r *http.Request) {
 		respondError(w, 400, "query is required")
 		return
 	}
-	if req.Limit <= 0 || req.Limit > 100 {
+	if req.Limit <= 0 {
 		req.Limit = 10
+	} else if req.Limit > 100 {
+		req.Limit = 100
 	}
 
-	// Profile augmentation: prepend user context to query
+	// Profile augmentation feeds the EMBEDDING only. Prepending it to the
+	// text query made websearch_to_tsquery AND every profile word into the
+	// FTS match, which returned zero rows on virtually every search.
+	embedQuery := req.Query
 	if h.profileRepo != nil {
 		profileCtx, err := h.profileRepo.GetContextForQuery(r.Context(), req.Query)
 		if err == nil && profileCtx != "" {
-			req.Query = profileCtx + "\nQuery: " + req.Query
+			embedQuery = profileCtx + "\nQuery: " + req.Query
 			slog.Debug("search augmented with profile context", "context_len", len(profileCtx))
 		}
 	}
 
 	// Use cached embedding
-	embedding, err := h.searchRepo.GetCachedEmbedding(r.Context(), req.Query, h.embedder.Embed)
+	embedding, err := h.searchRepo.GetCachedEmbedding(r.Context(), embedQuery, h.embedder.Embed)
 	if err != nil {
 		respondEmbedError(w, err, "embed query for hybrid search")
 		return

@@ -6,12 +6,12 @@
 <title>MindBank — Graph Memory for AI Agents</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-:root{--bg:#08080d;--card:#0c0c12;--border:#16162a;--green:#00ff88;--blue:#0088ff;--amber:#ffaa00;--red:#ff4444;--purple:#ff00ff;--text:#e0e0e0;--dim:#666}
+:root{--bg:#050608;--card:#0b0e14;--border:#14312b;--green:#00D4AA;--blue:#3B82F6;--amber:#F5C518;--red:#EF4444;--purple:#EC4899;--text:#E8ECF0;--dim:#8A9AAA}
 body{font-family:'SF Mono','Fira Code','Cascadia Code',monospace;background:var(--bg);color:var(--text);line-height:1.7}
 a{color:var(--green);text-decoration:none}a:hover{text-decoration:underline}
 .container{max-width:900px;margin:0 auto;padding:20px}
-.hero{text-align:center;padding:80px 20px 60px;background:linear-gradient(180deg,#0c0c12 0%,var(--bg) 100%);border-bottom:1px solid var(--border)}
-.hero h1{font-size:36px;color:var(--green);letter-spacing:6px;text-shadow:0 0 30px #00ff8840;margin-bottom:12px}
+.hero{text-align:center;padding:80px 20px 60px;background:linear-gradient(180deg,#0b0e14 0%,var(--bg) 100%);border-bottom:1px solid var(--border)}
+.hero h1{font-size:36px;color:var(--green);letter-spacing:6px;text-shadow:0 0 30px #00D4AA40;margin-bottom:12px}
 .hero .sub{font-size:14px;color:var(--dim);letter-spacing:2px}
 .hero .tagline{font-size:18px;color:#aaa;margin-top:20px;max-width:600px;margin-left:auto;margin-right:auto}
 .hero .badges{margin-top:24px;display:flex;justify-content:center;gap:12px;flex-wrap:wrap}
@@ -36,7 +36,7 @@ code{background:#ffffff08;padding:1px 6px;border-radius:3px;font-size:12px;color
 pre{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:14px;overflow-x:auto;font-size:12px;color:#ccc;margin:12px 0}
 pre .comment{color:#555}.pre .string{color:var(--green)}.pre .key{color:var(--blue)}
 .diagram{text-align:center;padding:20px;margin:16px 0;background:var(--card);border:1px solid var(--border);border-radius:8px;font-size:12px;color:#888;white-space:pre;line-height:1.4}
-.highlight{background:#00ff8820;border-left:3px solid var(--green);padding:12px 16px;margin:12px 0;border-radius:0 6px 6px 0;font-size:12px}
+.highlight{background:#00D4AA20;border-left:3px solid var(--green);padding:12px 16px;margin:12px 0;border-radius:0 6px 6px 0;font-size:12px}
 .footer{text-align:center;padding:40px 20px;border-top:1px solid var(--border);margin-top:60px;font-size:11px;color:#444}
 @media(max-width:700px){.grid2,.grid3{grid-template-columns:1fr}.comparison{font-size:10px}}
 </style>
@@ -61,15 +61,15 @@ pre .comment{color:#555}.pre .string{color:var(--green)}.pre .key{color:var(--bl
 <div class="card">
 <p>AI agents forget everything between sessions. Existing memory solutions have fundamental problems:</p>
 <div class="grid3" style="margin-top:16px">
-  <div class="card" style="border-color:#ff444440">
+  <div class="card" style="border-color:#EF444440">
     <h3 style="color:var(--red)">Flat Text Files</h3>
     <p>Hermes MEMORY.md: 2200 chars. Claude's MEMORY.md: 10KB. You fill it up, then start deleting things you might need later. No search. No structure. No version history.</p>
   </div>
-  <div class="card" style="border-color:#ff444440">
+  <div class="card" style="border-color:#EF444440">
     <h3 style="color:var(--red)">Vector-Only Databases</h3>
     <p>ChromaDB, Pinecone, Weaviate: great at semantic search, terrible at exact matches. Can't find "port 8081" reliably. No temporal history. No graph relationships between memories.</p>
   </div>
-  <div class="card" style="border-color:#ff444440">
+  <div class="card" style="border-color:#EF444440">
     <h3 style="color:var(--red)">Cloud Memory APIs</h3>
     <p>Mem0, Zep, MemoryGPT: your project data on someone else's servers. API keys, rate limits, latency. Vendor lock-in. Your decisions about your infrastructure sitting on AWS.</p>
   </div>

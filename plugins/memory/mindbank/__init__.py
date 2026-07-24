@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -163,6 +164,31 @@ def _api_call(base_url: str, method: str, path: str, body: dict = None, timeout:
         return {"error": str(e)}
 
 
+# Generic buckets that are not real projects: recall from a session in one of
+# these should span the whole graph, not isolate to the (near-empty, noisy)
+# bucket itself. Real project namespaces (klixsor, mindbank, …) stay isolated.
+_GENERIC_NS = {"", "hermes", "global", "default"}
+
+
+def _is_generic_ns(ns: str) -> bool:
+    return (ns or "").lower() in _GENERIC_NS
+
+
+def _search_nodes(result) -> list:
+    """Normalize a /search/hybrid response into a list of node dicts.
+
+    The endpoint returns a token-budgeted object {"nodes":[...], ...}, but
+    earlier revisions returned a bare list. Accept both (and error/empty dicts)
+    so every search consumer sees a plain list. Missing this normalization made
+    every isinstance(result, list) check fail, silently returning "no results".
+    """
+    if isinstance(result, list):
+        return result
+    if isinstance(result, dict) and isinstance(result.get("nodes"), list):
+        return result["nodes"]
+    return []
+
+
 # Default namespace detection: uses cwd directory name as namespace.
 # Users can override per-directory via mindbank.json "namespace" field,
 # or add custom mappings by setting _PROJECT_NS in their environment.
@@ -194,9 +220,10 @@ def _detect_namespace() -> str:
 
     Priority:
     1. Custom mapping from mindbank-namespaces.json
-    2. Parent directory name (if it looks like a project root)
-    3. Current directory name (sanitized)
-    4. 'hermes' fallback
+    2. Working directory path patterns (e.g., /home/rat/mindbank -> mindbank)
+    3. Parent directory name (if it looks like a project root)
+    4. Current directory name (sanitized)
+    5. 'hermes' fallback
     """
     try:
         cwd = os.getcwd()
@@ -209,8 +236,30 @@ def _detect_namespace() -> str:
         if parent in _PROJECT_NS:
             return _PROJECT_NS[parent]
 
+        # Extract project from working directory path
+        # Patterns: /home/rat/projectname, ~/projectname, /workspace/projectname
+        wd_patterns = [
+            r'/home/[^/\s]+/([a-zA-Z0-9_-]+)',
+            r'~/([a-zA-Z0-9_-]+)',
+            r'/workspace/([a-zA-Z0-9_-]+)',
+            r'/mnt/[^/]+/Users/[^/]+/([a-zA-Z0-9_-]+)',
+        ]
+        for pattern in wd_patterns:
+            matches = re.findall(pattern, cwd)
+            for match in matches:
+                # Filter out common non-project directories
+                if match not in ('.hermes', '.claude', '.config', '.local', '.ssh', 
+                                  '.git', '.github', '.vscode', 'node_modules', 
+                                  'vendor', 'dist', 'build', 'tmp', 'temp', 
+                                  'rat', 'user', 'home', 'root'):
+                    return match.lower()
+
+        # Check parent mapping
+        if parent in _PROJECT_NS:
+            return _PROJECT_NS[parent]
+
         # Use directory name directly as namespace (sanitized)
-        if basename and basename not in (".", "home", "root", "tmp"):
+        if basename and basename not in (".", "home", "root", "tmp", "rat", "user"):
             # Sanitize: lowercase, replace non-alphanumeric with hyphens
             sanitized = "".join(c if c.isalnum() else "-" for c in basename).strip("-")
             if sanitized:
@@ -220,47 +269,45 @@ def _detect_namespace() -> str:
     return "hermes"
 
 
-
+def _detect_profile() -> str:
+    """Detect current Hermes profile from environment or config."""
+    # Check environment variable first
+    profile = os.environ.get("HERMES_PROFILE", "")
+    if profile:
+        return profile
+    
+    # Check HERMES_HOME for profile subfolder
+    hermes_home = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
+    try:
+        # If we're in a profile-specific sessions dir, extract profile name
+        cwd = os.getcwd()
+        if "/profiles/" in cwd:
+            parts = cwd.split("/profiles/")
+            if len(parts) > 1:
+                profile = parts[1].split("/")[0]
+                if profile and profile not in (".", ".."):
+                    return profile
+    except Exception:
+        pass
+    
+    return "default"
 def _is_duplicate(api_url: str, label: str, namespace: str) -> bool:
-    """Check if a node with similar label already exists (fuzzy match).
-
-    BUGFIX: Omit namespace from search query parameter — it can cause
-    "No results found" even when results exist. Filter client-side instead.
-    """
+    """Check if a node with similar label already exists."""
     if not label or len(label) < 10:
         return False
     try:
         result = _api_call(api_url, "POST", "/search/hybrid", {
             "query": label,
-            "limit": 5,
+            "namespace": namespace,
+            "limit": 3,
         }, timeout=3)
-        if isinstance(result, list):
-            label_lower = label.lower().strip()
-            for r in result:
-                existing = r.get("label", "").lower().strip()
-                existing_ns = r.get("namespace", "")
-                # Only match within same namespace
-                if existing_ns and namespace and existing_ns != namespace:
-                    continue
-                # Exact match
-                if existing == label_lower:
-                    return True
-                # Fuzzy match: check if one contains the other
-                if existing and label_lower:
-                    if existing in label_lower or label_lower in existing:
-                        return True
-                    # Check word overlap for multi-word labels
-                    existing_words = set(existing.split())
-                    label_words = set(label_lower.split())
-                    if existing_words and label_words:
-                        overlap = len(existing_words & label_words)
-                        total = len(existing_words | label_words)
-                        if total > 0 and overlap / total >= 0.7:
-                            return True
+        for r in _search_nodes(result):
+            existing = r.get("label", "").lower().strip()
+            if existing == label.lower().strip():
+                return True
         return False
     except Exception:
         return False
-
 
 class MindBankProvider(MemoryProvider):
     """Graph-structured persistent memory for Hermes Agent."""
@@ -268,27 +315,39 @@ class MindBankProvider(MemoryProvider):
     def __init__(self):
         self._api_url = DEFAULT_API_URL
         self._namespace = ""  # project namespace for isolation
+        self._profile = "default"  # hermes profile for multi-user separation
         self._session_id = ""
         self._sync_thread: Optional[threading.Thread] = None
         self._available = None  # cached availability check
-        self._available_checked_at = 0  # timestamp for cache invalidation
+        self._available_ts = 0.0  # when availability was last probed
+        # Client-side keyword capture (sync_turn / on_session_end). Off by
+        # default: the server now does higher-quality LLM session mining, and
+        # these keyword heuristics produce the noisy "regex-era" nodes. Opt in
+        # via mindbank.json "capture_turns": true or MINDBANK_CAPTURE_TURNS=1.
+        self._capture_turns = False
 
     @property
     def name(self) -> str:
         return "mindbank"
 
     def is_available(self) -> bool:
-        """Check if MindBank API is reachable. Retries after 60s if previously failed."""
-        now = time.time()
-        # Retry after 60 seconds if previously failed
-        if self._available is False and (now - self._available_checked_at) < 60:
-            return False
+        """Check if MindBank API is reachable. No heavy network calls.
+
+        Result is cached with a short TTL so a transient outage at startup
+        doesn't disable memory for the entire session (previously the first
+        failure was cached permanently).
+        """
+        now = time.monotonic()
+        # Cache successes for 60s, failures for only 10s so recovery is quick.
+        ttl = 60.0 if self._available else 10.0
+        if self._available is not None and (now - self._available_ts) < ttl:
+            return self._available
         try:
             result = _api_call(self._api_url, "GET", "/health", timeout=3)
             self._available = result.get("status") == "ok"
         except Exception:
             self._available = False
-        self._available_checked_at = now
+        self._available_ts = now
         return self._available
 
     def save_config(self, values: dict, hermes_home: str) -> None:
@@ -332,6 +391,7 @@ class MindBankProvider(MemoryProvider):
                         cfg = json.load(f)
                     self._api_url = cfg.get("api_url", DEFAULT_API_URL)
                     self._namespace = cfg.get("namespace", "")
+                    self._capture_turns = bool(cfg.get("capture_turns", False))
                 except Exception:
                     pass
 
@@ -339,14 +399,20 @@ class MindBankProvider(MemoryProvider):
         env_url = os.environ.get("MINDBANK_API_URL")
         if env_url:
             self._api_url = env_url
+        if os.environ.get("MINDBANK_CAPTURE_TURNS", "").lower() in ("1", "true", "yes"):
+            self._capture_turns = True
 
         # Auto-detect namespace from working directory if not set
         if not self._namespace:
             self._namespace = _detect_namespace()
 
-        # Clean up stale MCP server processes (older than 1 hour)
+        # Auto-detect profile
+        self._profile = _detect_profile()
+
+        logger.info("MindBank initialized: %s ns=%s profile=%s (session: %s)", self._api_url, self._namespace or "*", self._profile, session_id)
         try:
             import subprocess
+            import time
             result = subprocess.run(["pgrep", "-af", "mindbank-mcp"], capture_output=True, text=True, timeout=3)
             for line in result.stdout.strip().split("\n"):
                 if not line.strip():
@@ -375,67 +441,29 @@ class MindBankProvider(MemoryProvider):
         except Exception:
             pass
 
-        # Ensure session exists in MindBank so we can store messages
-        self._ensure_session(session_id)
-
-        logger.info("MindBank initialized: %s ns=%s (session: %s)", self._api_url, self._namespace or "*", session_id)
-
-    def _ensure_session(self, session_id: str) -> None:
-        """Ensure a session record exists in MindBank."""
-        if not session_id:
-            return
-        ns = self._namespace or "hermes"
-        # Try to get existing session
-        result = _api_call(self._api_url, "GET", f"/sessions/{session_id}", timeout=5)
-        if result and "error" not in result and result.get("id") == session_id:
-            return
-        # Create session
-        _api_call(self._api_url, "POST", "/sessions", {
-            "id": session_id,
-            "workspace_name": "hermes",
-            "metadata": json.dumps({"namespace": ns}),
-        }, timeout=5)
-
-    def _send_messages(self, session_id: str, messages: List[Dict[str, str]]) -> None:
-        """Send messages to MindBank's session API (best-effort, non-blocking).
-
-        This preserves the full conversation before context compression destroys it.
-        The backend's AddMessages handler runs ruleBased.ProcessAndStore() async
-        on every user/assistant message, so extraction happens server-side.
-        """
-        if not session_id or not messages:
-            return
-        try:
-            # Ensure session exists before sending messages
-            self._ensure_session(session_id)
-            # Send ALL messages — no filtering, no truncation
-            # The backend's AddMessages handler will run ProcessAndStore()
-            # asynchronously on each user/assistant message
-            body = [{"role": m.get("role", ""), "content": m.get("content", "")} for m in messages]
-            result = _api_call(
-                self._api_url,
-                "POST",
-                f"/sessions/{session_id}/messages",
-                body,
-                timeout=15,
-            )
-            if result and "error" in result:
-                logger.warning("MindBank message sync failed: %s", result.get("error"))
-            else:
-                logger.debug("MindBank synced %d messages to session %s", len(messages), session_id[:8])
-        except Exception as e:
-            logger.warning("MindBank message sync error: %s", e)
-
     def system_prompt_block(self) -> str:
         """Return context to inject into system prompt."""
-        # Get snapshot (wake-up context) — filtered by namespace
+        # Wake-up snapshot. Generic buckets (hermes/global) draw from the whole
+        # graph; real project namespaces stay scoped but broaden if empty, so
+        # the wake-up context is never blank when knowledge exists elsewhere.
         ns = self._namespace or "hermes"
-        result = _api_call(self._api_url, "GET", f"/snapshot?namespace={ns}", timeout=5)
-        if not result or "error" in result:
-            return ""
-
-        content = result.get("content", "")
-        tokens = result.get("token_count", 0)
+        filt = "" if _is_generic_ns(ns) else ns
+        # The global (no-namespace) snapshot is a precomputed blob that nothing
+        # rebuilds on a schedule, so it goes stale. regenerate=1 forces a fresh
+        # top-node query (~100ms, once per session) and refreshes the shared
+        # blob. Namespace-scoped snapshots already regenerate on cache miss.
+        if filt:
+            path = f"/snapshot?namespace={filt}"
+        else:
+            path = "/snapshot?regenerate=1"
+        result = _api_call(self._api_url, "GET", path, timeout=8)
+        content = result.get("content", "") if isinstance(result, dict) else ""
+        tokens = result.get("token_count", 0) if isinstance(result, dict) else 0
+        if (not content or content == "No memories stored yet.") and filt:
+            # Project namespace empty — broaden to a fresh global snapshot.
+            result = _api_call(self._api_url, "GET", "/snapshot?regenerate=1", timeout=8)
+            content = result.get("content", "") if isinstance(result, dict) else ""
+            tokens = result.get("token_count", 0) if isinstance(result, dict) else 0
         if not content or content == "No memories stored yet.":
             return ""
 
@@ -489,26 +517,36 @@ class MindBankProvider(MemoryProvider):
 
         return block
 
+    def _hybrid_search(self, query: str, ns: str, limit: int) -> list:
+        """Hybrid search with namespace scoping. Returns a list of node dicts.
+
+        Generic buckets (hermes/global) search the whole graph. Real project
+        namespaces stay isolated, but broaden to the whole graph if they yield
+        nothing — so recall is never empty when knowledge exists elsewhere,
+        without diluting a populated project namespace.
+        """
+        filt = "" if _is_generic_ns(ns) else ns
+        result = _api_call(self._api_url, "POST", "/search/hybrid", {
+            "query": query, "limit": limit, "namespace": filt,
+        }, timeout=15)
+        nodes = _search_nodes(result)
+        if not nodes and filt:
+            result = _api_call(self._api_url, "POST", "/search/hybrid", {
+                "query": query, "limit": limit,
+            }, timeout=15)
+            nodes = _search_nodes(result)
+        return nodes
+
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         """Fetch relevant memories before each API call."""
         if not query or len(query) < 10:
             return ""
 
-        # Use hybrid search for best recall — filtered by namespace
         ns = self._namespace or "hermes"
-        body = {
-            "query": query,
-            "limit": 3,
-            "namespace": ns,
-        }
-        result = _api_call(self._api_url, "POST", "/search/hybrid", body, timeout=15)
-
-        if not result or "error" in result:
-            return ""
-
-        if isinstance(result, list) and len(result) > 0:
+        nodes = self._hybrid_search(query, ns, 3)
+        if nodes:
             lines = []
-            for r in result[:3]:
+            for r in nodes[:3]:
                 label = r.get("label", "")
                 content = r.get("content", "")
                 ntype = r.get("node_type", "")
@@ -529,161 +567,101 @@ class MindBankProvider(MemoryProvider):
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "") -> None:
         """Store conversation turn in MindBank (non-blocking).
 
-        CRITICAL FIX: Previously this dropped 90% of turns due to keyword
-        filtering and only stored 300 chars. Now it:
-        1. Sends the FULL turn to the session API (preserves everything)
-        2. Does keyword-based node extraction as a SECONDARY best-effort pass
+        Disabled unless capture_turns is set — server-side LLM session mining
+        produces higher-quality memories than this keyword heuristic.
         """
-        sid = session_id or self._session_id
-        if not sid:
+        if not self._capture_turns:
             return
 
         def _sync():
             try:
-                # PRIMARY: Preserve full conversation in session API
-                # This ensures no data is lost even if extraction fails
-                messages = []
-                if user_content and len(user_content) >= 2:
-                    messages.append({"role": "user", "content": user_content})
-                if assistant_content and len(assistant_content) >= 2:
-                    messages.append({"role": "assistant", "content": assistant_content})
-                if messages:
-                    self._send_messages(sid, messages)
-
-                # SECONDARY: Keyword-based node extraction (best-effort)
-                # Only run for substantial user messages with clear signals
-                if not user_content or len(user_content) < 30:
+                # Skip very short messages
+                label = user_content[:60].strip()
+                if not label or len(user_content) < 30:
                     return
-
+                # Detect node type from content — require 2+ keyword matches for noise reduction
                 lower = user_content.lower()
-                node_type = None
+                hits = 0
+                node_type = "event"
                 decision_kw = ["decided", "chose", "going with", "switching to", "switching"]
                 problem_kw = ["bug", "broken", "error", "issue", "crash", "fails"]
                 advice_kw = ["recommend", "suggest", "better to", "best practice"]
                 pref_kw = ["prefer", "always use", "never use", "i like"]
-                if any(w in lower for w in decision_kw):
+                if sum(1 for w in decision_kw if w in lower) >= 1:
                     node_type = "decision"
-                elif any(w in lower for w in problem_kw):
+                elif sum(1 for w in problem_kw if w in lower) >= 1:
                     node_type = "problem"
-                elif any(w in lower for w in advice_kw):
+                elif sum(1 for w in advice_kw if w in lower) >= 2:
                     node_type = "advice"
-                elif any(w in lower for w in pref_kw):
+                elif sum(1 for w in pref_kw if w in lower) >= 1:
                     node_type = "preference"
+                else:
+                    return  # Skip non-classifiable turns (reduces noise)
 
-                if not node_type:
-                    return  # No strong signal — but message is already preserved in session API
-
+                # Dedup: skip if similar node already exists
                 ns = self._namespace or "hermes"
-                label = user_content[:80].strip()
                 if _is_duplicate(self._api_url, label, ns):
                     return
 
-                result = _api_call(self._api_url, "POST", "/nodes", {
+                _api_call(self._api_url, "POST", "/nodes", {
                     "label": label,
                     "node_type": node_type,
-                    "content": f"User: {user_content[:500]}\n\nAssistant: {assistant_content[:500]}",
-                    "namespace": ns,
-                    "summary": f"Session {sid[:8]}",
+                    "content": f"User: {user_content[:300]}\n\nAssistant: {assistant_content[:300]}",
+                    "namespace": self._namespace or "hermes",
+                    "summary": f"Session {session_id[:8]}",
+                    "metadata": {"profile": self._profile},
                 }, timeout=10)
-                if result and result.get("id"):
-                    try:
-                        self._link_to_project(result["id"], ns)
-                    except Exception:
-                        pass
             except Exception as e:
                 logger.warning("MindBank sync failed: %s", e)
 
+        # Don't block the agent turn waiting on a prior sync — if one is still
+        # running, skip this turn's capture rather than stalling up to 5s.
         if self._sync_thread and self._sync_thread.is_alive():
-            self._sync_thread.join(timeout=5.0)
+            return
         self._sync_thread = threading.Thread(target=_sync, daemon=True)
         self._sync_thread.start()
-
-    def on_pre_compress(self, messages: List[Dict[str, Any]]) -> str:
-        """EMERGENCY SYNC: Send all messages to MindBank before compression destroys them.
-
-        This is the critical hook. When Hermes compacts context, old messages
-        are summarized and the originals are PERMANENTLY LOST. This method
-        dumps the full conversation to MindBank's session API BEFORE that happens.
-
-        Returns: empty string (no text to add to compression summary)
-        """
-        sid = self._session_id
-        if not sid or not messages:
-            return ""
-
-        def _emergency_sync():
-            try:
-                # Send ALL messages — no filtering, no truncation
-                # The backend's AddMessages handler will run ProcessAndStore()
-                # asynchronously on each user/assistant message
-                self._send_messages(sid, messages)
-                logger.info("MindBank emergency pre-compression sync: %d messages preserved", len(messages))
-            except Exception as e:
-                logger.warning("MindBank pre-compression sync failed: %s", e)
-
-        thread = threading.Thread(target=_emergency_sync, daemon=True)
-        thread.start()
-        return ""
 
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
         """Extract memories from completed session.
 
-        CRITICAL FIX: Previously only scanned user messages with keyword filtering.
-        Now:
-        1. Sends ALL remaining messages to session API (full preservation)
-        2. Scans BOTH user AND assistant messages for extraction
+        Disabled unless capture_turns is set — the server's session miner does
+        this with an LLM instead of keyword matching. See sync_turn.
         """
-        if not messages:
+        if not messages or not self._capture_turns:
             return
-
-        sid = self._session_id
 
         def _extract():
             try:
                 ns = self._namespace or "hermes"
-
-                # PRIMARY: Ensure all messages are in the session API
-                self._send_messages(sid, messages)
-
-                # SECONDARY: Extract nodes from high-signal messages (both roles)
-                for msg in messages:
+                # Extract key turns from the conversation — only high-signal messages
+                for msg in messages[-10:]:  # last 10 messages
                     role = msg.get("role", "")
                     content = msg.get("content", "")
-                    if role not in ("user", "assistant") or len(content) < 30:
+                    if role != "user" or len(content) < 30:
                         continue
-
                     lower = content.lower()
+                    # Only extract messages with strong decision/problem/fixed signals
                     node_type = None
-                    # Broader signal detection for both roles
-                    if any(w in lower for w in ["decided", "chose", "going with", "switching to", "concluded"]):
+                    if any(w in lower for w in ["decided", "chose", "going with", "switching to"]):
                         node_type = "decision"
-                    elif any(w in lower for w in ["fixed", "solution", "workaround", "resolved", "patched"]):
+                    elif any(w in lower for w in ["fixed", "solution", "workaround", "resolved"]):
                         node_type = "advice"
-                    elif any(w in lower for w in ["bug", "broken", "error", "crash", "fails", "regression"]):
+                    elif any(w in lower for w in ["bug", "broken", "error", "crash", "fails"]):
                         node_type = "problem"
-                    elif any(w in lower for w in ["migrated", "upgraded", "deprecated", "deployed", "released"]):
+                    elif any(w in lower for w in ["migrated", "upgraded", "deprecated", "deployed"]):
                         node_type = "fact"
-                    elif any(w in lower for w in ["implemented", "added", "created", "built", "wrote"]):
-                        node_type = "fact"
-
                     if not node_type:
                         continue
-
                     label = content[:80].strip()
                     if _is_duplicate(self._api_url, label, ns):
                         continue
-
-                    result = _api_call(self._api_url, "POST", "/nodes", {
+                    _api_call(self._api_url, "POST", "/nodes", {
                         "label": label,
                         "node_type": node_type,
-                        "content": content[:800],
+                        "content": content[:500],
                         "namespace": ns,
+                        "metadata": {"profile": self._profile},
                     }, timeout=10)
-                    if result and result.get("id"):
-                        try:
-                            self._link_to_project(result["id"], ns)
-                        except Exception:
-                            pass
             except Exception as e:
                 logger.warning("MindBank session extract failed: %s", e)
 
@@ -695,23 +673,14 @@ class MindBankProvider(MemoryProvider):
         if action in ("add", "replace") and content:
             def _write():
                 try:
-                    ns = self._namespace or "hermes"
-                    label = f"Memory: {target}"
-                    # Skip if duplicate exists
-                    if _is_duplicate(self._api_url, label, ns):
-                        return
-                    result = _api_call(self._api_url, "POST", "/nodes", {
-                        "label": label,
+                    _api_call(self._api_url, "POST", "/nodes", {
+                        "label": f"Memory: {target}",
                         "node_type": "preference" if target == "user" else "fact",
                         "content": content[:500],
-                        "namespace": ns,
+                        "namespace": self._namespace or "hermes",
                         "summary": f"Built-in memory ({action})",
+                        "metadata": {"profile": self._profile},
                     }, timeout=10)
-                    if result and result.get("id"):
-                        try:
-                            self._link_to_project(result["id"], ns)
-                        except Exception:
-                            pass
                 except Exception as e:
                     logger.warning("MindBank memory write mirror failed: %s", e)
 
@@ -769,19 +738,13 @@ class MindBankProvider(MemoryProvider):
             "content": content,
             "summary": args.get("summary", ""),
             "namespace": ns,
+            "metadata": {"profile": self._profile},
         }, timeout=10)
 
         if "error" in result:
             return f"Error storing memory: {result['error']}"
 
         node_id = result.get("id", "")
-
-        # Link to project root (organizational anchor)
-        if node_id:
-            try:
-                self._link_to_project(node_id, ns)
-            except Exception:
-                pass
 
         # Create semantic edges to related nodes
         if node_id and content:
@@ -795,38 +758,6 @@ class MindBankProvider(MemoryProvider):
             response += contradiction_warning
         return response
 
-    def _ensure_project_root(self, ns: str) -> Optional[str]:
-        """Find or create a project node for the given namespace. Returns project node ID."""
-        if not ns:
-            ns = "hermes"
-        # Search for existing project node in this namespace
-        result = _api_call(self._api_url, "GET", f"/nodes?type=project&namespace={ns}&limit=5", timeout=5)
-        nodes = result if isinstance(result, list) else result.get("nodes", [])
-        if nodes and len(nodes) > 0:
-            return nodes[0].get("id")
-        # Create project node
-        create_result = _api_call(self._api_url, "POST", "/nodes", {
-            "label": ns.capitalize(),
-            "node_type": "project",
-            "content": f"Project root for {ns} namespace",
-            "namespace": ns,
-            "summary": "Organizational anchor",
-        }, timeout=10)
-        return create_result.get("id") if create_result else None
-
-    def _link_to_project(self, node_id: str, ns: str) -> None:
-        """Create a contains edge from project root to the given node."""
-        if not node_id:
-            return
-        project_id = self._ensure_project_root(ns)
-        if project_id and project_id != node_id:
-            _api_call(self._api_url, "POST", "/edges", {
-                "source_id": project_id,
-                "target_id": node_id,
-                "edge_type": "contains",
-                "workspace_name": "hermes",
-            }, timeout=5)
-
     def _create_semantic_edges(self, node_id: str, node_type: str, label: str, content: str, ns: str) -> None:
         """Create semantic edges between the new node and related existing nodes."""
         # Search for related nodes in the same namespace
@@ -836,7 +767,8 @@ class MindBankProvider(MemoryProvider):
             "limit": 5,
         }, timeout=10)
 
-        if not isinstance(related, list) or len(related) == 0:
+        related = _search_nodes(related)
+        if not related:
             return
 
         # Define edge type based on node type relationships
@@ -866,55 +798,51 @@ class MindBankProvider(MemoryProvider):
 
     def _handle_search(self, args: dict) -> str:
         ns = args.get("namespace", "") or self._namespace or "hermes"
-        result = _api_call(self._api_url, "POST", "/search/hybrid", {
-            "query": args.get("query", ""),
-            "namespace": ns,
-            "limit": args.get("limit", 5),
-        }, timeout=15)
-
-        if "error" in result:
-            return f"Search error: {result['error']}"
-
-        if not isinstance(result, list) or len(result) == 0:
+        nodes = self._hybrid_search(args.get("query", ""), ns, args.get("limit", 5))
+        if not nodes:
             return "No memories found."
 
         lines = []
-        for r in result:
+        for r in nodes:
             label = r.get("label", "")
             ntype = r.get("node_type", "")
             content = r.get("content", "")
-            node_id = r.get("node_id", "")
             content = content[:120] + "..." if len(content) > 120 else content
 
-            # Get confidence for this node
+            # Confidence is included inline by /search/hybrid when available.
+            # (Previously this issued a serial GET /analyze/confidence per
+            # result — an N+1 that added up to ~3s*N of latency to every
+            # search on the agent's synchronous path.)
             confidence_tag = ""
-            if node_id:
-                try:
-                    conf = _api_call(self._api_url, "GET", f"/analyze/confidence?node_id={node_id}", timeout=3)
-                    if conf and isinstance(conf, dict) and "trust_level" in conf:
-                        level = conf["trust_level"]
-                        score = conf.get("confidence", 0)
-                        confidence_tag = f" [{level}:{score:.2f}]"
-                except Exception:
-                    pass
+            level = r.get("trust_level", "")
+            if level:
+                score = r.get("confidence", 0) or 0
+                confidence_tag = f" [{level}:{score:.2f}]"
 
             lines.append(f"- [{ntype}]{confidence_tag} {label}: {content}")
 
         return "\n".join(lines)
 
     def _handle_ask(self, args: dict) -> str:
-        body = {
-            "query": args.get("query", ""),
-            "max_tokens": 1000,
-        }
+        query = args.get("query", "")
         ns = args.get("namespace", "") or self._namespace or "hermes"
-        body["namespace"] = ns
-        result = _api_call(self._api_url, "POST", "/ask", body, timeout=15)
+        filt = "" if _is_generic_ns(ns) else ns
 
-        if "error" in result:
+        def _ask(namespace):
+            body = {"query": query, "max_tokens": 1000}
+            if namespace:
+                body["namespace"] = namespace
+            return _api_call(self._api_url, "POST", "/ask", body, timeout=15)
+
+        result = _ask(filt)
+        if isinstance(result, dict) and "error" in result:
             return f"Ask error: {result['error']}"
 
-        context = result.get("context", "")
+        context = result.get("context", "") if isinstance(result, dict) else ""
+        if not context and filt:
+            # Broaden to the whole graph when this project namespace has no answer.
+            result = _ask("")
+            context = result.get("context", "") if isinstance(result, dict) else ""
         if not context:
             return "No relevant memories found."
 

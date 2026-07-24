@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 )
@@ -34,20 +35,23 @@ func (h *AnalyzeHandler) Diff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ns := r.URL.Query().Get("namespace")
-	nsFilter := ""
-	args := []any{sinceTime}
-	if ns != "" {
-		nsFilter = " AND namespace = $2"
-		args = append(args, ns)
+
+	// Build namespace filter and args dynamically to avoid hardcoded parameter positions
+	buildQuery := func(baseSQL string, baseArgs []any) (string, []any) {
+		if ns == "" {
+			return baseSQL, baseArgs
+		}
+		pos := len(baseArgs) + 1
+		return baseSQL + fmt.Sprintf(" AND namespace = $%d", pos), append(baseArgs, ns)
 	}
 
 	// New nodes
-	newNodesQuery := `
+	newNodesQuery, newArgs := buildQuery(`
 		SELECT id, label, namespace, node_type::text, created_at
 		FROM nodes
-		WHERE valid_to IS NULL AND created_at > $1` + nsFilter + `
+		WHERE valid_to IS NULL AND created_at > $1
 		ORDER BY created_at DESC
-		LIMIT 50`
+		LIMIT 50`, []any{sinceTime})
 
 	type nodeRef struct {
 		ID        string `json:"id"`
@@ -58,7 +62,7 @@ func (h *AnalyzeHandler) Diff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var newNodes []nodeRef
-	rows, err := h.pool.Query(r.Context(), newNodesQuery, args...)
+	rows, err := h.pool.Query(r.Context(), newNodesQuery, newArgs...)
 	if err == nil {
 		for rows.Next() {
 			var n nodeRef
@@ -75,21 +79,17 @@ func (h *AnalyzeHandler) Diff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Updated nodes (newer versions superseded old ones)
-	updateQuery := `
+	updateQuery, updateArgs := buildQuery(`
 		SELECT id, label, namespace, node_type::text, updated_at, version
 		FROM nodes
 		WHERE valid_to IS NULL
 		AND updated_at > created_at
-		AND updated_at > $1` + nsFilter + `
+		AND updated_at > $1
 		ORDER BY updated_at DESC
-		LIMIT 50`
+		LIMIT 50`, []any{sinceTime})
 
 	var updatedNodes []nodeRef
-	uArgs := []any{sinceTime}
-	if ns != "" {
-		uArgs = append(uArgs, ns)
-	}
-	rows, err = h.pool.Query(r.Context(), updateQuery, uArgs...)
+	rows, err = h.pool.Query(r.Context(), updateQuery, updateArgs...)
 	if err == nil {
 		for rows.Next() {
 			var n nodeRef
@@ -113,10 +113,10 @@ func (h *AnalyzeHandler) Diff(w http.ResponseWriter, r *http.Request) {
 		JOIN nodes s ON e.source_id = s.id AND s.valid_to IS NULL
 		JOIN nodes t ON e.target_id = t.id AND t.valid_to IS NULL
 		WHERE e.created_at > $1`
-	eArgs := []any{sinceTime}
+	edgeArgs := []any{sinceTime}
 	if ns != "" {
 		edgeQuery += " AND (s.namespace = $2 OR t.namespace = $2)"
-		eArgs = append(eArgs, ns)
+		edgeArgs = append(edgeArgs, ns)
 	}
 	edgeQuery += " ORDER BY e.created_at DESC LIMIT 50"
 
@@ -130,7 +130,7 @@ func (h *AnalyzeHandler) Diff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var newEdges []edgeRef
-	rows, err = h.pool.Query(r.Context(), edgeQuery, eArgs...)
+	rows, err = h.pool.Query(r.Context(), edgeQuery, edgeArgs...)
 	if err == nil {
 		for rows.Next() {
 			var e edgeRef
@@ -145,19 +145,15 @@ func (h *AnalyzeHandler) Diff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Deleted nodes (valid_to set since sinceTime)
-	deletedQuery := `
+	deletedQuery, deletedArgs := buildQuery(`
 		SELECT id, label, namespace, node_type::text, valid_to
 		FROM nodes
-		WHERE valid_to IS NOT NULL AND valid_to > $1` + nsFilter + `
+		WHERE valid_to IS NOT NULL AND valid_to > $1
 		ORDER BY valid_to DESC
-		LIMIT 50`
+		LIMIT 50`, []any{sinceTime})
 
-	dArgs := []any{sinceTime}
-	if ns != "" {
-		dArgs = append(dArgs, ns)
-	}
 	var deletedNodes []nodeRef
-	rows, err = h.pool.Query(r.Context(), deletedQuery, dArgs...)
+	rows, err = h.pool.Query(r.Context(), deletedQuery, deletedArgs...)
 	if err == nil {
 		for rows.Next() {
 			var n nodeRef

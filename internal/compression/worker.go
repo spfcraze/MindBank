@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"mindbank/internal/embedder"
+	"mindbank/internal/models"
 	"mindbank/internal/repository"
 )
 
@@ -19,6 +21,7 @@ import (
 type Worker struct {
 	pool         *pgxpool.Pool
 	settingsRepo *repository.SettingsRepo
+	nodeRepo     *repository.NodeRepo
 	ollamaURL    string
 	model        string
 	interval     time.Duration
@@ -30,6 +33,7 @@ func NewWorker(pool *pgxpool.Pool, settingsRepo *repository.SettingsRepo, ollama
 	return &Worker{
 		pool:         pool,
 		settingsRepo: settingsRepo,
+		nodeRepo:     repository.NewNodeRepo(pool),
 		ollamaURL:    ollamaURL,
 		model:        model,
 		interval:     30 * time.Second,
@@ -90,16 +94,50 @@ func (w *Worker) processBatch(ctx context.Context) {
 		model = fallback
 	}
 
-	// Process queue with selected model
+	// Self-feed: enqueue long raw-capture nodes that haven't been queued yet.
+	// Nothing else produces compression work, so without this the pipeline
+	// is permanently idle even when enabled.
+	if _, err := w.pool.Exec(ctx, `
+		INSERT INTO compression_queue (node_id)
+		SELECT n.id FROM nodes n
+		WHERE n.valid_to IS NULL
+		  AND n.node_type IN ('session', 'event')
+		  AND length(n.content) >= 2000
+		  AND NOT EXISTS (SELECT 1 FROM compression_queue cq WHERE cq.node_id = n.id)
+		ORDER BY n.created_at
+		LIMIT 50
+	`); err != nil {
+		slog.Error("compression enqueue candidates", "error", err)
+		return
+	}
+
+	// Retire pending rows whose node was superseded/soft-deleted: the claim
+	// join below would never pick them, so left pending they'd permanently
+	// occupy the claim window and starve real work.
+	if _, err := w.pool.Exec(ctx, `
+		UPDATE compression_queue cq
+		SET status = 'done', last_error = 'node superseded', processed_at = now()
+		WHERE cq.status = 'pending'
+		  AND NOT EXISTS (SELECT 1 FROM nodes n WHERE n.id = cq.node_id AND n.valid_to IS NULL)
+	`); err != nil {
+		slog.Error("compression retire stale", "error", err)
+	}
+
+	// Claim a batch (skip-locked so multiple instances can't double-claim),
+	// joining nodes so superseded/deleted nodes are never compressed.
 	rows, err := w.pool.Query(ctx, `
-		SELECT id, label, content, summary 
-		FROM nodes 
-		WHERE id IN (
-			SELECT node_id FROM embedding_queue 
-			WHERE compress = true AND status = 'pending'
-			ORDER BY created_at 
+		UPDATE compression_queue cq
+		SET status = 'processing', attempts = attempts + 1, processed_at = now()
+		FROM nodes n
+		WHERE cq.id IN (
+			SELECT id FROM compression_queue
+			WHERE status = 'pending' AND attempts < 3
+			ORDER BY created_at
 			LIMIT 5
+			FOR UPDATE SKIP LOCKED
 		)
+		  AND n.id = cq.node_id AND n.valid_to IS NULL
+		RETURNING n.id, n.label, n.content, coalesce(n.summary, ''), n.workspace_name, n.namespace
 	`)
 	if err != nil {
 		slog.Error("compression query", "error", err)
@@ -107,15 +145,27 @@ func (w *Worker) processBatch(ctx context.Context) {
 	}
 	defer rows.Close()
 
+	type job struct {
+		id, label, content, summary, workspace, namespace string
+	}
+	var jobs []job
 	for rows.Next() {
-		var id, label, content, summary string
-		if err := rows.Scan(&id, &label, &content, &summary); err != nil {
+		var j job
+		if err := rows.Scan(&j.id, &j.label, &j.content, &j.summary, &j.workspace, &j.namespace); err != nil {
 			continue
 		}
+		jobs = append(jobs, j)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Error("compression rows", "error", err)
+		return
+	}
+	rows.Close()
 
-		if err := w.compressNode(ctx, id, label, content, summary, model); err != nil {
-			slog.Error("compress node", "id", id, "error", err)
-			w.markFailed(ctx, id, err.Error())
+	for _, j := range jobs {
+		if err := w.compressNode(ctx, j.id, j.label, j.content, j.summary, j.workspace, j.namespace, model); err != nil {
+			slog.Error("compress node", "id", j.id, "error", err)
+			w.markFailed(ctx, j.id, err.Error())
 		}
 	}
 }
@@ -145,7 +195,7 @@ func (w *Worker) modelAvailable(model string) bool {
 	return false
 }
 
-func (w *Worker) compressNode(ctx context.Context, id, label, content, summary, model string) error {
+func (w *Worker) compressNode(ctx context.Context, id, label, content, summary, workspace, namespace, model string) error {
 	text := label + "\n" + summary + "\n" + content
 	if len(text) > 8000 {
 		text = text[:8000]
@@ -182,7 +232,7 @@ Text:
 	}
 
 	// Create child nodes for each extracted item
-	if err := w.createExtractedNodes(ctx, id, result); err != nil {
+	if err := w.createExtractedNodes(ctx, id, workspace, namespace, result); err != nil {
 		return fmt.Errorf("create nodes: %w", err)
 	}
 
@@ -233,7 +283,7 @@ func extractJSON(text string) string {
 	return text
 }
 
-func (w *Worker) createExtractedNodes(ctx context.Context, parentID string, result struct {
+func (w *Worker) createExtractedNodes(ctx context.Context, parentID, workspace, namespace string, result struct {
 	Facts     []string `json:"facts"`
 	Concepts  []string `json:"concepts"`
 	Decisions []string `json:"decisions"`
@@ -241,51 +291,70 @@ func (w *Worker) createExtractedNodes(ctx context.Context, parentID string, resu
 }) error {
 	// Create nodes for each extracted fact
 	for _, fact := range result.Facts {
-		if err := w.createNode(ctx, parentID, fact, "fact"); err != nil {
+		if err := w.createNode(ctx, parentID, workspace, namespace, fact, "fact"); err != nil {
 			slog.Error("compression: create fact node", "error", err)
 		}
 	}
 	for _, concept := range result.Concepts {
-		if err := w.createNode(ctx, parentID, concept, "concept"); err != nil {
+		if err := w.createNode(ctx, parentID, workspace, namespace, concept, "concept"); err != nil {
 			slog.Error("compression: create concept node", "error", err)
 		}
 	}
 	for _, decision := range result.Decisions {
-		if err := w.createNode(ctx, parentID, decision, "decision"); err != nil {
+		if err := w.createNode(ctx, parentID, workspace, namespace, decision, "decision"); err != nil {
 			slog.Error("compression: create decision node", "error", err)
 		}
 	}
 	for _, problem := range result.Problems {
-		if err := w.createNode(ctx, parentID, problem, "problem"); err != nil {
+		if err := w.createNode(ctx, parentID, workspace, namespace, problem, "problem"); err != nil {
 			slog.Error("compression: create problem node", "error", err)
 		}
 	}
 	return nil
 }
 
-func (w *Worker) createNode(ctx context.Context, parentID, content, nodeType string) error {
+// createNode stores one extracted item via NodeRepo.Create so it gets hash
+// dedup (retries don't spawn duplicates) and cache invalidation, inherits the
+// parent's workspace/namespace (the old hardcoded 'default' workspace wasn't
+// even seeded, so every insert failed its FK), links it to the source node,
+// and enqueues embedding so the memory is reachable by semantic recall.
+func (w *Worker) createNode(ctx context.Context, parentID, workspace, namespace, content, nodeType string) error {
 	label := content
 	if len(label) > 80 {
 		label = label[:80] + "..."
 	}
-	_, err := w.pool.Exec(ctx, `
-		INSERT INTO nodes (workspace_name, namespace, label, node_type, content, summary, materialized_path)
-		VALUES ('default', 'global', $1, $2, $3, $3, '/' || gen_random_uuid()::text)
-	`, label, nodeType, content)
+	node, err := w.nodeRepo.Create(ctx, models.NodeCreate{
+		WorkspaceName: workspace,
+		Namespace:     namespace,
+		Label:         label,
+		NodeType:      models.NodeType(nodeType),
+		Content:       content,
+		Summary:       content,
+	})
 	if err != nil {
 		return fmt.Errorf("insert node: %w", err)
+	}
+	if !node.Deduplicated {
+		_, _ = w.pool.Exec(ctx, `
+			INSERT INTO edges (workspace_name, source_id, target_id, edge_type, weight)
+			VALUES ($1, $2, $3, 'produced', 0.8)
+			ON CONFLICT (source_id, target_id, edge_type) DO NOTHING
+		`, workspace, parentID, node.ID)
+		if err := embedder.EnqueueNode(ctx, w.pool, node.ID); err != nil {
+			slog.Warn("compression: enqueue embedding", "node_id", node.ID, "error", err)
+		}
 	}
 	return nil
 }
 
 func (w *Worker) markFailed(ctx context.Context, nodeID, errMsg string) {
 	_, _ = w.pool.Exec(ctx,
-		"UPDATE embedding_queue SET status = 'failed', error = $1 WHERE node_id = $2",
+		"UPDATE compression_queue SET status = 'failed', last_error = $1, processed_at = now() WHERE node_id = $2",
 		errMsg, nodeID)
 }
 
 func (w *Worker) markCompleted(ctx context.Context, nodeID string) {
 	_, _ = w.pool.Exec(ctx,
-		"UPDATE embedding_queue SET status = 'completed', completed_at = now() WHERE node_id = $1",
+		"UPDATE compression_queue SET status = 'done', processed_at = now() WHERE node_id = $1",
 		nodeID)
 }

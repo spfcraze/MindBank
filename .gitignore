@@ -1,7 +1,45 @@
-/docs/plans
-/brain3d-physics/target/debug
-/tests
-/tests
-/tests/integration
-/tests
-/tests
+# Secrets / local config
+.env
+.env.dsn
+*.env
+!.env.example
+
+# Compiled binaries
+mindbank
+mindbank-api
+mindbank-mcp
+backfill-ns
+cleanup-labels
+scheduler
+*.exe
+*.dll
+*.so
+*.new
+internal/handler/static/mindbank-api
+
+# Release artifacts / prepared trees
+ready/
+ready-backup-*/
+release/
+*.tar.gz
+
+# Rust build output (brain3d physics)
+brain3d-physics/target/
+
+# Node
+node_modules/
+
+# Logs & generated reports
+*.log
+recall_audit_report.json
+
+# OS
+.DS_Store
+
+# Stray artifacts / backups
+__pycache__/
+*.pyc
+*.old
+*.backup.*
+*.bak
+/1

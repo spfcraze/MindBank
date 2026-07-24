@@ -11,15 +11,33 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"mindbank/internal/autocapture"
 )
 
 const (
-	pollInterval      = 60 * time.Second
-	mindbankAPI       = "http://localhost:8095"
-	stateFile         = "/tmp/mindbank-miner-state.json"
-	nodeCreatePath    = "/api/v1/nodes"
-	edgeCreatePath    = "/api/v1/edges"
+	pollInterval   = 60 * time.Second
+	nodeCreatePath = "/api/v1/nodes"
+	edgeCreatePath = "/api/v1/edges"
 )
+
+// stateFile lives under the user's home, not /tmp: /tmp is wiped on reboot,
+// which reset the miner and re-mined every session file from scratch.
+var stateFile = func() string {
+	if home, err := os.UserHomeDir(); err == nil {
+		dir := filepath.Join(home, ".mindbank")
+		if err := os.MkdirAll(dir, 0755); err == nil {
+			return filepath.Join(dir, "miner-state.json")
+		}
+	}
+	return "/tmp/mindbank-miner-state.json"
+}()
+
+var mindbankAPI = envOr("MB_API_URL", "http://localhost:8095")
+
+// httpClient bounds API calls: the default client has no timeout, so a hung
+// API server would block the miner's poll loop forever.
+var httpClient = &http.Client{Timeout: 30 * time.Second}
 
 // NodeCreatePayload is the request body for creating a node.
 type NodeCreatePayload struct {
@@ -146,6 +164,13 @@ func runOnce(sessionsDir string, state *MinerState) error {
 			continue
 		}
 
+		// Write-quiescence gate: skip files modified in the last 30s so a
+		// transcript still being written isn't mined truncated and then
+		// permanently marked processed.
+		if info, err := entry.Info(); err != nil || time.Since(info.ModTime()) < 30*time.Second {
+			continue
+		}
+
 		fmt.Printf("[MindBank Miner] Processing new file: %s\n", fullPath)
 
 		content, err := os.ReadFile(fullPath)
@@ -160,9 +185,18 @@ func runOnce(sessionsDir string, state *MinerState) error {
 		if v, ok := frontmatter["workspace"]; ok && v != "" {
 			ws = v
 		}
-		ns := "hermes"
+		// Namespace = the project folder the work happened in. Prefer an
+		// explicit frontmatter namespace, else scan the transcript for a
+		// /home/rat/<project> path, else fall back to the workspace bucket.
+		ns := ""
 		if v, ok := frontmatter["namespace"]; ok && v != "" {
 			ns = v
+		}
+		if ns == "" {
+			ns = autocapture.NamespaceFromText(string(content))
+		}
+		if ns == "" {
+			ns = "hermes"
 		}
 
 		// Extract rich metadata from transcript
@@ -513,7 +547,7 @@ func createNode(node NodeCreatePayload) (string, error) {
 		return "", err
 	}
 
-	resp, err := http.Post(mindbankAPI+nodeCreatePath, "application/json", bytes.NewReader(payload))
+	resp, err := httpClient.Post(mindbankAPI+nodeCreatePath, "application/json", bytes.NewReader(payload))
 	if err != nil {
 		return "", err
 	}
@@ -537,7 +571,7 @@ func createEdge(edge EdgeCreatePayload) error {
 		return err
 	}
 
-	resp, err := http.Post(mindbankAPI+edgeCreatePath, "application/json", bytes.NewReader(payload))
+	resp, err := httpClient.Post(mindbankAPI+edgeCreatePath, "application/json", bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
@@ -573,8 +607,15 @@ func saveState(state *MinerState) {
 		fmt.Fprintf(os.Stderr, "[MindBank Miner] Warning: could not marshal state: %v\n", err)
 		return
 	}
-	if err := os.WriteFile(stateFile, data, 0644); err != nil {
+	// Write via temp file + rename so a crash mid-write can't leave a
+	// corrupt state file (which reset the miner and re-mined everything).
+	tmp := stateFile + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "[MindBank Miner] Warning: could not write state file: %v\n", err)
+		return
+	}
+	if err := os.Rename(tmp, stateFile); err != nil {
+		fmt.Fprintf(os.Stderr, "[MindBank Miner] Warning: could not rename state file: %v\n", err)
 	}
 }
 
@@ -583,4 +624,11 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }

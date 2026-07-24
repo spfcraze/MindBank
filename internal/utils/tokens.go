@@ -1,5 +1,21 @@
 package utils
 
+import "unicode/utf8"
+
+// TruncateUTF8 shortens s to at most maxBytes without splitting a multi-byte
+// rune; a plain s[:n] cut can leave an invalid byte that JSON encoders turn
+// into U+FFFD, handing agents mangled memory content.
+func TruncateUTF8(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
+}
+
 // EstimateTokens returns a rough token count for a text string.
 // Uses the heuristic: 4 characters ≈ 1 token (English average).
 func EstimateTokens(text string) int {

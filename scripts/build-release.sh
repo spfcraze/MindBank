@@ -54,10 +54,10 @@ cat > "$RELEASE_DIR/.env" << 'EOF'
 # For local development, the default password below works with the Docker Postgres setup.
 
 # Database password (used by docker-compose.yml)
-MB_POSTGRES_PASSWORD=YOUR_DB_PASSWORD
+MB_POSTGRES_PASSWORD=mindbank
 
 # Full database DSN (used by mindbank-api and mindbank-mcp binaries)
-MB_DB_DSN=postgres://mindbank:YOUR_DB_PASSWORD@localhost:5434/mindbank?sslmode=disable
+MB_DB_DSN=postgres://mindbank:mindbank@localhost:5434/mindbank?sslmode=disable
 
 # Service ports
 MB_PG_PORT=5434
@@ -93,7 +93,7 @@ services:
     environment:
       POSTGRES_DB: mindbank
       POSTGRES_USER: mindbank
-      POSTGRES_PASSWORD: ${MB_POSTGRES_PASSWORD:-changeme}
+      POSTGRES_PASSWORD: mindbank
     ports:
       - "5434:5432"
     volumes:

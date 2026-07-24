@@ -2,8 +2,11 @@ package autocapture
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -13,6 +16,12 @@ import (
 	"mindbank/internal/models"
 	"mindbank/internal/repository"
 )
+
+// quiescencePeriod is how long a file must be unmodified before ingestion.
+// Session files are processed only after the writer has plausibly finished;
+// ingesting a file mid-write captured truncated JSON and then permanently
+// skipped the completed session.
+const quiescencePeriod = 30 * time.Second
 
 // Watcher watches for Hermes session files and creates namespace-aware sessions.
 type Watcher struct {
@@ -30,12 +39,58 @@ func NewWatcher(sessionRepo *repository.SessionRepo, nodeRepo *repository.NodeRe
 	}
 }
 
+// contentHash returns the ledger key for a file's current content.
+func contentHash(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// alreadyProcessed reports whether this exact (path, content) pair was
+// already ingested. A ledger miss for a changed file means the new content
+// gets processed even if an earlier (e.g. truncated) version was recorded.
+func (w *Watcher) alreadyProcessed(ctx context.Context, path, hash string) bool {
+	var exists bool
+	err := w.sessionRepo.Pool().QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM autocapture_files WHERE path = $1 AND content_hash = $2)
+	`, path, hash).Scan(&exists)
+	if err != nil {
+		slog.Warn("autocapture ledger check failed", "path", path, "error", err)
+		return false
+	}
+	return exists
+}
+
+// recordProcessed writes the ledger entry for a processed file.
+func (w *Watcher) recordProcessed(ctx context.Context, path, hash, outcome, sessionID string) {
+	var sid any
+	if sessionID != "" {
+		sid = sessionID
+	}
+	if _, err := w.sessionRepo.Pool().Exec(ctx, `
+		INSERT INTO autocapture_files (path, content_hash, outcome, session_id)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (path, content_hash) DO NOTHING
+	`, path, hash, outcome, sid); err != nil {
+		slog.Warn("autocapture ledger write failed", "path", path, "error", err)
+	}
+}
+
 // ProcessFile reads a session file, derives namespace, and creates a session.
+// Quality gates applied to prevent noise injection:
+//   - Skips files already ingested with identical content (durable ledger)
+//   - Skips files with generic/test labels
+//   - Skips sessions with no meaningful content
+//   - Skips duplicate sessions (same label + namespace within 1 hour)
 func (w *Watcher) ProcessFile(ctx context.Context, path string) error {
 	// Read the session file
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read session file: %w", err)
+	}
+
+	hash := contentHash(data)
+	if w.alreadyProcessed(ctx, path, hash) {
+		return nil
 	}
 
 	// Derive namespace from session data
@@ -47,6 +102,27 @@ func (w *Watcher) ProcessFile(ctx context.Context, path string) error {
 
 	// Extract label from filename or session content
 	label := w.deriveLabel(path, data)
+
+	// QUALITY GATE 1: Skip generic/test labels
+	if w.isLowQualityLabel(label) {
+		slog.Info("skipping low-quality session", "path", path, "label", label)
+		w.recordProcessed(ctx, path, hash, "skipped_low_quality", "")
+		return nil
+	}
+
+	// QUALITY GATE 2: Skip sessions with no meaningful content
+	if !w.hasMeaningfulContent(data) {
+		slog.Info("skipping empty session", "path", path)
+		w.recordProcessed(ctx, path, hash, "skipped_empty", "")
+		return nil
+	}
+
+	// QUALITY GATE 3: Skip duplicate sessions (same label + namespace within 1 hour)
+	if w.isDuplicateSession(ctx, label, namespace) {
+		slog.Info("skipping duplicate session", "path", path, "label", label, "namespace", namespace)
+		w.recordProcessed(ctx, path, hash, "skipped_duplicate", "")
+		return nil
+	}
 
 	// Extract topic for metadata
 	topic := w.extractTopic(data)
@@ -65,6 +141,7 @@ func (w *Watcher) ProcessFile(ctx context.Context, path string) error {
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)
 	}
+	w.recordProcessed(ctx, path, hash, "ingested", session.ID)
 
 	slog.Info("session captured",
 		"path", path,
@@ -73,6 +150,53 @@ func (w *Watcher) ProcessFile(ctx context.Context, path string) error {
 	)
 
 	return nil
+}
+
+// isLowQualityLabel checks if a label indicates test/simulation noise.
+func (w *Watcher) isLowQualityLabel(label string) bool {
+	lower := strings.ToLower(label)
+	prefixes := []string{"sim:", "test:", "worker", "session_", "untitled", "no metadata", "clean path"}
+	for _, p := range prefixes {
+		if strings.HasPrefix(lower, p) || strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasMeaningfulContent checks if the session has actual user content.
+func (w *Watcher) hasMeaningfulContent(data []byte) bool {
+	var session struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(data, &session); err != nil {
+		return false
+	}
+	// Require at least one user message with >20 chars
+	for _, msg := range session.Messages {
+		if msg.Role == "user" && len(strings.TrimSpace(msg.Content)) > 20 {
+			return true
+		}
+	}
+	return false
+}
+
+// isDuplicateSession checks if a similar session was created recently.
+func (w *Watcher) isDuplicateSession(ctx context.Context, label, namespace string) bool {
+	// Check for existing session with same name in last hour
+	recent, err := w.sessionRepo.ListRecent(ctx, "hermes", namespace, time.Hour)
+	if err != nil {
+		return false
+	}
+	for _, s := range recent {
+		if strings.EqualFold(s.Name, label) {
+			return true
+		}
+	}
+	return false
 }
 
 // deriveLabel extracts a label from the filename or session content.
@@ -377,6 +501,11 @@ func (w *Watcher) ProcessEventFile(ctx context.Context, path string) error {
 		return fmt.Errorf("read event file: %w", err)
 	}
 
+	hash := contentHash(data)
+	if w.alreadyProcessed(ctx, path, hash) {
+		return nil
+	}
+
 	event, err := w.parseEvent(data)
 	if err != nil {
 		return fmt.Errorf("parse event: %w", err)
@@ -410,6 +539,7 @@ func (w *Watcher) ProcessEventFile(ctx context.Context, path string) error {
 	if err != nil {
 		return fmt.Errorf("create event node: %w", err)
 	}
+	w.recordProcessed(ctx, path, hash, "ingested_event", "")
 
 	slog.Info("event captured",
 		"path", path,
@@ -429,26 +559,10 @@ func (w *Watcher) Start(ctx context.Context) error {
 		return fmt.Errorf("create watch path: %w", err)
 	}
 
-	// Process existing files first
-	entries, err := os.ReadDir(w.watchPath)
-	if err != nil {
-		slog.Warn("failed to read watch directory", "path", w.watchPath, "error", err)
-	} else {
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			name := entry.Name()
-			// Skip request dump files (failed API error artifacts)
-			if strings.HasPrefix(name, "request_dump_") {
-				continue
-			}
-			path := filepath.Join(w.watchPath, name)
-			if err := w.ProcessFile(ctx, path); err != nil {
-				slog.Warn("failed to process existing file", "path", path, "error", err)
-			}
-		}
-	}
+	// Process existing files first. The durable ledger inside ProcessFile
+	// makes this restart-safe: previously every boot re-ingested the whole
+	// directory with only a 1-hour dedup window.
+	w.scanForNewFiles(ctx, make(map[string]fileStamp))
 
 	slog.Info("namespace-aware auto-capture watcher started", "path", w.watchPath)
 
@@ -459,26 +573,51 @@ func (w *Watcher) Start(ctx context.Context) error {
 	return nil
 }
 
+// fileStamp identifies a file state already handled this process lifetime,
+// so unchanged files don't get re-hashed and re-checked every scan tick.
+type fileStamp struct {
+	modTime time.Time
+	size    int64
+}
+
 // Watch continuously monitors for new session files.
 // This is a placeholder for future fsnotify-based implementation.
 func (w *Watcher) Watch(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
-	processed := make(map[string]time.Time)
+	seen := make(map[string]fileStamp)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			w.scanForNewFiles(ctx, processed)
+			w.scanForNewFiles(ctx, seen)
 		}
 	}
 }
 
+// shouldProcess applies the in-memory stamp cache and the write-quiescence
+// gate. Returning false with no stamp update means the file is retried on a
+// later scan (e.g. still being written).
+func shouldProcess(seen map[string]fileStamp, path string, info fs.FileInfo, now time.Time) bool {
+	stamp := fileStamp{modTime: info.ModTime(), size: info.Size()}
+	if prev, ok := seen[path]; ok && prev == stamp {
+		return false
+	}
+	// Quiescence: skip files still (plausibly) being written. The old logic
+	// was inverted — it processed ONLY files modified in the last minute,
+	// i.e. exactly the ones most likely mid-write, and skipped everything
+	// older forever.
+	if now.Sub(info.ModTime()) < quiescencePeriod {
+		return false
+	}
+	return true
+}
+
 // scanForNewFiles scans the watch directory for new files.
-func (w *Watcher) scanForNewFiles(ctx context.Context, processed map[string]time.Time) {
+func (w *Watcher) scanForNewFiles(ctx context.Context, seen map[string]fileStamp) {
 	// Scan session files
 	entries, err := os.ReadDir(w.watchPath)
 	if err != nil {
@@ -487,12 +626,6 @@ func (w *Watcher) scanForNewFiles(ctx context.Context, processed map[string]time
 	}
 
 	now := time.Now()
-	// Clean up old entries (older than 1 hour)
-	for path, t := range processed {
-		if now.Sub(t) > time.Hour {
-			delete(processed, path)
-		}
-	}
 
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -500,41 +633,35 @@ func (w *Watcher) scanForNewFiles(ctx context.Context, processed map[string]time
 		}
 
 		name := entry.Name()
-		// Skip request dump files (failed API error artifacts)
-		if strings.HasPrefix(name, "request_dump_") {
+		// Skip request dump files (failed API error artifacts) and
+		// in-flight temp files from atomic writers
+		if strings.HasPrefix(name, "request_dump_") || strings.HasSuffix(name, ".tmp") {
 			continue
 		}
 
 		path := filepath.Join(w.watchPath, name)
-		// Skip recently processed files
-		if _, ok := processed[path]; ok {
-			continue
-		}
-
-		// Check file modification time
 		info, err := entry.Info()
 		if err != nil {
 			continue
 		}
-
-		// Only process files modified in the last minute
-		if now.Sub(info.ModTime()) > time.Minute {
+		if !shouldProcess(seen, path, info, now) {
 			continue
 		}
 
 		if err := w.ProcessFile(ctx, path); err != nil {
+			// Leave no stamp: the file is retried next scan.
 			slog.Warn("failed to process file", "path", path, "error", err)
 		} else {
-			processed[path] = now
+			seen[path] = fileStamp{modTime: info.ModTime(), size: info.Size()}
 		}
 	}
 
 	// Scan event files
-	w.scanEventFiles(ctx, processed, now)
+	w.scanEventFiles(ctx, seen, now)
 }
 
 // scanEventFiles scans the events directory for new event files.
-func (w *Watcher) scanEventFiles(ctx context.Context, processed map[string]time.Time, now time.Time) {
+func (w *Watcher) scanEventFiles(ctx context.Context, seen map[string]fileStamp, now time.Time) {
 	eventsDir := filepath.Join(w.watchPath, "events")
 	entries, err := os.ReadDir(eventsDir)
 	if err != nil {
@@ -557,29 +684,23 @@ func (w *Watcher) scanEventFiles(ctx context.Context, processed map[string]time.
 		}
 
 		for _, eventFile := range eventFiles {
-			if eventFile.IsDir() {
+			if eventFile.IsDir() || strings.HasSuffix(eventFile.Name(), ".tmp") {
 				continue
 			}
 
 			path := filepath.Join(sessionDir, eventFile.Name())
-			// Skip recently processed
-			if _, ok := processed[path]; ok {
-				continue
-			}
-
-			// Check modification time
 			info, err := eventFile.Info()
 			if err != nil {
 				continue
 			}
-			if now.Sub(info.ModTime()) > time.Minute {
+			if !shouldProcess(seen, path, info, now) {
 				continue
 			}
 
 			if err := w.ProcessEventFile(ctx, path); err != nil {
 				slog.Warn("failed to process event file", "path", path, "error", err)
 			} else {
-				processed[path] = now
+				seen[path] = fileStamp{modTime: info.ModTime(), size: info.Size()}
 			}
 		}
 	}

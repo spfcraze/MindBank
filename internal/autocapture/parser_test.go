@@ -115,14 +115,35 @@ func TestParseSessionForNamespace(t *testing.T) {
 		}
 	})
 
-	t.Run("invalid json returns error", func(t *testing.T) {
+	t.Run("unparseable input falls back to global without error", func(t *testing.T) {
+		// New contract: never hard-error. JSONL and malformed files must not
+		// error out (that bug sent every JSONL session to "global").
 		sessionJSON := `{"working_directory":}`
 		got, err := ParseSessionForNamespace([]byte(sessionJSON))
-		if err == nil {
-			t.Fatal("expected error for invalid JSON, got nil")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
 		if got != "global" {
 			t.Errorf("ParseSessionForNamespace() = %q, want %q", got, "global")
+		}
+	})
+
+	t.Run("JSONL session resolves project from message bodies", func(t *testing.T) {
+		jsonl := `{"role":"session_meta","source_file":"/home/rat/.claude/projects/-home-rat/x.jsonl"}
+{"role":"user","content":"please look at /home/rat/mindbank/internal"}
+{"role":"assistant","content":"editing /home/rat/mindbank/main.go"}`
+		got, _ := ParseSessionForNamespace([]byte(jsonl))
+		if got != "mindbank" {
+			t.Errorf("JSONL namespace = %q, want %q", got, "mindbank")
+		}
+	})
+
+	t.Run("claude source_file decodes project when no path in body", func(t *testing.T) {
+		jsonl := `{"role":"session_meta","source_file":"/home/rat/.claude/projects/-home-rat-myproj/x.jsonl"}
+{"role":"user","content":"hello"}`
+		got, _ := ParseSessionForNamespace([]byte(jsonl))
+		if got != "myproj" {
+			t.Errorf("source_file namespace = %q, want %q", got, "myproj")
 		}
 	})
 

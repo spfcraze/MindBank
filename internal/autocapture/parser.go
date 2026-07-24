@@ -90,62 +90,136 @@ func isAllDigits(s string) bool {
 	return len(s) > 0
 }
 
-// ParseSessionForNamespace extracts the namespace from a Hermes session JSON.
-// Checks multiple sources in priority order:
-//   1. working_directory / cwd fields (old format)
-//   2. System prompt — scans for /home/rat/<project> paths (AGENTS.md injection)
-//   3. User messages — scans first messages for /home/rat/<project> paths
-// Falls back to "global" if no project directory is found.
+// ParseSessionForNamespace extracts the namespace from a Hermes session file.
+// Handles BOTH single-object JSON and JSONL (one object per line) — Hermes
+// session files are JSONL, so the old single-Unmarshal always failed on them
+// and everything fell back to "global".
+//
+// Signal priority:
+//  1. Explicit working_directory / cwd (any record)
+//  2. Frequency-scored /home/rat/<project> scan across system prompt +
+//     message bodies — the reliable signal (a real session mentions its
+//     project directory many times)
+//  3. claude source_file encoding (.claude/projects/-home-rat-<proj>/...)
+//
+// Falls back to "global" only when no project signal exists. Never returns a
+// hard error — a malformed file just yields "global".
 func ParseSessionForNamespace(data []byte) (string, error) {
-	var session struct {
-		WorkingDirectory string `json:"working_directory"`
-		CWD              string `json:"cwd"`
-		SystemPrompt     string `json:"system_prompt"`
-		Messages         []struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		} `json:"messages"`
+	return NamespaceFromSession(data), nil
+}
+
+// NamespaceFromSession is the robust, error-free namespace extractor.
+func NamespaceFromSession(data []byte) string {
+	records := decodeSessionRecords(data)
+	if len(records) == 0 {
+		return "global"
 	}
 
-	if err := json.Unmarshal(data, &session); err != nil {
-		return "global", err
-	}
-
-	// Source 1: Explicit working_directory / cwd (old sessions)
-	if session.WorkingDirectory != "" {
-		return DeriveNamespaceFromPath(session.WorkingDirectory), nil
-	}
-	if session.CWD != "" {
-		return DeriveNamespaceFromPath(session.CWD), nil
-	}
-
-	// Source 2: System prompt — scans for project directory paths
-	if session.SystemPrompt != "" {
-		if ns := extractProjectFromText(session.SystemPrompt); ns != "" {
-			return ns, nil
+	var textParts []string
+	var sourceFiles []string
+	collect := func(m map[string]interface{}) {
+		for _, key := range []string{"system_prompt", "content", "text", "note"} {
+			if v, ok := m[key].(string); ok && v != "" {
+				textParts = append(textParts, v)
+			}
+		}
+		if v, ok := m["source_file"].(string); ok && v != "" {
+			sourceFiles = append(sourceFiles, v)
 		}
 	}
-
-	// Source 3: First N user messages — scans for project directory paths
-	// Collect up to 10 user messages for broader signal
-	var userTexts []string
-	for _, msg := range session.Messages {
-		if msg.Role == "user" && len(strings.TrimSpace(msg.Content)) > 5 {
-			userTexts = append(userTexts, msg.Content)
-			if len(userTexts) >= 10 {
-				break
+	for _, r := range records {
+		// Source 1: explicit working directory wins immediately
+		for _, key := range []string{"working_directory", "cwd"} {
+			if v, ok := r[key].(string); ok && v != "" {
+				return DeriveNamespaceFromPath(v)
+			}
+		}
+		collect(r)
+		// Single-object format nests turns under a "messages" array
+		if msgs, ok := r["messages"].([]interface{}); ok {
+			for _, m := range msgs {
+				if mm, ok := m.(map[string]interface{}); ok {
+					collect(mm)
+				}
 			}
 		}
 	}
 
-	combinedUserText := strings.Join(userTexts, " ")
-	if combinedUserText != "" {
-		if ns := extractProjectFromText(combinedUserText); ns != "" {
-			return ns, nil
+	// Source 2: frequency-scored /home/rat/<project> across all text
+	if ns := extractProjectFromText(strings.Join(textParts, "\n")); ns != "" {
+		return ns
+	}
+
+	// Source 3: decode the claude project dir from source_file paths
+	for _, sf := range sourceFiles {
+		if ns := namespaceFromClaudeSourceFile(sf); ns != "" {
+			return ns
 		}
 	}
 
-	return "global", nil
+	return "global"
+}
+
+// decodeSessionRecords parses session bytes as either a single JSON object or
+// JSONL. Returns each top-level object as a map; unparseable lines are skipped.
+func decodeSessionRecords(data []byte) []map[string]interface{} {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" {
+		return nil
+	}
+
+	// Single JSON object?
+	var single map[string]interface{}
+	if json.Unmarshal([]byte(trimmed), &single) == nil {
+		return []map[string]interface{}{single}
+	}
+
+	// Otherwise treat as JSONL (one object per line)
+	var out []map[string]interface{}
+	for _, line := range strings.Split(trimmed, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var rec map[string]interface{}
+		if json.Unmarshal([]byte(line), &rec) == nil {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
+// namespaceFromClaudeSourceFile decodes a claude projects path
+// (.claude/projects/-home-rat-myproj/<uuid>.jsonl) into a namespace. The
+// encoding replaces '/' with '-', so "-home-rat-myproj" → "/home/rat/myproj"
+// → "myproj". Returns "" when the decoded dir is just the home directory
+// (no project) or nothing usable.
+func namespaceFromClaudeSourceFile(sourceFile string) string {
+	marker := "/projects/"
+	idx := strings.Index(sourceFile, marker)
+	if idx < 0 {
+		return ""
+	}
+	rest := sourceFile[idx+len(marker):]
+	slash := strings.Index(rest, "/")
+	if slash >= 0 {
+		rest = rest[:slash]
+	}
+	// rest is like "-home-rat-myproj"; decode dashes to path separators
+	decoded := strings.ReplaceAll(rest, "-", "/")
+	ns := DeriveNamespaceFromPath(decoded)
+	// "/home/rat" decodes to base "rat" (home, not a project) — reject it
+	if ns == "rat" || ns == "home" {
+		return ""
+	}
+	return ns
+}
+
+// NamespaceFromText derives a namespace by scanning arbitrary text (e.g. a
+// markdown transcript) for /home/rat/<project> paths. Returns "" if none
+// found, so callers can keep their own fallback.
+func NamespaceFromText(text string) string {
+	return extractProjectFromText(text)
 }
 
 // extractProjectFromText scans text for /home/rat/<project> patterns and returns
@@ -229,7 +303,8 @@ func extractProjectFromText(text string) string {
 	return ""
 }
 
-// isCommonDir returns true if the name is a common directory, not a project.
+// isCommonDir returns true if the name is a common directory or a placeholder,
+// not a real project.
 func isCommonDir(name string) bool {
 	common := map[string]bool{
 		"go": true, "bin": true, "src": true, "lib": true, "tmp": true,
@@ -237,11 +312,21 @@ func isCommonDir(name string) bool {
 		".hermes": true, ".cargo": true, ".npm": true, "downloads": true,
 		"documents": true, "desktop": true, "pictures": true,
 		"rat": true, ".omp": true, ".nvm": true, ".cache": true,
+		// Documentation placeholders that appear in prompts/examples
+		"<project>": true, "project": true, "your-project": true,
+		"projectname": true, "name": true,
 	}
 
 	// Filter hidden directories (start with '.')
 	if strings.HasPrefix(name, ".") {
 		return true
+	}
+	// A real folder name only contains these chars; anything else (angle
+	// brackets, quotes, braces) is a template placeholder or parse noise.
+	for _, r := range name {
+		if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.') {
+			return true
+		}
 	}
 
 	return common[name]

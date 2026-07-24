@@ -32,10 +32,14 @@ func CheckDuplicate(ctx context.Context, pool *pgxpool.Pool, hash string) (strin
 	return nodeID, nil
 }
 
-// StoreHash saves a hash -> node_id mapping.
+// StoreHash saves a hash -> node_id mapping. On conflict the mapping is
+// repointed to the new node: DO NOTHING left stale hash->dead-node rows in
+// place forever, so once a node was superseded, every future save of that
+// content skipped dedup and accumulated duplicates.
 func StoreHash(ctx context.Context, pool *pgxpool.Pool, hash, nodeID string) error {
 	_, err := pool.Exec(ctx,
-		"INSERT INTO node_hashes (hash, node_id) VALUES ($1, $2) ON CONFLICT (hash) DO NOTHING",
+		`INSERT INTO node_hashes (hash, node_id) VALUES ($1, $2)
+		 ON CONFLICT (hash) DO UPDATE SET node_id = EXCLUDED.node_id, created_at = now()`,
 		hash, nodeID)
 	return err
 }

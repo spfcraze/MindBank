@@ -132,18 +132,11 @@ export function createFactGlyph() {
 }
 
 export function createProblemGlyph() {
-    const geo = new THREE.IcosahedronGeometry(0.35, 0);
-    const pos = geo.attributes.position;
-
-    for (let i = 0; i < pos.count; i += 2) {
-        const x = pos.getX(i);
-        const y = pos.getY(i);
-        const z = pos.getZ(i);
-        const len = Math.sqrt(x*x + y*y + z*z);
-        const factor = 1.8;
-        pos.setXYZ(i, x / len * factor, y / len * factor, z / len * factor);
-    }
-
+    // Clean octahedron (sharp diamond) — reads as "issue/alert" and stays
+    // visually distinct from the fact cube, concept rings, and decision scale.
+    // The previous spiky icosahedron pushed individual (non-indexed) face
+    // vertices outward, which tore the faces apart and looked messy.
+    const geo = new THREE.OctahedronGeometry(0.42, 0);
     geo.computeVertexNormals();
     return geo;
 }

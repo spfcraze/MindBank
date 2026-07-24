@@ -14,10 +14,26 @@ import (
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
+// migrationLockKey is an arbitrary but fixed advisory-lock key for migrations.
+const migrationLockKey = 0x4D696E64 // "Mind"
+
 // Migrate runs all SQL migrations in order. Idempotent — safe to call on every startup.
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
+	// Serialize migrators cluster-wide: the API and MCP servers both migrate
+	// on startup, and two concurrent runs both see a migration as unapplied,
+	// race the DDL, and crash the loser.
+	lockConn, err := pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire migration lock conn: %w", err)
+	}
+	defer lockConn.Release()
+	if _, err := lockConn.Exec(ctx, "SELECT pg_advisory_lock($1)", migrationLockKey); err != nil {
+		return fmt.Errorf("acquire migration lock: %w", err)
+	}
+	defer lockConn.Exec(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1)", migrationLockKey)
+
 	// Ensure migration tracking table
-	_, err := pool.Exec(ctx, `
+	_, err = pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS _migrations (
 			name        TEXT PRIMARY KEY,
 			applied_at  TIMESTAMPTZ NOT NULL DEFAULT now()

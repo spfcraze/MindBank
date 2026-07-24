@@ -37,7 +37,7 @@ func NewHTTPServer(mcpServer *Server, port string) (*HTTPServer, error) {
 
 	hs.httpServer = &http.Server{
 		Addr:         ":" + port,
-		Handler:      mux,
+		Handler:      NewRateLimiter(100, 10*time.Second).Middleware(mux),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}
@@ -92,7 +92,12 @@ func (hs *HTTPServer) handleMCP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	resp := hs.mcpServer.handleRequest(r.Context(), &req)
+	// Bound each request so one hung DB/Ollama call can't tie up the handler
+	// indefinitely (mirrors the 60s cap the stdio transport applies).
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	resp := hs.mcpServer.handleRequest(ctx, &req)
 	if resp == nil {
 		// Notification — no response
 		w.WriteHeader(http.StatusAccepted)

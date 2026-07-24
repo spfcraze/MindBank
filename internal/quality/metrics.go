@@ -163,14 +163,16 @@ func calculateScore(m *GraphMetrics) float64 {
 		return 0
 	}
 
-	// Component weights
-	orphanScore := 20.0 * (1.0 - m.OrphanPercent/100.0)
-	duplicateScore := 20.0 * (1.0 - m.DuplicatePercent/100.0)
-	densityScore := 20.0 * math.Min(m.EdgeDensity*1000, 1.0) // scale up small densities
-	topicScore := 20.0 * (m.TopicCoveragePct / 100.0)
-	connectivityScore := 20.0 * (m.LargestComponentPct / 100.0)
+	// Component weights (same as frontend DQA)
+	// Priority: empty content > duplicates > orphans > disconnected > uncontained > low importance
+	// Frontend uses: (clean / total) * 100 where clean = total - uniqueIssues
+	// Map backend metrics to match frontend categories
+	orphanScore := 25.0 * (1.0 - m.OrphanPercent/100.0)
+	duplicateScore := 25.0 * (1.0 - m.DuplicatePercent/100.0)
+	connectivityScore := 25.0 * (m.LargestComponentPct / 100.0)
+	densityScore := 25.0 * math.Min(m.EdgeDensity*1000, 1.0)
 
-	score := orphanScore + duplicateScore + densityScore + topicScore + connectivityScore
+	score := orphanScore + duplicateScore + connectivityScore + densityScore
 	if score < 0 {
 		score = 0
 	}

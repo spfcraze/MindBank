@@ -30,7 +30,11 @@ import (
 //go:embed static/*
 var staticFS embed.FS
 
-func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
+// NewRouter builds the HTTP handler. ctx bounds the background workers
+// started here (embedding worker): tying them to the process's signal
+// context lets shutdown stop them between batches instead of killing them
+// mid-write when main returns.
+func NewRouter(ctx context.Context, pool *pgxpool.Pool, cfg config.Config) http.Handler {
 	r := chi.NewRouter()
 
 	// Middleware
@@ -38,9 +42,12 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Compress(5, "application/json", "text/html", "text/css", "application/javascript", "image/svg+xml"))
-	r.Use(middleware.Timeout(30 * 1e9)) // 30s
+	// Request size limit (10MB max body)
+	r.Use(middleware.RequestSize(10 * 1024 * 1024))
+
+	// CORS
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   cfg.CORSOrigins,
+		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
 		ExposedHeaders:   []string{"Link"},
@@ -56,14 +63,25 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 	nodeRepo.SetSearchRepo(searchRepo)
 	sessionRepo := repository.NewSessionRepo(pool)
 	snapshotRepo := repository.NewSnapshotRepo(pool)
+	// Link node repo to snapshot repo for cache invalidation on writes
+	nodeRepo.SetSnapshotRepo(snapshotRepo)
 	depRepo := repository.NewDependenceRepo(pool)
+	settingsRepo := repository.NewSettingsRepo(pool)
 
 	// Embedder client
 	embClient := embedder.NewClient(cfg.OllamaURL, cfg.EmbedModel)
 
-	// Start embedding worker in background
+	// LLM extractor for session mining. Env values are the defaults; the
+	// dashboard Settings tab can override URL/key/model at runtime (stored in
+	// settingsRepo), so users without a GPU can point at OpenRouter/OpenAI.
+	llmReasoner := reasoner.NewLLMReasoner(pool, embClient, cfg.LLMAPIURL, cfg.LLMAPIKey, cfg.LLMModel, settingsRepo)
+	if llmReasoner.Enabled() {
+		slog.Info("LLM extraction enabled")
+	}
+
+	// Start embedding worker in background, bound to the process lifetime
 	worker := embedder.NewWorker(pool, embClient)
-	go worker.Run(context.Background())
+	go worker.Run(ctx)
 
 	// Reasoner
 	ruleBased := reasoner.NewRuleBased(pool)
@@ -123,7 +141,7 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 		// Auth middleware (disabled if MB_API_KEY not set)
 		r.Use(APIKeyAuth)
 
-		// Rate limiting: 100 requests per minute per IP
+		// Rate limiting: 300 requests per minute per IP
 		r.Use(NewRateLimiter(300, time.Minute).Middleware)
 
 		// Version
@@ -143,9 +161,9 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 				}
 			}
 			respondJSON(w, 200, map[string]string{
-				"version":      ver,
-				"git_commit":   gitCommit,
-				"install_dir":  installDir,
+				"version":     ver,
+				"git_commit":  gitCommit,
+				"install_dir": installDir,
 				"install_type": func() string {
 					if _, err := os.Stat(filepath.Join(installDir, ".git")); err == nil {
 						return "git"
@@ -253,7 +271,7 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 			r.Post("/refine-connectivity", ah.RefineConnectivity)
 			r.Get("/evolution", ah.Evolution)
 			r.Post("/cluster-sessions", ah.ClusterSessions)
-		
+
 			// Existing routes
 			r.Get("/contradictions", ah.Contradictions)
 			r.Get("/gaps", ah.Gaps)
@@ -280,12 +298,19 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 		RegisterUpdateRoutes(r, uh)
 
 		// Compression Settings
-		settingsRepo := repository.NewSettingsRepo(pool)
 		compSettingsHandler := NewCompressionSettingsHandler(settingsRepo, cfg.OllamaURL)
 		r.Route("/settings/compression", func(r chi.Router) {
 			r.Get("/", compSettingsHandler.GetSettings)
 			r.Post("/", compSettingsHandler.UpdateSettings)
 			r.Post("/setup", compSettingsHandler.Setup)
+		})
+
+		// LLM Settings (session-mining API config — OpenRouter/OpenAI/local)
+		llmSettingsHandler := NewLLMSettingsHandler(settingsRepo, cfg)
+		r.Route("/settings/llm", func(r chi.Router) {
+			r.Get("/", llmSettingsHandler.GetSettings)
+			r.Post("/", llmSettingsHandler.UpdateSettings)
+			r.Post("/test", llmSettingsHandler.TestConnection)
 		})
 
 		// Taxonomy (auto-classification)
@@ -303,6 +328,37 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 		// DQA analyze endpoint
 		dqaHandler := NewDQAHandler(pool)
 		r.Get("/dqa/analyze", dqaHandler.Analyze)
+
+		// Dream Engine (neural consolidation)
+		dreamHandler := NewDreamHandler(pool)
+		r.Route("/dream", func(r chi.Router) {
+			// Rate limit: 1 trigger per hour per API key
+			r.Post("/trigger", dreamHandler.Trigger)
+			r.Get("/status", dreamHandler.Status)
+			r.Get("/history", dreamHandler.History)
+		})
+
+		// Conflict Detection
+		conflictHandler := NewConflictHandler(pool)
+		r.Post("/conflicts/detect", conflictHandler.Detect)
+		r.Get("/conflicts", conflictHandler.List)
+		r.Post("/conflicts/{id}/resolve", conflictHandler.Resolve)
+		r.Post("/conflicts/supersede", conflictHandler.Supersede)
+
+		// Session Mining
+		sessionMineHandler := NewSessionMineHandler(pool, llmReasoner)
+		r.Post("/sessions/mine", sessionMineHandler.MineSessions)
+
+		// Token Reranking (ColBERT equivalent)
+		rerankHandler := NewRerankHandler(pool)
+		r.Post("/search/rerank", rerankHandler.Search)
+		r.Post("/rerank", rerankHandler.Rerank)
+
+		// Graph-Aware Embeddings (DAE equivalent)
+		graphEmbedHandler := NewGraphEmbedHandler(pool)
+		r.Post("/graph-embed/compute", graphEmbedHandler.Compute)
+		r.Post("/graph-embed/batch", graphEmbedHandler.BatchCompute)
+		r.Post("/graph-embed/search", graphEmbedHandler.Search)
 
 		// Skills Registry
 		skillsHandler := NewSkillsHandler(pool)
@@ -368,6 +424,50 @@ func NewRouter(pool *pgxpool.Pool, cfg config.Config) http.Handler {
 				}
 			}
 			respondJSON(w, 200, map[string]any{"types": types, "count": len(types)})
+		})
+
+		// Node type counts (fast GROUP BY — replaces slow /graph call for dashboard charts)
+		r.Get("/node-type-counts", func(w http.ResponseWriter, r *http.Request) {
+			rows, err := pool.Query(r.Context(), `SELECT node_type, COUNT(*) FROM nodes WHERE valid_to IS NULL GROUP BY node_type ORDER BY COUNT(*) DESC`)
+			if err != nil {
+				respondError(w, 500, "failed to get node type counts")
+				return
+			}
+			defer rows.Close()
+			type tc struct {
+				Type  string `json:"type"`
+				Count int    `json:"count"`
+			}
+			var result []tc
+			for rows.Next() {
+				var item tc
+				if err := rows.Scan(&item.Type, &item.Count); err == nil {
+					result = append(result, item)
+				}
+			}
+			respondJSON(w, 200, map[string]any{"types": result, "total": len(result)})
+		})
+
+		// Namespace counts (fast GROUP BY — replaces slow /graph call for dashboard charts)
+		r.Get("/namespace-counts", func(w http.ResponseWriter, r *http.Request) {
+			rows, err := pool.Query(r.Context(), `SELECT namespace, COUNT(*) FROM nodes WHERE valid_to IS NULL GROUP BY namespace ORDER BY COUNT(*) DESC`)
+			if err != nil {
+				respondError(w, 500, "failed to get namespace counts")
+				return
+			}
+			defer rows.Close()
+			type nc struct {
+				Namespace string `json:"namespace"`
+				Count     int    `json:"count"`
+			}
+			var result []nc
+			for rows.Next() {
+				var item nc
+				if err := rows.Scan(&item.Namespace, &item.Count); err == nil {
+					result = append(result, item)
+				}
+			}
+			respondJSON(w, 200, map[string]any{"namespaces": result, "total": len(result)})
 		})
 
 		// Forgetting routes

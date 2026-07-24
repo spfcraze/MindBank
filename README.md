@@ -59,7 +59,8 @@ MindBank **remembers**:
 |---------|-------------|
 | 🔍 **Hybrid Search** | Full-text + semantic vector search combined with Reciprocal Rank Fusion. Find "auth bug" even if you wrote "authentication failure" |
 | 📁 **Temporal Versioning** | Never lose history. Every update creates a new version. See what changed, when, and why |
-| 🌱 **100% Local** | Embeddings via Ollama (nomic-embed-text). No API keys, no cloud, no data leaves your machine |
+| 🌱 **Local-First** | Embeddings run locally via Ollama (nomic-embed-text) — no keys, no cloud, no data leaves your machine by default |
+| 🔌 **Configurable LLM** | Optional knowledge extraction via any OpenAI-compatible API — local Ollama, or hosted OpenRouter/OpenAI/Groq for users without a GPU. Set it from the **Settings** tab |
 | 🔗 **Graph Relationships** | Nodes connected by typed edges (`contains`, `relates_to`, `depends_on`, `decided_by`, etc.) |
 | 🖼️ **Per-Project Isolation** | Auto-namespace by working directory. `~/project-a` and `~/project-b` have separate memory graphs |
 | ⚡ **Wake-Up Context** | Pre-computed snapshot of important memories served on session start |
@@ -114,6 +115,7 @@ The web UI gives you:
 - **Graph 2D** — Interactive force-directed visualization
 - **Brain 3D** — Immersive 3D graph exploration
 - **Observer** — Causal precursor tracing, blind spot detection, knowledge coverage analysis
+- **Settings** — Configure the LLM backend used for knowledge extraction: local Ollama or any OpenAI-compatible API (OpenRouter, OpenAI, Groq, DeepSeek), with provider auto-detect and a Test Connection button
 
 ---
 
@@ -361,27 +363,40 @@ bash scripts/install-plugin.sh --claude-desktop --hermes
 | `mindbank_neighbors` | Graph traversal (connected nodes) |
 | `mindbank_dependence` | **Trace causal precursors** — understand *why* a decision exists |
 
+> The MCP server (Claude Desktop/Code) also exposes management tools beyond the core five: `create_edge`, `update_node`, `list_namespaces`, `evolution`, `cluster_sessions`, `refine_connectivity`, `mine_sessions`, `conflicts`, and `dream_status`.
+
 **Dependence Expansion:** Both `search` and `ask` support an optional `dependence_expansion` flag. When enabled, MindBank traces backward from the top result through `depends_on`, `learned_from`, `decided_by`, `produced`, and `supports` edges to surface the supporting evidence that led to a decision or fact. This gives your AI agent the full causal chain, not just the conclusion.
 
 ---
 
-## Unified Mining Pipeline
+## Session Mining
 
-MindBank automatically mines knowledge from your Hermes sessions and `.md` cron logs:
+MindBank mines knowledge from your Hermes/agent session transcripts and turns them into
+structured memories. When an LLM backend is configured (see the **Settings** tab), it
+extracts decisions/facts/problems/preferences with an LLM; otherwise it falls back to a
+lightweight heuristic.
+
+**Trigger mining via the API (recommended):**
 
 ```bash
-# Run full pipeline (called automatically by update.sh)
-python3 scripts/unified_scheduler.py
-
-# Or run individual miners:
-python3 scripts/md_miner.py --dry-run        # Preview .md log mining
-python3 scripts/session_miner.py --mine-all  # Mine sessions + MEMORY.md
-python3 scripts/node_fixer.py --dry-run    # Preview node repairs
+# Mine all un-processed sessions for a workspace
+curl -X POST http://localhost:8095/api/v1/sessions/mine \
+  -H 'Content-Type: application/json' -d '{"workspace":"hermes","mine_all":true}'
 ```
 
-### .md Log Mining
+…or from any MCP client with the `mine_sessions` tool.
 
-Hermes cron jobs generate `.md` logs at `~/.hermes/cron/output/`. The `md_miner.py` extracts only the `## Response` section, ignoring injected skill dumps. Each response is classified (decision/fact/problem/advice/preference/project) and stored as a MindBank node with skill provenance metadata.
+**Scripts (for automation / cron):**
+
+```bash
+python3 scripts/session_watcher.py       # Watch session dir, auto-mine new files
+python3 scripts/batch_mine.py            # Batch-mine existing sessions
+python3 scripts/mine_jsonl_sessions.py   # Mine Hermes .jsonl session files
+python3 scripts/auto_miner.py <file>     # Mine a single session file
+python3 scripts/backfill_namespaces.py   # Re-derive project namespaces from paths
+```
+
+The Go scheduler (`cmd/scheduler`) can also poll for new sessions continuously.
 
 ### Skill Query
 
@@ -459,7 +474,7 @@ POST /api/v1/snapshot/rebuild
 │                    MindBank Architecture                     │
 └─────────────────────────────────────────────────────────────────────┘
 
-  💻 Dashboard (static/)          🤖 MCP Server (stdio)
+  💻 Dashboard (static/)          🤖 MCP Server (HTTP :8096)
          │                              │
          └──────────────────────────────────┘
                         │
@@ -491,14 +506,19 @@ POST /api/v1/snapshot/rebuild
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MB_PORT` | `8095` | HTTP server port |
-| `MB_DB_DSN` | `postgres://mindbank:YOUR_DB_PASSWORD@localhost:5434/mindbank?sslmode=disable` | PostgreSQL connection string |
+| `MB_DB_DSN` | `postgres://mindbank:mindbank@localhost:5434/mindbank?sslmode=disable` | PostgreSQL connection string |
 | `MB_POSTGRES_PASSWORD` | `mindbank` | Postgres password (used by docker-compose) |
 | `MB_OLLAMA_URL` | `http://localhost:11434` | Ollama API endpoint |
-| `MB_EMBED_MODEL` | `nomic-embed-text` | Embedding model |
+| `MB_EMBED_MODEL` | `nomic-embed-text` | Embedding model (always local) |
+| `MB_LLM_API_URL` | `<ollama>/v1` | LLM extraction endpoint (OpenAI-compatible). Overridable from the Settings tab |
+| `MB_LLM_API_KEY` | *(none)* | API key for the LLM endpoint (blank for local Ollama) |
+| `MB_LLM_MODEL` | *(none)* | Extraction model. Empty = LLM extraction off (regex fallback) |
 | `MB_LOG_LEVEL` | `info` | debug / info / warn / error |
 | `MB_API_KEY` | *(none)* | Require API key for all endpoints |
 | `MCP_HTTP_PORT` | `8096` | MCP server HTTP port |
-| `MCP_TRANSPORT` | *(stdio)* | Set to `http` for HTTP mode |
+| `MCP_TRANSPORT` | `http` | Transport mode (`http` for the bundled service; `stdio` for direct MCP clients) |
+
+> **Tip:** The **Settings** tab writes `MB_LLM_*` values to the database at runtime, so you can switch the extraction model without editing `.env` or restarting.
 
 ---
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +31,9 @@ func NewSnapshotRepo(pool *pgxpool.Pool) *SnapshotRepo {
 
 const snapshotCacheTTL = 5 * time.Minute
 
+// snapLeadMarkers matches leading list/heading markers on a snippet.
+var snapLeadMarkers = regexp.MustCompile(`^([-*>#]+\s*|\d+[.)]\s*)+`)
+
 // Pool returns the underlying connection pool.
 func (r *SnapshotRepo) Pool() *pgxpool.Pool {
 	return r.pool
@@ -53,13 +57,13 @@ func (r *SnapshotRepo) GenerateFiltered(ctx context.Context, workspace, nsFilter
 		name = "default"
 	}
 
-	// Get top nodes by importance score
+	// Get top nodes by importance score with status weighting and confirmation boost
 	rows, err := r.pool.Query(ctx, `
 		SELECT n.id, n.label, n.node_type::text, n.content, n.summary, n.namespace,
 			(
-				0.30 * COALESCE(1.0 - EXTRACT(EPOCH FROM (now() - n.last_accessed)) / 2592000.0, 0.5)::real
-				+ 0.25 * LEAST(n.access_count::real / 100.0, 1.0)::real
-				+ 0.20 * LEAST((SELECT COUNT(*)::real / 20.0 FROM edges WHERE source_id = n.id OR target_id = n.id), 1.0)::real
+				0.25 * COALESCE(1.0 - EXTRACT(EPOCH FROM (now() - n.last_accessed)) / 2592000.0, 0.5)::real
+				+ 0.20 * LEAST(n.access_count::real / 100.0, 1.0)::real
+				+ 0.15 * LEAST((SELECT COUNT(*)::real / 20.0 FROM edges WHERE source_id = n.id OR target_id = n.id), 1.0)::real
 				+ 0.15 * n.importance
 				+ 0.10 * CASE n.node_type
 					WHEN 'decision' THEN 1.0
@@ -74,9 +78,25 @@ func (r *SnapshotRepo) GenerateFiltered(ctx context.Context, workspace, nsFilter
 					WHEN 'concept' THEN 0.3
 					ELSE 0.5
 				END::real
+				+ 0.10 * CASE n.status
+					WHEN 'supported' THEN 1.5
+					WHEN 'open' THEN 1.0
+					WHEN 'inconclusive' THEN 0.7
+					WHEN 'refuted' THEN 0.1
+					WHEN 'blocked' THEN 0.0
+					ELSE 1.0
+				END::real
+				+ 0.05 * LEAST(n.confirmation_count::real / 3.0, 1.0)::real
 			) AS score
 		FROM nodes n
 		WHERE n.valid_to IS NULL
+		  AND n.status <> 'blocked'
+		  -- Exclude container/shell nodes: sessions and events are transcript
+		  -- wrappers ("Session mined on DATE"), not memories. The wake-up
+		  -- context should be distilled knowledge, not session filenames.
+		  AND n.node_type NOT IN ('session', 'event')
+		  -- Require some substance so empty/placeholder nodes don't fill it.
+		  AND (COALESCE(NULLIF(n.summary, ''), NULLIF(n.content, '')) IS NOT NULL)
 		  AND ($1 = '' OR n.workspace_name = $1)
 		  AND ($2 = '' OR n.namespace = $2)
 		ORDER BY score DESC
@@ -99,22 +119,28 @@ func (r *SnapshotRepo) GenerateFiltered(ctx context.Context, workspace, nsFilter
 			continue
 		}
 
-		// Skip duplicates (same label+type can appear from version chains)
-		seenKey := label + "|" + nodeType
+		// Deduplicate by label (collapses regex-era duplicate-label nodes).
+		label = strings.TrimSpace(label)
+		seenKey := strings.ToLower(label) + "|" + nodeType
 		if seen[seenKey] {
 			continue
 		}
 		seen[seenKey] = true
 
-		line := summary
-		if line == "" {
-			line = truncate(content, 120)
+		// Compact snippet, and omit it when it just repeats the label (common
+		// in regex-era nodes where content ≈ label) so the wake-up context
+		// stays clean and cheap.
+		snip := snapshotSnippet(summary)
+		if snip == "" {
+			snip = snapshotSnippet(content)
 		}
-		if line == "" {
-			continue
+		entry := "- [" + nodeType + "] " + label
+		if snip != "" {
+			ll, ss := strings.ToLower(label), strings.ToLower(snip)
+			if !strings.HasPrefix(ss, ll) && !strings.HasPrefix(ll, ss) {
+				entry += " — " + snip
+			}
 		}
-
-		entry := fmt.Sprintf("- [%s] %s: %s", nodeType, label, line)
 		entryTokens := len(entry) / 4
 
 		if tokens+entryTokens > maxTokens {
@@ -159,6 +185,35 @@ func (r *SnapshotRepo) SetCache(workspace, nsFilter, name, content string, token
 	r.cacheMu.Unlock()
 }
 
+// InvalidateCache removes a snapshot from the cache.
+func (r *SnapshotRepo) InvalidateCache(workspace, nsFilter, name string) {
+	cacheKey := workspace + ":" + name + ":" + nsFilter
+	r.cacheMu.Lock()
+	delete(r.cache, cacheKey)
+	r.cacheMu.Unlock()
+}
+
+// InvalidateAllNamespaces removes all cached snapshots for a workspace.
+func (r *SnapshotRepo) InvalidateAllNamespaces(workspace, name string) {
+	r.cacheMu.Lock()
+	prefix := workspace + ":" + name + ":"
+	for key := range r.cache {
+		if strings.HasPrefix(key, prefix) {
+			delete(r.cache, key)
+		}
+	}
+	r.cacheMu.Unlock()
+}
+
+// InvalidateAllWorkspaces removes all cached snapshots.
+func (r *SnapshotRepo) InvalidateAllWorkspaces() {
+	r.cacheMu.Lock()
+	for key := range r.cache {
+		delete(r.cache, key)
+	}
+	r.cacheMu.Unlock()
+}
+
 // GetFiltered retrieves a snapshot, filtering by namespace if specified.
 // When namespace is provided, always generates fresh (cached snapshots don't account for namespace).
 func (r *SnapshotRepo) GetFiltered(ctx context.Context, workspace, nsFilter, name string) (string, int, error) {
@@ -192,4 +247,21 @@ func (r *SnapshotRepo) GetFiltered(ctx context.Context, workspace, nsFilter, nam
 
 	// Cache miss or expired — signal caller to regenerate
 	return "", 0, fmt.Errorf("namespace filter requires regeneration")
+}
+
+// snapshotSnippet returns a clean, single-line preview: markdown stripped,
+// first sentence, capped. Keeps the wake-up context lean and readable.
+func snapshotSnippet(s string) string {
+	s = strings.NewReplacer("**", "", "__", "", "`", "", "│", " ", "\n", " ").Replace(s)
+	s = strings.Join(strings.Fields(s), " ")
+	s = strings.TrimSpace(s)
+	// Strip leading list/heading markers ("- ", "### ", "7. ", "2) ").
+	s = snapLeadMarkers.ReplaceAllString(s, "")
+	if i := strings.IndexAny(s, ".!?"); i > 20 && i < 130 {
+		return s[:i+1]
+	}
+	if len(s) > 130 {
+		return strings.TrimSpace(s[:130]) + "…"
+	}
+	return s
 }

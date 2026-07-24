@@ -59,12 +59,24 @@ const EVENT_COLORS = {
 const EDGE_COLORS = [
     0x4ecdc4, // depends_on - teal
     0x4ecdc4, // supports - teal
-    0x404040, // relates_to - subtle gray
+    0x64748b, // relates_to - visible slate (was 0x404040, nearly invisible)
     0x4ecdc4, // learned_from - teal
     0xa78bfa, // influences - purple
     0xff6b35, // contradicts - orange
     0x808080, // other - gray
+    0x3b82f6, // produced - blue (session → knowledge)
+    0x3b82f6, // contains - blue
 ];
+
+// Per-type edge opacity: structural relations read stronger than the
+// associative relates_to noise floor, so the graph's real skeleton is
+// visible at a glance.
+const EDGE_OPACITY = {
+    contains: 0.55, produced: 0.55, depends_on: 0.55, decided_by: 0.5,
+    contradicts: 0.6, supports: 0.45, learned_from: 0.45, influences: 0.45,
+    participated_in: 0.35, temporal_next: 0.3, mentions: 0.25,
+    relates_to: 0.22,
+};
 
 export class Brain3D {
     constructor(container) {
@@ -98,12 +110,12 @@ export class Brain3D {
         // Scene — deep space with subtle nebula tint
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(0x0a0a1a);
-        this.scene.fog = new THREE.FogExp2(0x0a0a1a, 0.008);
+        this.scene.fog = new THREE.FogExp2(0x0a0a1a, 0.004);
 
         // Camera — better default for large graphs
         const aspect = this.container.clientWidth / this.container.clientHeight;
-        this.camera = new THREE.PerspectiveCamera(60, aspect, 0.1, 1000);
-        this.camera.position.set(0, 30, 60);
+        this.camera = new THREE.PerspectiveCamera(60, aspect, 0.1, 4000);
+        this.camera.position.set(0, 45, 110);
 
         // Renderer
         this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
@@ -132,9 +144,9 @@ export class Brain3D {
             
             this.bloomPass = new window.UnrealBloomPass(
                 new THREE.Vector2(this.container.clientWidth, this.container.clientHeight),
-                1.5,  // strength
-                0.4,  // radius
-                0.85  // threshold
+                0.8,  // strength — reduced from 1.5 to prevent blown-out glow
+                0.5,  // radius
+                0.75  // threshold — only bright objects bloom
             );
             this.composer.addPass(this.bloomPass);
             console.log('[Brain3D] Bloom post-processing enabled');
@@ -142,12 +154,21 @@ export class Brain3D {
             console.log('[Brain3D] Bloom not available — post-processing classes not loaded');
         }
 
-        // Controls
+        // Controls — maxDistance is re-fit to the layout's bounding sphere
+        // after settle; the old hard cap of 50 trapped the camera inside the
+        // graph and made it impossible to see the overall structure.
         this.controls = new OrbitControls(this.camera, this.renderer.domElement);
         this.controls.enableDamping = true;
-        this.controls.dampingFactor = 0.05;
+        this.controls.dampingFactor = 0.08;
         this.controls.minDistance = 2;
-        this.controls.maxDistance = 50;
+        this.controls.maxDistance = 800;
+        // Smoother, more responsive navigation and zoom toward the cursor so
+        // it's easy to fly to a specific cluster of memories.
+        this.controls.rotateSpeed = 0.85;
+        this.controls.zoomSpeed = 1.15;
+        this.controls.panSpeed = 0.8;
+        this.controls.zoomToCursor = true;
+        this.controls.screenSpacePanning = true;
 
         // Lights — minimal, nodes are self-illuminated
         const ambient = new THREE.AmbientLight(0x404040, 1);
@@ -202,27 +223,22 @@ export class Brain3D {
 
         const time = performance.now() * 0.001;
 
-        // Grid layout: skip physics, use fixed grid positions
-        // Physics is disabled for powergrid layout
-
-        // HOWARD: Force-based physics simulation step (Tetra-Terryen)
-        // Static layout: update positions once, no physics step
+        // Rewrite instance matrices only when something actually changed —
+        // rewriting all N nodes every frame is what pinned FPS into single
+        // digits on large graphs. While the layout settles we keep updating;
+        // afterward it's driven by a dirty flag set on focus / visibility /
+        // dissolve / active collapse animations.
+        const dissolveActive = this._dissolveProgress !== this._dissolveTarget;
+        const hasActiveCollapse = this.collapseAnimations && this.collapseAnimations.size > 0;
         if (this.forcePhysics && this.forcePhysics.positions) {
-            const positions = this.forcePhysics.getPositions();
-            this.updateNodePositions(positions);
-        }
-
-        // Howard: Update node rotations (spin axes)
-        if (this.nodeSpinSpeeds && this.nodeRotations) {
-            for (let i = 0; i < this.nodes.length; i++) {
-                const speed = this.nodeSpinSpeeds[i] || 0.5;
-                this.nodeRotations[i * 3] += speed * 0.016;
-                this.nodeRotations[i * 3 + 1] += speed * 0.008;
+            if (this._settling || this._layoutDirty || dissolveActive || hasActiveCollapse) {
+                this.updateNodePositions(this.forcePhysics.getPositions());
+                this._layoutDirty = false;
             }
         }
 
-        // Howard: Update dissolve animation
-        if (this._dissolveProgress !== this._dissolveTarget) {
+        // Update dissolve animation
+        if (dissolveActive) {
             const delta = this._dissolveTarget - this._dissolveProgress;
             this._dissolveProgress += delta * 0.02;
             if (Math.abs(this._dissolveTarget - this._dissolveProgress) < 0.001) {
@@ -241,19 +257,33 @@ export class Brain3D {
         }
 
         this.controls.update();
-        
-        // Update labels
-        this._updateLabels();
-        
+
+        // Labels are the main CPU cost (per-label DOM writes + CSS2D
+        // transforms). Their screen position only changes when the camera or
+        // layout moves, so recompute + re-render them only then — this is
+        // what lifts a large graph from ~9fps to smooth.
+        const cam = this.camera.position, tgt = this.controls.target;
+        const camMoved = !this._lastCam ||
+            Math.abs(cam.x - this._lastCam[0]) + Math.abs(cam.y - this._lastCam[1]) +
+            Math.abs(cam.z - this._lastCam[2]) + Math.abs(tgt.x - this._lastCam[3]) +
+            Math.abs(tgt.y - this._lastCam[4]) + Math.abs(tgt.z - this._lastCam[5]) > 0.01;
+        const labelsDirty = camMoved || this._settling || this._layoutDirty || this._labelsForceUpdate;
+        if (labelsDirty) {
+            this._updateLabels();
+            this._lastCam = [cam.x, cam.y, cam.z, tgt.x, tgt.y, tgt.z];
+            this._labelsForceUpdate = false;
+        }
+
         // Render with bloom if available
         if (this.composer) {
             this.composer.render();
         } else {
             this.renderer.render(this.scene, this.camera);
         }
-        
-        // Render labels
-        if (this.labelRenderer) {
+
+        // Render labels only when they changed (CSS2D transforms every DOM
+        // node otherwise)
+        if (this.labelRenderer && labelsDirty) {
             this.labelRenderer.render(this.scene, this.camera);
         }
     }
@@ -322,11 +352,11 @@ export class Brain3D {
             const material = new THREE.MeshStandardMaterial({
                 color: typeColor,
                 emissive: typeColor,
-                emissiveIntensity: 0.3,
+                emissiveIntensity: 0.5,
                 roughness: 0.4,
                 metalness: 0.6,
                 transparent: true,
-                opacity: 0.95,
+                opacity: 0.9,
             });
 
             const count = nodes.length;
@@ -341,9 +371,12 @@ export class Brain3D {
                 const isProject = index < this.projectCount;
                 
                 let baseSize;
-                if (isProject) baseSize = 1.2;
-                else if (node.node_type === 'session') baseSize = 0.3;
-                else baseSize = 0.7;
+                if (isProject) baseSize = 1.0;
+                else if (node.node_type === 'session') baseSize = 0.25;
+                else if (node.node_type === 'problem') baseSize = 0.4;
+                else if (node.node_type === 'decision') baseSize = 0.5;
+                else if (node.node_type === 'fact') baseSize = 0.35;
+                else baseSize = 0.4;
                 
                 const tierMult = isProject ? this.tierToMult(node.importance || 0.5) : 0.6;
                 const size = baseSize * tierMult;
@@ -390,7 +423,17 @@ export class Brain3D {
     _createLabels(nodeData) {
         this._clearLabels();
         
+        // Limit labels to top nodes by importance to avoid DOM overload
+        const maxLabels = 200;
+        const sortedByImportance = [...nodeData].map((n, i) => ({ node: n, idx: i, imp: n.importance || 0.5 }))
+            .sort((a, b) => b.imp - a.imp);
+        const labelIndices = new Set(sortedByImportance.slice(0, maxLabels).map(s => s.idx));
+        
         for (let i = 0; i < nodeData.length; i++) {
+            if (!labelIndices.has(i)) {
+                this.labels.push(null); // placeholder for index alignment
+                continue;
+            }
             const node = nodeData[i];
             const labelText = (node.label || node.id).substring(0, 20);
             
@@ -415,10 +458,12 @@ export class Brain3D {
             this.scene.add(label);
             this.labels.push(label);
         }
+        this._labelsForceUpdate = true;
     }
 
     _clearLabels() {
         for (const label of this.labels) {
+            if (!label) continue;
             this.scene.remove(label);
             if (label.element && label.element.parentNode) {
                 label.element.parentNode.removeChild(label.element);
@@ -442,42 +487,54 @@ export class Brain3D {
             }
         }
         
+        if (!this._lblMatrix) { this._lblMatrix = new THREE.Matrix4(); this._lblPos = new THREE.Vector3(); }
+        const matrix = this._lblMatrix;
+        const pos = this._lblPos;
+
         for (const label of this.labels) {
+            if (!label) continue; // skip null placeholders
             const idx = label.userData.nodeIndex;
             const mapping = this.nodeIndexMap[idx];
             if (!mapping) continue;
-            
+
             const group = this.nodeGroups[mapping.group];
             const mesh = group.children[0];
-            const matrix = new THREE.Matrix4();
             mesh.getMatrixAt(mapping.local, matrix);
-            const pos = new THREE.Vector3();
             pos.setFromMatrixPosition(matrix);
-            
-            label.position.copy(pos);
-            label.position.y += 0.8;
-            
+
             const node = this.nodes[idx];
+            label.position.copy(pos);
+            label.position.y += (this._nodeRadii ? this._nodeRadii[idx] : 0.6) + 0.6;
+
+            const ds = this._labelDistScale || 1;
             const dist = camPos.distanceTo(pos);
-            
+
             // Determine if label should be visible
             let showLabel = false;
             let opacity = 0;
-            
+
             if (node.node_type === 'project') {
                 // Projects are always labeled (if close enough)
                 showLabel = true;
-                opacity = Math.min(1, Math.max(0, (40 - dist) / 20));
+                opacity = Math.min(1, Math.max(0, (110 * ds - dist) / (55 * ds)));
             } else if (this._focusedNode) {
                 // In focus mode: show selected + neighbors
                 if (focusNeighborIds.has(node.id)) {
                     showLabel = true;
-                    opacity = Math.min(1, Math.max(0, (30 - dist) / 15));
+                    opacity = Math.min(1, Math.max(0, (70 * ds - dist) / (34 * ds)));
                 }
             } else if (node.node_type === 'decision' || node.node_type === 'problem') {
                 // Decisions/problems labeled when close
-                showLabel = dist < 20;
-                opacity = Math.min(1, Math.max(0, (20 - dist) / 10));
+                showLabel = dist < 50 * ds;
+                opacity = Math.min(1, Math.max(0, (50 * ds - dist) / (24 * ds)));
+            } else if (node.node_type === 'session') {
+                // Sessions labeled only when very close
+                showLabel = dist < 30 * ds;
+                opacity = Math.min(1, Math.max(0, (30 * ds - dist) / (16 * ds)));
+            } else {
+                // Other types: show labels when close
+                showLabel = dist < 36 * ds;
+                opacity = Math.min(1, Math.max(0, (36 * ds - dist) / (18 * ds)));
             }
             
             // Selected node always labeled
@@ -485,8 +542,16 @@ export class Brain3D {
                 showLabel = true;
                 opacity = 1;
             }
-            
-            label.element.style.opacity = showLabel ? opacity : 0;
+
+            // Only touch the DOM when the value actually changes, and toggle
+            // the element out of the CSS2D layout entirely when hidden so the
+            // renderer skips it.
+            const finalOp = showLabel ? opacity : 0;
+            if (label._lastOp === undefined || Math.abs(label._lastOp - finalOp) > 0.02) {
+                label.element.style.opacity = finalOp;
+                label.element.style.display = finalOp <= 0.01 ? 'none' : '';
+                label._lastOp = finalOp;
+            }
         }
     }
     tierToMult(importance) {
@@ -495,6 +560,25 @@ export class Brain3D {
         if (importance >= 0.5) return 1.2;  // Tier 2
         if (importance >= 0.3) return 0.9;  // Tier 1
         return 0.6;  // Tier 0 - smallest
+    }
+
+    // Single source of truth for node visual scale, shared by rendering AND
+    // layout spacing so nodes are laid out with room for how big they draw.
+    // The old formula (base 4-7 x tier x type) made a project glyph ~19
+    // world units wide inside clusters of radius 8-20 — that mismatch was
+    // the "everything is one blob" bug.
+    _nodeScale(node) {
+        const imp = node.importance != null ? node.importance : 0.5;
+        if (node.node_type === 'project') {
+            return 3.0 + imp * 3.0; // 3.0-6.0: clear anchors, not planets
+        }
+        return (1.1 + imp * 1.1) * this._getTypeSizeMultiplier(node.node_type) * 1.7;
+    }
+
+    // Approximate world-space radius of a drawn glyph (glyph geometries are
+    // roughly 0.5 units in radius before instance scaling).
+    _nodeVisualRadius(node) {
+        return 0.55 * this._nodeScale(node);
     }
 
     updateNodePositions(positions) {
@@ -514,13 +598,25 @@ export class Brain3D {
             const node = this.nodes[i];
             const mesh = group.children[0];
 
-            const isHidden = this._hideGlobalNodes && node.namespace === 'global';
+            // Single source of truth for node visibility. The view-mode /
+            // toggle handlers just set these flags + mark dirty; this loop
+            // does the actual hiding every frame, so nothing gets overwritten.
+            let isHidden = this._hideGlobalNodes && node.namespace === 'global';
+            if (this._sessionsVisible === false && node.node_type === 'session') isHidden = true;
+            if (this._eventsVisible === false && node.node_type === 'event') isHidden = true;
+            if (this._topicFilter && node.node_type === 'session') {
+                const topic = node.metadata && node.metadata.topic;
+                if (topic !== this._topicFilter) isHidden = true;
+            }
 
-            // Type-based size hierarchy (Understand-Anything style)
-            const typeSizeMult = this._getTypeSizeMultiplier(node.node_type);
-            const baseSize = 0.3 + (node.importance || 0.5) * 0.4;
-            const tierMult = this.tierToMult(node.importance || 0.5);
-            let size = baseSize * tierMult * typeSizeMult;
+            // Shared size formula (also drives layout spacing)
+            let size = this._nodeScale(node);
+            // De-emphasize disconnected nodes so the connected skeleton — the
+            // actual reference of how memories relate — reads clearly through
+            // the haze of orphans.
+            const deg = this._degree ? this._degree[i] : 1;
+            const isOrphan = deg === 0 && node.node_type !== 'project';
+            if (isOrphan) size *= 0.6;
 
             // Focus mode: scale selected node larger
             if (this._focusedNode && this._focusedNode.id === node.id) {
@@ -540,11 +636,15 @@ export class Brain3D {
             const y = positions[i * 3 + 1];
             const z = positions[i * 3 + 2];
 
-            const pulsePhase = i * 0.5;
-            const glow = Math.sin(time * 0.03 + pulsePhase) * 0.3 + 0.7;
+            // Static scale (no per-frame breathing — reads as noise at scale
+            // and forced a full matrix rewrite every frame).
+            const glow = 1;
 
             dummy.position.set(x, y, z);
 
+            // Fixed per-node orientation, baked once at creation, so glyphs
+            // look varied without a continuous spin that costs a full matrix
+            // rewrite every frame.
             if (this.nodeRotations) {
                 dummy.rotation.set(
                     this.nodeRotations[i * 3],
@@ -590,7 +690,10 @@ export class Brain3D {
             dummy.updateMatrix();
             mesh.setMatrixAt(mapping.local, dummy.matrix);
             
-            // Update material opacity for focus mode
+            // Update material opacity for focus mode. Note: material is
+            // shared per type, so this sets the type's opacity from the last
+            // node processed — orphan dimming is applied via per-instance
+            // scale above; connected nodes keep full opacity.
             mesh.material.opacity = 0.95 * dissolveOpacity * focusOpacity;
         }
 
@@ -602,18 +705,21 @@ export class Brain3D {
     // Type-based size multiplier (Understand-Anything hierarchical sizing)
     _getTypeSizeMultiplier(nodeType) {
         switch (nodeType) {
-            case 'project': return 2.0;
-            case 'decision': return 1.2;
-            case 'problem': return 1.0;
+            case 'project': return 1.8;
+            case 'decision': return 1.0;
+            // Problems are the most numerous type; keep them small so they
+            // don't overwhelm the graph (was 0.7, second only to project).
+            case 'problem': return 0.45;
             case 'advice': return 0.5;
             case 'preference': return 0.5;
-            case 'fact': return 0.35;
+            case 'fact': return 0.4;
             case 'topic': return 0.6;
             case 'concept': return 0.6;
-            case 'event': return 0.6;
+            case 'event': return 0.5;
             case 'agent': return 0.7;
             case 'person': return 0.7;
             case 'question': return 0.6;
+            case 'session': return 0.3;
             default: return 0.5;
         }
     }
@@ -664,201 +770,227 @@ export class Brain3D {
     // STATIC SPATIAL LAYOUT — Projects as anchors, namespace clusters
     // Replaces force-based physics with computed fixed positions
     // ═══════════════════════════════════════════════════════════════════════════
+    // ─────────────────────────────────────────────────────────────────────
+    // EDGE-AWARE FORCE LAYOUT
+    // The old layout placed nodes in tight golden-spiral balls per namespace
+    // and never looked at edges, so connected memories landed on opposite
+    // sides of the scene and every connection was a long chord through the
+    // middle. This simulation makes edges springs (connected memories pull
+    // together), applies short-range repulsion + collision so nothing
+    // bunches, and keeps namespace clusters coherent with a weak cohesion
+    // force. It settles live over ~2s, then edges are built at the final
+    // positions and the camera fits the result.
+    // ─────────────────────────────────────────────────────────────────────
     initForcePhysics(nodes, edges, nodeIdToIndex) {
         const count = nodes.length;
         const pos = new Float32Array(count * 3);
 
-        // ─── STEP 1: Separate projects and non-projects ───
-        const projects = [];
-        const nonProjects = [];
-        for (let i = 0; i < count; i++) {
-            if (nodes[i].node_type === 'project') {
-                projects.push({index: i, node: nodes[i]});
-            } else {
-                nonProjects.push({index: i, node: nodes[i]});
-            }
+        // Visual radii drive spacing so layout matches what is drawn
+        const radii = new Float32Array(count);
+        for (let i = 0; i < count; i++) radii[i] = this._nodeVisualRadius(nodes[i]);
+        this._nodeRadii = radii;
+
+        // ── Springs from edges (deduped, typed rest lengths) ──
+        const springs = [];
+        const degree = new Float32Array(count);
+        this._degree = degree; // used by rendering to de-emphasize orphans
+        const seen = new Set();
+        for (const edge of edges) {
+            const a = nodeIdToIndex[edge.source];
+            const b = nodeIdToIndex[edge.target];
+            if (a === undefined || b === undefined || a === b) continue;
+            const key = a < b ? a * count + b : b * count + a;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const type = edge.edge_type || 'relates_to';
+            // Structural relations hold tight; associative ones are looser
+            let len = 10, k = 0.05;
+            if (type === 'contains' || type === 'produced') { len = 7; k = 0.08; }
+            else if (type === 'depends_on' || type === 'decided_by') { len = 8; k = 0.07; }
+            else if (type === 'relates_to' || type === 'mentions') { len = 14; k = 0.025; }
+            springs.push({ a, b, rest: radii[a] + radii[b] + len, k });
+            degree[a]++; degree[b]++;
         }
 
-        // Sort projects by importance (highest first)
-        projects.sort((a, b) => (b.node.importance || 0.5) - (a.node.importance || 0.5));
-
-        // ─── STEP 2: Position projects using organic force-directed layout ───
-        const projectPositions = new Map();
-        
-        // Initialize with random positions in a loose sphere
-        const PROJECT_SPREAD = 40;
-        for (let p = 0; p < projects.length; p++) {
-            const i = projects[p].index;
-            const seed = p * 137.5;
-            const theta = seed * (Math.PI / 180);
-            const phi = Math.acos(1 - 2 * ((p + 0.5) / Math.max(projects.length, 1)));
-            
-            const r = PROJECT_SPREAD * (0.5 + 0.5 * Math.sqrt(p / Math.max(projects.length, 1)));
-            const x = r * Math.sin(phi) * Math.cos(theta);
-            const z = r * Math.sin(phi) * Math.sin(theta);
-            const y = r * Math.cos(phi) * 0.3;
-            
-            pos[i * 3] = x;
-            pos[i * 3 + 1] = y;
-            pos[i * 3 + 2] = z;
-            projectPositions.set(projects[p].node.id, {x, y, z, index: i});
-        }
-
-        // Run force-directed iterations to spread projects naturally
-        const projectCount = projects.length;
-        for (let iter = 0; iter < 50; iter++) {
-            const forces = new Array(projectCount * 3).fill(0);
-            
-            for (let a = 0; a < projectCount; a++) {
-                for (let b = a + 1; b < projectCount; b++) {
-                    const ax = pos[projects[a].index * 3];
-                    const ay = pos[projects[a].index * 3 + 1];
-                    const az = pos[projects[a].index * 3 + 2];
-                    const bx = pos[projects[b].index * 3];
-                    const by = pos[projects[b].index * 3 + 1];
-                    const bz = pos[projects[b].index * 3 + 2];
-                    
-                    const dx = ax - bx;
-                    const dy = ay - by;
-                    const dz = az - bz;
-                    const dist = Math.sqrt(dx*dx + dy*dy + dz*dz) || 1;
-                    
-                    const force = 200 / (dist * dist);
-                    const fx = (dx / dist) * force;
-                    const fy = (dy / dist) * force;
-                    const fz = (dz / dist) * force;
-                    
-                    forces[a * 3] += fx;
-                    forces[a * 3 + 1] += fy;
-                    forces[a * 3 + 2] += fz;
-                    forces[b * 3] -= fx;
-                    forces[b * 3 + 1] -= fy;
-                    forces[b * 3 + 2] -= fz;
-                }
-            }
-            
-            for (let a = 0; a < projectCount; a++) {
-                const px = pos[projects[a].index * 3];
-                const py = pos[projects[a].index * 3 + 1];
-                const pz = pos[projects[a].index * 3 + 2];
-                
-                forces[a * 3] -= px * 0.001;
-                forces[a * 3 + 1] -= py * 0.001;
-                forces[a * 3 + 2] -= pz * 0.001;
-            }
-            
-            for (let a = 0; a < projectCount; a++) {
-                pos[projects[a].index * 3] += forces[a * 3] * 0.1;
-                pos[projects[a].index * 3 + 1] += forces[a * 3 + 1] * 0.1;
-                pos[projects[a].index * 3 + 2] += forces[a * 3 + 2] * 0.1;
-            }
-        }
-
-        for (const proj of projects) {
-            const i = proj.index;
-            projectPositions.set(proj.node.id, {
-                x: pos[i * 3],
-                y: pos[i * 3 + 1],
-                z: pos[i * 3 + 2],
-                index: i
-            });
-        }
-
-        // ─── STEP 3: Group non-project nodes by namespace ───
+        // ── Seed: namespace clusters on a flattened fibonacci shell ──
         const nsGroups = new Map();
-        for (const item of nonProjects) {
-            const ns = item.node.namespace || 'global';
+        for (let i = 0; i < count; i++) {
+            const ns = nodes[i].namespace || 'global';
             if (!nsGroups.has(ns)) nsGroups.set(ns, []);
-            nsGroups.get(ns).push(item);
+            nsGroups.get(ns).push(i);
+        }
+        const nsList = [...nsGroups.values()];
+        const golden = Math.PI * (3 - Math.sqrt(5));
+        const clusterR = nsList.map(m => 6 + 2.4 * Math.sqrt(m.length));
+        const shellR = nsList.length === 1 ? 0 :
+            Math.max(45, Math.max(...clusterR) * 1.7, 6.5 * Math.sqrt(count));
+        nsList.forEach((members, gi) => {
+            const phi = Math.acos(1 - 2 * ((gi + 0.5) / nsList.length));
+            const theta = golden * gi;
+            const cx = shellR * Math.sin(phi) * Math.cos(theta);
+            const cy = shellR * Math.cos(phi) * 0.45;
+            const cz = shellR * Math.sin(phi) * Math.sin(theta);
+            const cr = clusterR[gi];
+            members.forEach((idx, j) => {
+                const p2 = Math.acos(1 - 2 * ((j + 0.5) / members.length));
+                const t2 = golden * j;
+                const r = cr * Math.cbrt((j + 0.5) / members.length);
+                pos[idx * 3] = cx + r * Math.sin(p2) * Math.cos(t2);
+                pos[idx * 3 + 1] = cy + r * Math.cos(p2) * 0.6;
+                pos[idx * 3 + 2] = cz + r * Math.sin(p2) * Math.sin(t2);
+            });
+        });
+
+        // Hubs and projects anchor; leaves orbit around them
+        const invMass = new Float32Array(count);
+        for (let i = 0; i < count; i++) {
+            const anchor = nodes[i].node_type === 'project' ? 3 : 0;
+            invMass[i] = 1 / (1 + anchor + degree[i] * 0.12);
         }
 
-        // ─── STEP 4: Find parent project for each namespace ───
-        const nsToProject = new Map();
-        for (const [ns, items] of nsGroups) {
-            const matchingProject = projects.find(p => p.node.namespace === ns);
-            if (matchingProject) {
-                nsToProject.set(ns, matchingProject.node.id);
-                continue;
-            }
+        const nodeNs = nodes.map(n => n.namespace || 'global');
+        const vel = new Float32Array(count * 3);
+        const force = new Float32Array(count * 3);
+        const iterations = count <= 400 ? 320 : count <= 1200 ? 220 : 150;
+        const CELL = 14;
 
-            const projectEdgeCounts = new Map();
-            for (const item of items) {
-                for (const edge of edges) {
-                    if (edge.source === item.node.id || edge.target === item.node.id) {
-                        const otherId = edge.source === item.node.id ? edge.target : edge.source;
-                        const otherIdx = nodeIdToIndex[otherId];
-                        if (otherIdx !== undefined && nodes[otherIdx].node_type === 'project') {
-                            projectEdgeCounts.set(otherId, (projectEdgeCounts.get(otherId) || 0) + 1);
+        // Spatial hash for short-range repulsion / collisions
+        const buildGrid = () => {
+            const grid = new Map();
+            for (let i = 0; i < count; i++) {
+                const key = (Math.floor(pos[i * 3] / CELL) + 512) +
+                    (Math.floor(pos[i * 3 + 1] / CELL) + 512) * 1024 +
+                    (Math.floor(pos[i * 3 + 2] / CELL) + 512) * 1048576;
+                let cell = grid.get(key);
+                if (!cell) { cell = []; grid.set(key, cell); }
+                cell.push(i);
+            }
+            return grid;
+        };
+        const forEachNeighbor = (grid, i, fn) => {
+            const ix = Math.floor(pos[i * 3] / CELL) + 512;
+            const iy = Math.floor(pos[i * 3 + 1] / CELL) + 512;
+            const iz = Math.floor(pos[i * 3 + 2] / CELL) + 512;
+            for (let dx = -1; dx <= 1; dx++)
+                for (let dy = -1; dy <= 1; dy++)
+                    for (let dz = -1; dz <= 1; dz++) {
+                        const cell = grid.get((ix + dx) + (iy + dy) * 1024 + (iz + dz) * 1048576);
+                        if (!cell) continue;
+                        // Cap work in pathological dense cells
+                        const stride = cell.length > 80 ? Math.ceil(cell.length / 80) : 1;
+                        for (let c = 0; c < cell.length; c += stride) {
+                            const j = cell[c];
+                            if (j > i) fn(j);
                         }
                     }
-                }
-            }
+        };
 
-            if (projectEdgeCounts.size > 0) {
-                let bestProject = null;
-                let bestCount = -1;
-                for (const [pid, cnt] of projectEdgeCounts) {
-                    if (cnt > bestCount) {
-                        bestCount = cnt;
-                        bestProject = pid;
+        // Namespace centroids for cohesion (refreshed periodically)
+        const nsCenter = new Map();
+        const refreshCentroids = () => {
+            const acc = new Map();
+            for (let i = 0; i < count; i++) {
+                let a = acc.get(nodeNs[i]);
+                if (!a) { a = [0, 0, 0, 0]; acc.set(nodeNs[i], a); }
+                a[0] += pos[i * 3]; a[1] += pos[i * 3 + 1]; a[2] += pos[i * 3 + 2]; a[3]++;
+            }
+            for (const [ns, a] of acc) nsCenter.set(ns, [a[0] / a[3], a[1] / a[3], a[2] / a[3]]);
+        };
+        refreshCentroids();
+
+        const stepBatch = (from, to) => {
+            for (let iter = from; iter < to; iter++) {
+                const alpha = Math.pow(0.01, iter / iterations); // 1 → 0.01 cooling
+                force.fill(0);
+
+                // Springs: connected memories pull toward their rest length
+                for (const s of springs) {
+                    const dx = pos[s.b * 3] - pos[s.a * 3];
+                    const dy = pos[s.b * 3 + 1] - pos[s.a * 3 + 1];
+                    const dz = pos[s.b * 3 + 2] - pos[s.a * 3 + 2];
+                    const dist = Math.max(Math.sqrt(dx * dx + dy * dy + dz * dz), 0.01);
+                    const f = s.k * (dist - s.rest) / dist * alpha;
+                    force[s.a * 3] += dx * f; force[s.a * 3 + 1] += dy * f; force[s.a * 3 + 2] += dz * f;
+                    force[s.b * 3] -= dx * f; force[s.b * 3 + 1] -= dy * f; force[s.b * 3 + 2] -= dz * f;
+                }
+
+                // Short-range repulsion: nothing bunches or overlaps
+                const grid = buildGrid();
+                for (let i = 0; i < count; i++) {
+                    forEachNeighbor(grid, i, (j) => {
+                        const dx = pos[i * 3] - pos[j * 3];
+                        const dy = pos[i * 3 + 1] - pos[j * 3 + 1];
+                        const dz = pos[i * 3 + 2] - pos[j * 3 + 2];
+                        const d2 = Math.max(dx * dx + dy * dy + dz * dz, 0.25);
+                        const reach = radii[i] + radii[j] + 12;
+                        if (d2 > reach * reach) return;
+                        const near = radii[i] + radii[j] + 2;
+                        let rep = 2.6 * (near * near) / d2 * alpha;
+                        if (rep > 1.5) rep = 1.5;
+                        const d = Math.sqrt(d2);
+                        const fx = (dx / d) * rep, fy = (dy / d) * rep, fz = (dz / d) * rep;
+                        force[i * 3] += fx; force[i * 3 + 1] += fy; force[i * 3 + 2] += fz;
+                        force[j * 3] -= fx; force[j * 3 + 1] -= fy; force[j * 3 + 2] -= fz;
+                    });
+                }
+
+                // Namespace cohesion + gentle global centering / y-flatten
+                if (iter % 8 === 0) refreshCentroids();
+                for (let i = 0; i < count; i++) {
+                    const c = nsCenter.get(nodeNs[i]);
+                    if (c) {
+                        force[i * 3] += (c[0] - pos[i * 3]) * 0.012 * alpha;
+                        force[i * 3 + 1] += (c[1] - pos[i * 3 + 1]) * 0.012 * alpha;
+                        force[i * 3 + 2] += (c[2] - pos[i * 3 + 2]) * 0.012 * alpha;
                     }
+                    force[i * 3] -= pos[i * 3] * 0.0015 * alpha;
+                    force[i * 3 + 1] -= pos[i * 3 + 1] * 0.008 * alpha;
+                    force[i * 3 + 2] -= pos[i * 3 + 2] * 0.0015 * alpha;
                 }
-                nsToProject.set(ns, bestProject);
-            } else {
-                nsToProject.set(ns, projects[0]?.node.id);
-            }
-        }
 
-        // ─── STEP 5: Position non-project nodes organically ───
-        for (const [ns, items] of nsGroups) {
-            const parentProjectId = nsToProject.get(ns);
-            const parentProject = projectPositions.get(parentProjectId);
-
-            if (!parentProject) {
-                const orphanAngle = Math.random() * Math.PI * 2;
-                const orphanRadius = 45 + Math.random() * 15;
-                const ox = Math.cos(orphanAngle) * orphanRadius;
-                const oz = Math.sin(orphanAngle) * orphanRadius;
-                const oy = (Math.random() - 0.5) * 10;
-                for (const item of items) {
-                    pos[item.index * 3] = ox + (Math.random() - 0.5) * 12;
-                    pos[item.index * 3 + 1] = oy + (Math.random() - 0.5) * 8;
-                    pos[item.index * 3 + 2] = oz + (Math.random() - 0.5) * 12;
+                // Integrate with damping and a speed cap
+                for (let i = 0; i < count; i++) {
+                    const im = invMass[i];
+                    let vx = (vel[i * 3] + force[i * 3] * im) * 0.82;
+                    let vy = (vel[i * 3 + 1] + force[i * 3 + 1] * im) * 0.82;
+                    let vz = (vel[i * 3 + 2] + force[i * 3 + 2] * im) * 0.82;
+                    const sp = Math.sqrt(vx * vx + vy * vy + vz * vz);
+                    if (sp > 2.5) { const s = 2.5 / sp; vx *= s; vy *= s; vz *= s; }
+                    vel[i * 3] = vx; vel[i * 3 + 1] = vy; vel[i * 3 + 2] = vz;
+                    pos[i * 3] += vx; pos[i * 3 + 1] += vy; pos[i * 3 + 2] += vz;
                 }
-                continue;
             }
+        };
 
-            const clusterRadius = 8 + Math.min(items.length * 0.2, 12);
-            
-            for (let j = 0; j < items.length; j++) {
-                const item = items[j];
-                
-                const goldenAngle = Math.PI * (3 - Math.sqrt(5));
-                const theta = goldenAngle * j + (Math.random() - 0.5) * 0.5;
-                
-                const r = clusterRadius * (0.3 + 0.7 * Math.sqrt(j / Math.max(items.length, 1)));
-                
-                const jitterX = (Math.random() - 0.5) * 3;
-                const jitterY = (Math.random() - 0.5) * 3;
-                const jitterZ = (Math.random() - 0.5) * 3;
-                
-                const yScale = 0.4 + Math.random() * 0.4;
-                
-                const cx = parentProject.x + Math.cos(theta) * r + jitterX;
-                const cy = parentProject.y + (Math.sin(theta) * r * yScale) + jitterY;
-                const cz = parentProject.z + (Math.sin(theta * 1.3) * r * 0.7) + jitterZ;
-
-                pos[item.index * 3] = cx;
-                pos[item.index * 3 + 1] = cy;
-                pos[item.index * 3 + 2] = cz;
+        // Final hard de-overlap so no two glyphs intersect
+        const resolveCollisions = () => {
+            for (let pass = 0; pass < 10; pass++) {
+                const grid = buildGrid();
+                let moved = false;
+                for (let i = 0; i < count; i++) {
+                    forEachNeighbor(grid, i, (j) => {
+                        const dx = pos[j * 3] - pos[i * 3];
+                        const dy = pos[j * 3 + 1] - pos[i * 3 + 1];
+                        const dz = pos[j * 3 + 2] - pos[i * 3 + 2];
+                        const minSep = radii[i] + radii[j] + 0.8;
+                        const d2 = dx * dx + dy * dy + dz * dz;
+                        if (d2 >= minSep * minSep) return;
+                        const d = Math.max(Math.sqrt(d2), 0.01);
+                        const push = (minSep - d) / d;
+                        const wi = invMass[i] / (invMass[i] + invMass[j]);
+                        pos[i * 3] -= dx * push * wi; pos[i * 3 + 1] -= dy * push * wi; pos[i * 3 + 2] -= dz * push * wi;
+                        pos[j * 3] += dx * push * (1 - wi); pos[j * 3 + 1] += dy * push * (1 - wi); pos[j * 3 + 2] += dz * push * (1 - wi);
+                        moved = true;
+                    });
+                }
+                if (!moved) break;
             }
-        }
+        };
 
-        // ─── STEP 6: Store as static positions ───
         this.forcePhysics = {
             count,
             positions: pos,
-            step() { /* No-op */ },
+            step() { /* static after settle */ },
             getPositions() { return this.positions; },
             getPosition(idx) {
                 return {
@@ -869,7 +1001,66 @@ export class Brain3D {
             }
         };
 
-        console.log('[Brain3D] Organic layout initialized:', count, 'nodes,', projects.length, 'projects,', nsGroups.size, 'namespace clusters');
+        // Settle asynchronously (~14 iterations/frame) so the graph visibly
+        // organizes itself, then build edges at final positions + fit camera.
+        this._settling = true;
+        let iter = 0;
+        const runChunk = () => {
+            if (!this.isRunning) return;
+            const to = Math.min(iter + 14, iterations);
+            stepBatch(iter, to);
+            iter = to;
+            if (iter < iterations) {
+                requestAnimationFrame(runChunk);
+            } else {
+                resolveCollisions();
+                this._settling = false;
+                this._layoutDirty = true; // one final matrix write at rest
+                if (this._pendingEdges) {
+                    const e = this._pendingEdges;
+                    this._pendingEdges = null;
+                    this.createEdges(e);
+                }
+                this.fitCameraToLayout();
+                console.log('[Brain3D] Force layout settled:', count, 'nodes,', springs.length, 'springs,', nsList.length, 'namespace clusters,', iterations, 'iterations');
+            }
+        };
+        requestAnimationFrame(runChunk);
+
+        console.log('[Brain3D] Force layout started:', count, 'nodes,', springs.length, 'springs');
+    }
+
+    // Frame the whole layout: aim controls at its centroid, back the camera
+    // off to the bounding radius, and widen the zoom-out limit accordingly.
+    fitCameraToLayout() {
+        if (!this.forcePhysics) return;
+        const p = this.forcePhysics.positions;
+        const n = this.forcePhysics.count;
+        if (!n) return;
+        let cx = 0, cy = 0, cz = 0;
+        for (let i = 0; i < n; i++) { cx += p[i * 3]; cy += p[i * 3 + 1]; cz += p[i * 3 + 2]; }
+        cx /= n; cy /= n; cz /= n;
+        // Robust radius: 92nd-percentile distance so a handful of far orphan
+        // nodes don't push the camera so far back the dense core looks tiny.
+        const dists = new Float32Array(n);
+        for (let i = 0; i < n; i++) {
+            const dx = p[i * 3] - cx, dy = p[i * 3 + 1] - cy, dz = p[i * 3 + 2] - cz;
+            dists[i] = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        }
+        dists.sort();
+        const radius = Math.max(dists[Math.floor(n * 0.90)], 25);
+
+        this.controls.target.set(cx, cy, cz);
+        const dir = new THREE.Vector3(0.4, 0.5, 1).normalize();
+        this.camera.position.set(cx, cy, cz).addScaledVector(dir, radius * 2.1);
+        this.camera.far = Math.max(2000, radius * 12);
+        this.camera.updateProjectionMatrix();
+        this.controls.maxDistance = radius * 6;
+        this.controls.update();
+        if (this.scene.fog) this.scene.fog.density = Math.min(0.004, 1.4 / (radius * 8));
+        // Label fade distances are tuned for a ~45-unit layout; scale them up
+        // for bigger graphs so labels still appear at comfortable zoom levels.
+        this._labelDistScale = Math.max(1, radius / 45);
     }
     // Update edge positions from force physics
     // TubeGeometry edges are static; they rebuild on layout changes only
@@ -884,50 +1075,101 @@ export class Brain3D {
         // Remove old edges
         this.edgeMeshes.forEach(m => this.scene.remove(m));
         this.edgeMeshes = [];
-        
+
+        // While the force layout settles, defer building: edges drawn at
+        // seed positions would be rebuilt anyway and just flash spaghetti.
+        if (this._settling) {
+            this._pendingEdges = edgeData;
+            return;
+        }
+
         // Get positions from force physics if available
         const pos = this.forcePhysics ? this.forcePhysics.getPositions() : null;
         if (!pos) return;
 
+        const idToIndex = this.nodeIdToIndex || {};
+        const radii = this._nodeRadii;
+        const SEGMENTS = 8;
+        // Arc control points, keyed by index into edgeData, shared with the
+        // flow particles so they travel along the drawn curve.
+        this._edgeArcs = new Map();
+
         // Group edges by type for batch rendering
         const edgesByType = {};
-        for (const edge of edgeData) {
-            const type = edge.edge_type || 'relates_to';
+        for (let e = 0; e < edgeData.length; e++) {
+            const type = edgeData[e].edge_type || 'relates_to';
             if (!edgesByType[type]) edgesByType[type] = [];
-            edgesByType[type].push(edge);
+            edgesByType[type].push(e);
         }
 
-        // Create thin line edges per type (Understand-Anything style)
-        for (const [type, edges] of Object.entries(edgesByType)) {
+        const up = new THREE.Vector3(0, 1, 0);
+        const dir = new THREE.Vector3();
+        const perp = new THREE.Vector3();
+
+        for (const [type, edgeIndices] of Object.entries(edgesByType)) {
             const typeIdx = this.edgeTypeToIndex(type);
             const typeColor = EDGE_COLORS[typeIdx] || EDGE_COLORS[2];
             const color = new THREE.Color(typeColor);
 
             const linePositions = [];
             const lineColors = [];
-            
-            for (const edge of edges) {
-                const sourceIdx = this.nodes.findIndex(n => n.id === edge.source);
-                const targetIdx = this.nodes.findIndex(n => n.id === edge.target);
-                if (sourceIdx === -1 || targetIdx === -1) continue;
 
-                const sx = pos[sourceIdx * 3];
-                const sy = pos[sourceIdx * 3 + 1];
-                const sz = pos[sourceIdx * 3 + 2];
-                const tx = pos[targetIdx * 3];
-                const ty = pos[targetIdx * 3 + 1];
-                const tz = pos[targetIdx * 3 + 2];
+            for (const e of edgeIndices) {
+                const edge = edgeData[e];
+                const a = idToIndex[edge.source];
+                const b = idToIndex[edge.target];
+                if (a === undefined || b === undefined || a === b) continue;
 
-                // Skip NaN positions
-                if (isNaN(sx) || isNaN(sy) || isNaN(sz) || isNaN(tx) || isNaN(ty) || isNaN(tz)) continue;
+                const sx = pos[a * 3], sy = pos[a * 3 + 1], sz = pos[a * 3 + 2];
+                const tx = pos[b * 3], ty = pos[b * 3 + 1], tz = pos[b * 3 + 2];
+                if (isNaN(sx) || isNaN(tx)) continue;
 
-                // Simple straight line (cleaner than tubes)
-                linePositions.push(sx, sy, sz);
-                linePositions.push(tx, ty, tz);
-                
-                // Color for both vertices
-                lineColors.push(color.r, color.g, color.b);
-                lineColors.push(color.r, color.g, color.b);
+                const dx = tx - sx, dy = ty - sy, dz = tz - sz;
+                const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                if (len < 0.01) continue;
+
+                // Gentle arc perpendicular to the edge: separates parallel
+                // edges and keeps lines from slicing through cluster cores.
+                dir.set(dx / len, dy / len, dz / len);
+                perp.crossVectors(dir, up);
+                if (perp.lengthSq() < 1e-4) perp.set(1, 0, 0);
+                perp.normalize();
+                const side = ((a + b) % 2 === 0) ? 1 : -1; // alternate bow side
+                const bow = Math.min(len * 0.12, 4);
+                const mx = (sx + tx) / 2 + perp.x * bow * side;
+                const my = (sy + ty) / 2 + bow * 0.5;
+                const mz = (sz + tz) / 2 + perp.z * bow * side;
+
+                // Trim endpoints to glyph surfaces so lines connect visibly
+                // to shapes instead of vanishing inside them.
+                const rA = radii ? radii[a] : 0.6;
+                const rB = radii ? radii[b] : 0.6;
+                let t0 = Math.min((rA + 0.3) / len, 0.4);
+                let t1 = 1 - Math.min((rB + 0.3) / len, 0.4);
+                if (t1 <= t0) { t0 = 0; t1 = 1; }
+
+                // Per-edge brightness from weight
+                const w = edge.weight != null ? edge.weight : 1;
+                const bright = Math.min(0.65 + Math.min(w, 1.5) * 0.35, 1.2);
+                const cr = Math.min(color.r * bright, 1);
+                const cg = Math.min(color.g * bright, 1);
+                const cb = Math.min(color.b * bright, 1);
+
+                let px = 0, py = 0, pz = 0;
+                for (let s = 0; s <= SEGMENTS; s++) {
+                    const t = t0 + (t1 - t0) * (s / SEGMENTS);
+                    const u = 1 - t;
+                    const qx = u * u * sx + 2 * u * t * mx + t * t * tx;
+                    const qy = u * u * sy + 2 * u * t * my + t * t * ty;
+                    const qz = u * u * sz + 2 * u * t * mz + t * t * tz;
+                    if (s > 0) {
+                        linePositions.push(px, py, pz, qx, qy, qz);
+                        lineColors.push(cr, cg, cb, cr, cg, cb);
+                    }
+                    px = qx; py = qy; pz = qz;
+                }
+
+                this._edgeArcs.set(e, { a, b, mx, my, mz, t0, t1 });
             }
 
             if (linePositions.length === 0) continue;
@@ -939,17 +1181,18 @@ export class Brain3D {
             const material = new THREE.LineBasicMaterial({
                 vertexColors: true,
                 transparent: true,
-                opacity: 0.15,
+                opacity: EDGE_OPACITY[type] !== undefined ? EDGE_OPACITY[type] : 0.35,
                 blending: THREE.AdditiveBlending,
                 depthWrite: false,
             });
-            
+
             const mesh = new THREE.LineSegments(geometry, material);
             mesh.userData.edgeType = type;
+            mesh.userData.baseOpacity = material.opacity;
             this.edgeMeshes.push(mesh);
             this.scene.add(mesh);
         }
-        
+
         console.log('[Brain3D] Created', this.edgeMeshes.length, 'edge line groups');
 
         // Create animated edge particles
@@ -979,13 +1222,18 @@ export class Brain3D {
         const pSize = new Float32Array(MAX_PARTICLES);
 
         // Build valid edge list (only edges with valid node indices)
+        const idToIndex = this.nodeIdToIndex || {};
         const validEdges = [];
         for (let e = 0; e < edgeData.length; e++) {
             const edge = edgeData[e];
-            const srcIdx = this.nodes.findIndex(n => n.id === edge.source);
-            const tgtIdx = this.nodes.findIndex(n => n.id === edge.target);
-            if (srcIdx !== -1 && tgtIdx !== -1) {
-                validEdges.push({ srcIdx, tgtIdx, edgeIdx: e, type: edge.edge_type || 'relates_to' });
+            const srcIdx = idToIndex[edge.source];
+            const tgtIdx = idToIndex[edge.target];
+            if (srcIdx !== undefined && tgtIdx !== undefined && srcIdx !== tgtIdx) {
+                validEdges.push({
+                    srcIdx, tgtIdx, edgeIdx: e,
+                    type: edge.edge_type || 'relates_to',
+                    arc: this._edgeArcs ? this._edgeArcs.get(e) : null,
+                });
             }
         }
 
@@ -1100,8 +1348,10 @@ export class Brain3D {
         this.particleSystem.frustumCulled = false;
         this.scene.add(this.particleSystem);
 
-        // Store valid edges for JS-side position updates
+        // Store valid edges for JS-side position updates, indexed by edge
+        // number so the per-frame update is a map lookup instead of a scan.
         this._validEdges = validEdges;
+        this._validEdgeByIdx = new Map(validEdges.map(ve => [ve.edgeIdx, ve]));
         this._particleMax = MAX_PARTICLES;
 
         console.log('[Brain3D] Edge particles created:', MAX_PARTICLES, 'particles on', validEdges.length, 'edges');
@@ -1115,9 +1365,10 @@ export class Brain3D {
         const progressAttr = this.particleSystem.geometry.attributes.aProgress.array;
         const speedAttr = this.particleSystem.geometry.attributes.aSpeed.array;
 
+        const edgeIdxAttr = this.particleSystem.geometry.attributes.aEdgeIndex.array;
         for (let i = 0; i < this._particleMax; i++) {
-            const edgeIdx = Math.floor(this.particleSystem.geometry.attributes.aEdgeIndex.array[i] + 0.5);
-            const ve = this._validEdges.find(e => e.edgeIdx === edgeIdx);
+            const edgeIdx = Math.floor(edgeIdxAttr[i] + 0.5);
+            const ve = this._validEdgeByIdx ? this._validEdgeByIdx.get(edgeIdx) : null;
             if (!ve) continue;
 
             // Advance progress (manual fract since this is JS, not GLSL)
@@ -1134,10 +1385,21 @@ export class Brain3D {
             const ty = pos[tgtIdx * 3 + 1];
             const tz = pos[tgtIdx * 3 + 2];
 
-            const t = progressAttr[i];
-            positions[i * 3] = sx + (tx - sx) * t;
-            positions[i * 3 + 1] = sy + (ty - sy) * t;
-            positions[i * 3 + 2] = sz + (tz - sz) * t;
+            // Follow the drawn arc (quadratic bezier) so flow particles ride
+            // the visible line instead of cutting a straight chord.
+            const arc = ve.arc;
+            if (arc) {
+                const t = arc.t0 + (arc.t1 - arc.t0) * progressAttr[i];
+                const u = 1 - t;
+                positions[i * 3] = u * u * sx + 2 * u * t * arc.mx + t * t * tx;
+                positions[i * 3 + 1] = u * u * sy + 2 * u * t * arc.my + t * t * ty;
+                positions[i * 3 + 2] = u * u * sz + 2 * u * t * arc.mz + t * t * tz;
+            } else {
+                const t = progressAttr[i];
+                positions[i * 3] = sx + (tx - sx) * t;
+                positions[i * 3 + 1] = sy + (ty - sy) * t;
+                positions[i * 3 + 2] = sz + (tz - sz) * t;
+            }
         }
 
         this.particleSystem.geometry.attributes.position.needsUpdate = true;
@@ -1194,6 +1456,7 @@ export class Brain3D {
     // GLOBAL NAMESPACE VISIBILITY TOGGLE
     // ═══════════════════════════════════════════════════════════════════════════
     setGlobalVisibility(visible) {
+        this._layoutDirty = true;
         if (!this.nodeGroups) return;
         console.log('[Brain3D] setGlobalVisibility called:', visible);
         
@@ -1212,8 +1475,9 @@ export class Brain3D {
         const rect = this.renderer.domElement.getBoundingClientRect();
         this.mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
         this.mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+        this._lastPointer = { x: event.clientX, y: event.clientY };
 
-        const node = this.raycastNode();
+        const node = this._pickNode(event.clientX, event.clientY);
         const tooltip = document.getElementById('tooltip');
 
         // Notify sidebar
@@ -1247,10 +1511,10 @@ export class Brain3D {
     }
 
     onClick(event) {
-        const node = this.raycastNode();
+        const node = this._pickNode(event.clientX, event.clientY);
         if (node) {
             this.selectedNode = node;
-            
+
             // Notify sidebar
             if (this.onNodeSelect) {
                 this.onNodeSelect(node);
@@ -1259,13 +1523,15 @@ export class Brain3D {
             // Toggle focus mode: click same node to unfocus
             if (this._focusedNode && this._focusedNode.id === node.id) {
                 this._focusedNode = null;
+                this._layoutDirty = true;
                 this.clearHighlight();
-                // Reset edge opacity
+                // Restore each edge type's own base opacity
                 this.edgeMeshes.forEach(m => {
-                    m.material.opacity = 0.15;
+                    m.material.opacity = m.userData.baseOpacity !== undefined ? m.userData.baseOpacity : 0.35;
                 });
             } else {
                 this._focusedNode = node;
+                this._layoutDirty = true;
                 this.highlightNeighbors(node);
                 // Highlight edges connected to focused node
                 this._highlightFocusEdges(node);
@@ -1284,18 +1550,51 @@ export class Brain3D {
                 this.propagateCollapse(idx, 0);
             }
             
-            this.showNodeInfo(node);
+            // Node details are shown via the onNodeSelect callback, which
+            // populates the sidebar "🔍 Node Details" panel — the same format
+            // as hover. (Previously this also opened a separate #info-panel
+            // with a different layout, which was inconsistent.)
             this.focusNode(node);
-        } else {
-            // Click background: clear focus
-            if (this._focusedNode) {
-                this._focusedNode = null;
-                this.clearHighlight();
-                this.edgeMeshes.forEach(m => {
-                    m.material.opacity = 0.15;
-                });
-            }
+            return;
         }
+
+        // No node — try to select an edge (connection)
+        const edge = this._pickEdge(event.clientX, event.clientY);
+        if (edge) {
+            this._showEdgeInfo(edge, event);
+            return;
+        }
+
+        // Click empty background: clear focus
+        if (this._focusedNode) {
+            this._focusedNode = null;
+            this._layoutDirty = true;
+            this.clearHighlight();
+            this.edgeMeshes.forEach(m => {
+                m.material.opacity = m.userData.baseOpacity !== undefined ? m.userData.baseOpacity : 0.35;
+            });
+        }
+    }
+
+    // Show a clicked edge: labels of both endpoints + relation type, and pulse
+    // the two connected nodes so the connection is obvious.
+    _showEdgeInfo(edge, event) {
+        const si = this.nodeIdToIndex ? this.nodeIdToIndex[edge.source] : undefined;
+        const ti = this.nodeIdToIndex ? this.nodeIdToIndex[edge.target] : undefined;
+        const src = si !== undefined ? this.nodes[si] : null;
+        const tgt = ti !== undefined ? this.nodes[ti] : null;
+        const name = n => this.escapeHtml((n ? (n.label || n.id) : 'unknown').substring(0, 40));
+        const type = this.escapeHtml((edge.edge_type || 'relates_to').replace(/_/g, ' '));
+        const tooltip = document.getElementById('tooltip');
+        if (tooltip && event) {
+            tooltip.style.display = 'block';
+            tooltip.style.left = (event.clientX + 12) + 'px';
+            tooltip.style.top = (event.clientY + 12) + 'px';
+            tooltip.innerHTML = `<span style="color:#888;">edge</span> <strong style="color:#00D4AA;">${type}</strong>`
+                + `<br>${name(src)} <span style="color:#888;">&rarr;</span> ${name(tgt)}`;
+        }
+        if (src) this.triggerPulse(src.id);
+        if (tgt) this.triggerPulse(tgt.id);
     }
     
     // Highlight edges connected to focused node
@@ -1308,9 +1607,11 @@ export class Brain3D {
         }
         
         // Since we batch edges by type, we can't individually highlight edges
-        // Instead, increase opacity of all edges (they'll be dimmed by focus mode on nodes)
+        // Instead, boost each type above its base opacity (nodes outside the
+        // focus neighborhood are dimmed separately)
         this.edgeMeshes.forEach(m => {
-            m.material.opacity = 0.4;
+            const base = m.userData.baseOpacity !== undefined ? m.userData.baseOpacity : 0.35;
+            m.material.opacity = Math.min(base * 1.6, 0.8);
         });
     }
     // Howard: Propagate measurement collapse to neighbors
@@ -1380,12 +1681,16 @@ export class Brain3D {
 
     setEdgeVisibility(visible) {
         this.edgeMeshes.forEach(m => m.visible = visible);
+        // Also hide the flow particles, otherwise dots keep streaming along
+        // invisible edges in Macro/Dissolve modes.
+        if (this.particleSystem) this.particleSystem.visible = visible;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // SEARCH
     // ═══════════════════════════════════════════════════════════════════════════
     searchNodes(query) {
+        this._layoutDirty = true;
         if (!query || query.length < 2) {
             this.clearHighlight();
             return;
@@ -1417,6 +1722,7 @@ export class Brain3D {
     }
 
     clearHighlight() {
+        this._layoutDirty = true;
         const color = new THREE.Color();
         for (let i = 0; i < this.nodes.length; i++) {
             const node = this.nodes[i];
@@ -1436,7 +1742,7 @@ export class Brain3D {
 
     raycastNode() {
         this.raycaster.setFromCamera(this.mouse, this.camera);
-        
+
         for (const group of this.nodeGroups) {
             const mesh = group.children[0]; // Single mesh
             const intersection = this.raycaster.intersectObject(mesh);
@@ -1447,6 +1753,93 @@ export class Brain3D {
             }
         }
         return null;
+    }
+
+    // Screen-space node picker: projects every visible node to the screen and
+    // returns the one nearest the cursor within a generous, size-aware hit
+    // radius. Exact-mesh raycasting made the small glyphs very hard to click;
+    // this lets you click *near* a node and reliably hit it, preferring the
+    // one closest to the cursor and nearest the camera on ties.
+    _pickNode(clientX, clientY) {
+        if (!this.forcePhysics || !this.nodes || !this.nodes.length) return null;
+        const rect = this.renderer.domElement.getBoundingClientRect();
+        const px = clientX - rect.left, py = clientY - rect.top;
+        const pos = this.forcePhysics.getPositions();
+        const v = this._pickVec || (this._pickVec = new THREE.Vector3());
+        const halfH = rect.height / 2;
+        const focalPx = halfH / Math.tan((this.camera.fov * Math.PI / 180) / 2);
+        const camPos = this.camera.position;
+        let best = null, bestScore = Infinity;
+        for (let i = 0; i < this.nodes.length; i++) {
+            const node = this.nodes[i];
+            if (this._hideGlobalNodes && node.namespace === 'global') continue;
+            const wx = pos[i * 3], wy = pos[i * 3 + 1], wz = pos[i * 3 + 2];
+            v.set(wx, wy, wz).project(this.camera);
+            if (v.z > 1) continue; // behind camera / clipped
+            const sx = (v.x * 0.5 + 0.5) * rect.width;
+            const sy = (-v.y * 0.5 + 0.5) * rect.height;
+            const dx = sx - px, dy = sy - py;
+            const d = Math.sqrt(dx * dx + dy * dy);
+            const distCam = Math.hypot(wx - camPos.x, wy - camPos.y, wz - camPos.z) || 1;
+            const projR = (this._nodeVisualRadius(node) / distCam) * focalPx;
+            const hitR = Math.max(projR, 5) + 7; // padding for easy clicking
+            if (d > hitR) continue;
+            // Prefer nearest to cursor, then nearest to camera (front-most)
+            const score = d - projR * 0.6 + v.z * 8;
+            if (score < bestScore) { bestScore = score; best = node; }
+        }
+        return best;
+    }
+
+    // Screen-space edge picker: samples each drawn arc, projects the samples,
+    // and returns the edge whose curve passes closest to the cursor (within a
+    // few px). Lets users click connections, not just nodes.
+    _pickEdge(clientX, clientY) {
+        if (!this.forcePhysics || !this.edges || !this._edgeArcs) return null;
+        const rect = this.renderer.domElement.getBoundingClientRect();
+        const px = clientX - rect.left, py = clientY - rect.top;
+        const pos = this.forcePhysics.getPositions();
+        const v = this._pickVec2 || (this._pickVec2 = new THREE.Vector3());
+        const idToIndex = this.nodeIdToIndex || {};
+        const THRESH = 8; // px
+        let best = null, bestD = THRESH;
+        const project = (x, y, z) => {
+            v.set(x, y, z).project(this.camera);
+            if (v.z > 1) return null;
+            return [(v.x * 0.5 + 0.5) * rect.width, (-v.y * 0.5 + 0.5) * rect.height];
+        };
+        for (let e = 0; e < this.edges.length; e++) {
+            const arc = this._edgeArcs.get(e);
+            if (!arc) continue;
+            const a = arc.a, b = arc.b;
+            const sx = pos[a * 3], sy = pos[a * 3 + 1], sz = pos[a * 3 + 2];
+            const tx = pos[b * 3], ty = pos[b * 3 + 1], tz = pos[b * 3 + 2];
+            let prev = null;
+            const SEG = 6;
+            for (let s = 0; s <= SEG; s++) {
+                const t = arc.t0 + (arc.t1 - arc.t0) * (s / SEG);
+                const u = 1 - t;
+                const qx = u * u * sx + 2 * u * t * arc.mx + t * t * tx;
+                const qy = u * u * sy + 2 * u * t * arc.my + t * t * ty;
+                const qz = u * u * sz + 2 * u * t * arc.mz + t * t * tz;
+                const p = project(qx, qy, qz);
+                if (p && prev) {
+                    const d = this._distToSegment(px, py, prev[0], prev[1], p[0], p[1]);
+                    if (d < bestD) { bestD = d; best = this.edges[e]; }
+                }
+                prev = p;
+            }
+        }
+        return best;
+    }
+
+    _distToSegment(px, py, x1, y1, x2, y2) {
+        const dx = x2 - x1, dy = y2 - y1;
+        const len2 = dx * dx + dy * dy;
+        let t = len2 ? ((px - x1) * dx + (py - y1) * dy) / len2 : 0;
+        t = Math.max(0, Math.min(1, t));
+        const cx = x1 + t * dx, cy = y1 + t * dy;
+        return Math.hypot(px - cx, py - cy);
     }
 
     showNodeInfo(node) {
@@ -1524,9 +1917,11 @@ export class Brain3D {
         const z = positions[idx * 3 + 2];
 
         const target = new THREE.Vector3(x, y, z);
-        
-        // Smooth camera transition
-        this._animateCameraTo(target, 15); // 15 units away
+
+        // Smooth camera transition — stand back proportionally to the node's
+        // visual size so big projects and small facts both frame nicely.
+        const r = this._nodeRadii ? this._nodeRadii[idx] : 1;
+        this._animateCameraTo(target, Math.max(15, r * 9));
     }
     
     // Smooth camera animation to a target position
@@ -1558,6 +1953,7 @@ export class Brain3D {
         animate();
     }
     highlightNeighbors(node) {
+        this._layoutDirty = true;
         const neighborIds = new Set();
         this.edges.forEach(e => {
             if (e.source === node.id) neighborIds.add(e.target);
@@ -1593,94 +1989,38 @@ export class Brain3D {
         }
     }
 
+    // Session/event visibility is a flag read by updateNodePositions each
+    // frame — set it and mark dirty. (The old versions wrote instance
+    // matrices directly, which updateNodePositions overwrote every frame, so
+    // the toggles didn't actually work; setSessionVisibility also hid *all*
+    // non-project nodes, not just sessions.)
     setSessionVisibility(visible) {
         this._sessionsVisible = visible;
         this._topicFilter = ''; // Clear topic filter when toggling all sessions
-        if (!this.nodeGroups || this.nodeGroups.length === 0) return;
-        
-        const dummy = new THREE.Object3D();
-        
-        for (let i = this.projectCount; i < this.nodes.length; i++) {
-            const mapping = this.nodeIndexMap[i];
-            if (!mapping) continue;
-            
-            const group = this.nodeGroups[mapping.group];
-            const localIdx = mapping.local;
-            const node = this.nodes[i];
-            
-            if (visible) {
-                // Show at normal position - will be updated by updateNodePositions
-                const isProject = i < this.projectCount;
-                const baseSize = isProject ? 1.2 : 0.15;
-                const tierMult = isProject ? this.tierToMult(node.importance || 0.5) : 0.5;
-                const size = baseSize * tierMult;
-                
-                dummy.scale.set(size, size, size);
-                dummy.updateMatrix();
-                group.children[0].setMatrixAt(localIdx, dummy.matrix);
-            } else {
-                // Hide by scaling to zero
-                dummy.scale.set(0.001, 0.001, 0.001);
-                dummy.updateMatrix();
-                group.children[0].setMatrixAt(localIdx, dummy.matrix);
-            }
-        }
-        
-        // Mark instance matrices as needing update
-        this.nodeGroups.forEach(group => {
-            group.children[0].instanceMatrix.needsUpdate = true;
-        });
+        this._layoutDirty = true;
     }
 
     setEventVisibility(visible) {
         this._eventsVisible = visible;
-        if (!this.nodeGroups || this.nodeGroups.length === 0) return;
-
-        const dummy = new THREE.Object3D();
-        for (let i = 0; i < this.nodes.length; i++) {
-            const node = this.nodes[i];
-            if (node.node_type !== 'event') continue;
-
-            const mapping = this.nodeIndexMap[i];
-            if (!mapping) continue;
-
-            const group = this.nodeGroups[mapping.group];
-            const localIdx = mapping.local;
-
-            if (visible) {
-                const baseSize = 0.3 + (node.importance || 0.5) * 0.4;
-                const tierMult = this.tierToMult(node.importance || 0.5);
-                const size = baseSize * tierMult;
-                
-                dummy.scale.set(size, size, size);
-                dummy.updateMatrix();
-                group.children[0].setMatrixAt(localIdx, dummy.matrix);
-            } else {
-                dummy.scale.set(0.001, 0.001, 0.001);
-                dummy.updateMatrix();
-                group.children[0].setMatrixAt(localIdx, dummy.matrix);
-            }
-        }
-        
-        this.nodeGroups.forEach(group => {
-            group.children[0].instanceMatrix.needsUpdate = true;
-        });
+        this._layoutDirty = true;
     }
 
     // Toggle sessions on/off — rebuilds the scene with/without session nodes
     toggleSessions(show) {
-        if (!this.allNodes || !this.sessionNodes) {
-            console.warn('[Brain3D] toggleSessions: no allNodes/sessionNodes data');
+        if (!this.allNodes) {
+            console.warn('[Brain3D] toggleSessions: no allNodes data');
             return;
         }
-        
-        const knowledgeTypes = new Set(['fact', 'decision', 'problem', 'preference', 'advice', 'topic', 'project', 'person', 'concept', 'event', 'agent', 'question']);
-        const knowledgeNodes = this.allNodes.filter(n => knowledgeTypes.has(n.node_type));
-        
-        // Build new node list
-        const newNodes = show ? [...knowledgeNodes, ...this.sessionNodes] : knowledgeNodes;
-        
-        console.log('[Brain3D] toggleSessions:', show, '| Knowledge:', knowledgeNodes.length, '| Sessions:', this.sessionNodes.length, '| Total:', newNodes.length);
+
+        // Derive the full node list from allNodes (the complete dataset,
+        // including synthesized session nodes) so re-checking the box restores
+        // every session. The previous version added back a stale sessionNodes
+        // snapshot captured before synthesis, so sessions never came back.
+        const newNodes = show
+            ? this.allNodes.slice()
+            : this.allNodes.filter(n => n.node_type !== 'session');
+
+        console.log('[Brain3D] toggleSessions:', show, '| Total:', newNodes.length);
         
         // Rebuild the entire visualization
         this.nodes = newNodes;
@@ -1716,7 +2056,8 @@ export class Brain3D {
                 
         // Update stats
         if (window.updateStats) {
-            window.updateStats(newNodes.length, displayEdges.length, this.projectCount, this.sessionNodes.length);
+            const sessionCount = newNodes.filter(n => n.node_type === 'session').length;
+            window.updateStats(newNodes.length, displayEdges.length, this.projectCount, sessionCount);
         }
         
         // Apply current view mode
@@ -1725,45 +2066,12 @@ export class Brain3D {
         }
     }
 
+    // Topic filter is read by updateNodePositions (sessions whose topic
+    // doesn't match are hidden). Selecting a topic implies showing sessions.
     setTopicFilter(topic) {
         this._topicFilter = topic;
-        if (!this.nodeGroups || this.nodeGroups.length === 0) return;
-        
-        const dummy = new THREE.Object3D();
-        
-        for (let i = this.projectCount; i < this.nodes.length; i++) {
-            const mapping = this.nodeIndexMap[i];
-            if (!mapping) continue;
-            
-            const group = this.nodeGroups[mapping.group];
-            const localIdx = mapping.local;
-            const node = this.nodes[i];
-            
-            const nodeTopic = (node.metadata && node.metadata.topic) ? node.metadata.topic : '';
-            const matchesTopic = !topic || nodeTopic === topic;
-            
-            if (matchesTopic) {
-                // Show at normal position
-                const isProject = i < this.projectCount;
-                const baseSize = isProject ? 1.2 : 0.15;
-                const tierMult = isProject ? this.tierToMult(node.importance || 0.5) : 0.5;
-                const size = baseSize * tierMult;
-                
-                dummy.scale.set(size, size, size);
-                dummy.updateMatrix();
-                group.children[0].setMatrixAt(localIdx, dummy.matrix);
-            } else {
-                // Hide by scaling to zero
-                dummy.scale.set(0.001, 0.001, 0.001);
-                dummy.updateMatrix();
-                group.children[0].setMatrixAt(localIdx, dummy.matrix);
-            }
-        }
-        
-        // Mark instance matrices as needing update
-        this.nodeGroups.forEach(group => {
-            group.children[0].instanceMatrix.needsUpdate = true;
-        });
+        if (topic) this._sessionsVisible = true;
+        this._layoutDirty = true;
     }
 
     typeToIndex(t) {
@@ -1772,14 +2080,18 @@ export class Brain3D {
     }
 
     edgeTypeToIndex(t) {
-        const map = { depends_on: 0, supports: 1, relates_to: 2, learned_from: 3 };
-        return map[t] || 2;
+        const map = {
+            depends_on: 0, supports: 1, relates_to: 2, learned_from: 3,
+            influences: 4, contradicts: 5, produced: 7, contains: 8
+        };
+        return map[t] !== undefined ? map[t] : 6;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // REAL-TIME ACCESS PULSE — Visual feedback on node activity
     // ═══════════════════════════════════════════════════════════════════════════
     triggerPulse(nodeId) {
+        this._layoutDirty = true;
         const idx = this.nodes.findIndex(n => n.id === nodeId);
         if (idx === -1) return;
 

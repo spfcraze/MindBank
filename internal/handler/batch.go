@@ -177,8 +177,11 @@ func (h *BatchHandler) AutoConnect(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 
-				// Determine edge type from rules
-				edgeType := models.EdgeRelatesTo
+				// Determine edge type from rules. Pairs with no matching
+				// rule are skipped: defaulting to relates_to connected
+				// every node pair in the namespace (O(n²) edges), which
+				// destroys graph-based relevance signals.
+				var edgeType models.EdgeType
 				if rules, ok := edgeRules[n1.NodeType]; ok {
 					if et, ok := rules[n2.NodeType]; ok {
 						edgeType = et
@@ -188,6 +191,9 @@ func (h *BatchHandler) AutoConnect(w http.ResponseWriter, r *http.Request) {
 					if et, ok := rules[n1.NodeType]; ok {
 						edgeType = et
 					}
+				}
+				if edgeType == "" {
+					continue
 				}
 
 				w := float32(1.0)
@@ -256,13 +262,29 @@ func (h *BatchHandler) BulkDeleteNodes(w http.ResponseWriter, r *http.Request) {
 	deleted := 0
 	errors := make([]string, 0)
 	for _, id := range req.IDs {
-		_, err := h.nodeRepo.Delete(r.Context(), id)
+		// Delete requires the node's actual workspace; an empty workspace
+		// matches nothing, silently deleting zero rows while reporting success.
+		node, err := h.nodeRepo.Get(r.Context(), id)
+		if err != nil {
+			slog.Error("bulk delete lookup", "id", id, "error", err)
+			errors = append(errors, id+": "+err.Error())
+			continue
+		}
+		if node == nil {
+			errors = append(errors, id+": not found")
+			continue
+		}
+		ok, err := h.nodeRepo.Delete(r.Context(), id, node.WorkspaceName)
 		if err != nil {
 			slog.Error("bulk delete node", "id", id, "error", err)
 			errors = append(errors, id+": "+err.Error())
-		} else {
-			deleted++
+			continue
 		}
+		if !ok {
+			errors = append(errors, id+": not found")
+			continue
+		}
+		deleted++
 	}
 
 	respondJSON(w, 200, map[string]any{
@@ -273,21 +295,39 @@ func (h *BatchHandler) BulkDeleteNodes(w http.ResponseWriter, r *http.Request) {
 }
 
 // Export handles GET /api/v1/export — export graph as JSON.
+// Fetches in pages until exhausted: the previous single 10k-row query
+// silently truncated larger graphs, which is lossy for a file people use
+// as a backup.
 func (h *BatchHandler) Export(w http.ResponseWriter, r *http.Request) {
 	ns := r.URL.Query().Get("namespace")
 
-	nodes, err := h.nodeRepo.List(r.Context(), "", ns, "", "", "", "", 10000, 0)
-	if err != nil {
-		slog.Error("export nodes", "error", err)
-		respondError(w, 500, "export failed")
-		return
+	const pageSize = 5000
+	var nodes []models.Node
+	for offset := 0; ; offset += pageSize {
+		page, err := h.nodeRepo.List(r.Context(), "", ns, "", "", "", "", pageSize, offset)
+		if err != nil {
+			slog.Error("export nodes", "error", err)
+			respondError(w, 500, "export failed")
+			return
+		}
+		nodes = append(nodes, page...)
+		if len(page) < pageSize {
+			break
+		}
 	}
 
-	edges, err := h.edgeRepo.GetAll(r.Context(), 10000, 0)
-	if err != nil {
-		slog.Error("export edges", "error", err)
-		respondError(w, 500, "export failed")
-		return
+	var edges []models.Edge
+	for offset := 0; ; offset += pageSize {
+		page, err := h.edgeRepo.GetAll(r.Context(), pageSize, offset)
+		if err != nil {
+			slog.Error("export edges", "error", err)
+			respondError(w, 500, "export failed")
+			return
+		}
+		edges = append(edges, page...)
+		if len(page) < pageSize {
+			break
+		}
 	}
 
 	// Filter edges to only include those where both endpoints are in the export
@@ -312,12 +352,20 @@ func (h *BatchHandler) Export(w http.ResponseWriter, r *http.Request) {
 }
 
 // Import handles POST /api/v1/import — import graph from JSON.
+// Edges resolve by original node ID when present (the format Export
+// produces); label mapping is only a fallback, since duplicate labels made
+// it attach imported edges to the wrong node.
 func (h *BatchHandler) Import(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Nodes []models.NodeCreate `json:"nodes"`
+		Nodes []struct {
+			models.NodeCreate
+			ID string `json:"id,omitempty"`
+		} `json:"nodes"`
 		Edges []struct {
-			SourceLabel string          `json:"source_label"`
-			TargetLabel string          `json:"target_label"`
+			SourceID    string          `json:"source_id,omitempty"`
+			TargetID    string          `json:"target_id,omitempty"`
+			SourceLabel string          `json:"source_label,omitempty"`
+			TargetLabel string          `json:"target_label,omitempty"`
 			EdgeType    models.EdgeType `json:"edge_type"`
 			Weight      float32         `json:"weight"`
 		} `json:"edges"`
@@ -327,27 +375,41 @@ func (h *BatchHandler) Import(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create nodes, build label→ID map
+	// Create nodes, mapping original IDs (and labels as fallback) to new IDs
+	idToID := make(map[string]string)
 	labelToID := make(map[string]string)
 	created := 0
 	for _, nc := range req.Nodes {
 		if nc.Label == "" {
 			continue
 		}
-		node, err := h.nodeRepo.Create(r.Context(), nc)
+		node, err := h.nodeRepo.Create(r.Context(), nc.NodeCreate)
 		if err != nil {
 			continue
 		}
-		labelToID[nc.Label] = node.ID
+		if nc.ID != "" {
+			idToID[nc.ID] = node.ID
+		}
+		if _, exists := labelToID[nc.Label]; !exists {
+			labelToID[nc.Label] = node.ID
+		}
 		created++
 	}
 
-	// Create edges using label mapping
+	resolve := func(origID, label string) (string, bool) {
+		if origID != "" {
+			id, ok := idToID[origID]
+			return id, ok
+		}
+		id, ok := labelToID[label]
+		return id, ok
+	}
+
 	edgeCount := 0
 	for _, e := range req.Edges {
-		srcID, ok1 := labelToID[e.SourceLabel]
-		tgtID, ok2 := labelToID[e.TargetLabel]
-		if !ok1 || !ok2 {
+		srcID, ok1 := resolve(e.SourceID, e.SourceLabel)
+		tgtID, ok2 := resolve(e.TargetID, e.TargetLabel)
+		if !ok1 || !ok2 || srcID == tgtID {
 			continue
 		}
 		ec := models.EdgeCreate{

@@ -36,13 +36,16 @@ func (s *Service) ExpireNodes(ctx context.Context) (int64, error) {
 	// Find expired nodes that are still current, not pinned, and NOT recently accessed
 	// A node is "recently accessed" if last_accessed > (now() - grace_period)
 	// Grace period = 14 days (covers project gaps, vacations, context switching)
+	// The "important" check compares text, not ::boolean: one node with a
+	// non-boolean value ("yes", "very") would make the cast error and halt
+	// ALL TTL expiry permanently.
 	rows, err := tx.Query(ctx, `
 		SELECT id, node_type
 		FROM nodes
 		WHERE expires_at IS NOT NULL
 		  AND expires_at < now()
 		  AND valid_to IS NULL
-		  AND (metadata->>'important')::boolean IS NOT TRUE
+		  AND lower(coalesce(metadata->>'important', 'false')) NOT IN ('true', 't', 'yes', '1')
 		  AND (last_accessed IS NULL OR last_accessed < now() - interval '14 days')
 	`)
 	if err != nil {
@@ -76,8 +79,17 @@ func (s *Service) ExpireNodes(ctx context.Context) (int64, error) {
 			WHERE id = $1
 		`, node.id)
 		if err != nil {
-			continue
+			// First error aborts the tx; bail out instead of spamming
+			// failed statements against an aborted transaction.
+			return 0, fmt.Errorf("expire node %s: %w", node.id, err)
 		}
+
+		// Clean up like NodeRepo.Delete does: live edges to an expired node
+		// skew isolation detection (dream bridging never rescues genuinely
+		// isolated memories) and its embedding keeps occupying HNSW
+		// candidate slots in vector search.
+		_, _ = tx.Exec(ctx, `UPDATE edges SET valid_to = now() WHERE (source_id = $1 OR target_id = $1) AND valid_to IS NULL`, node.id)
+		_, _ = tx.Exec(ctx, `DELETE FROM node_embeddings WHERE node_id = $1`, node.id)
 
 		// Log the action
 		_, _ = tx.Exec(ctx, `

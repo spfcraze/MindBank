@@ -219,7 +219,16 @@ func (h *UpdateHandler) RunUpdate(w http.ResponseWriter, r *http.Request) {
 		Started: time.Now().Format(time.RFC3339),
 	}
 
+	// Single-flight: two concurrent update.sh runs over the same install
+	// dir corrupt the installation.
 	h.mu.Lock()
+	for _, existing := range h.jobs {
+		if existing.Status == "running" {
+			h.mu.Unlock()
+			respondError(w, 409, "an update is already running: "+existing.ID)
+			return
+		}
+	}
 	h.jobs[jobID] = job
 	h.mu.Unlock()
 
@@ -316,8 +325,14 @@ func (h *UpdateHandler) RunUpdate(w http.ResponseWriter, r *http.Request) {
 func (h *UpdateHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	jobID := chi.URLParam(r, "jobID")
 
+	// Snapshot the job under the lock: encoding the live pointer after
+	// unlocking races the streamScanner goroutines appending to Output.
 	h.mu.Lock()
 	job, ok := h.jobs[jobID]
+	var snapshot UpdateJob
+	if ok {
+		snapshot = *job
+	}
 	h.mu.Unlock()
 
 	if !ok {
@@ -325,7 +340,7 @@ func (h *UpdateHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondJSON(w, 200, job)
+	respondJSON(w, 200, snapshot)
 }
 
 // FileStatus represents the status of a tracked file.

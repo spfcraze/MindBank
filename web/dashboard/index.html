@@ -132,6 +132,12 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 .data-table tr:hover td{background:rgba(0,212,170,0.03);color:var(--text)}
 .type-tag{display:inline-block;padding:3px 10px;border:1px solid;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;font-family:var(--font-mono)}
 .ns-tag{display:inline-block;padding:3px 8px;font-size:11px;font-weight:600;border:1px solid rgba(107,123,143,0.3);color:var(--text-dim);font-family:var(--font-mono)}
+.epistemic-tag{display:inline-block;font-family:var(--font-mono);font-weight:700}
+.epistemic-observed{color:#00ff88;background:rgba(0,255,136,0.15);border:1px solid rgba(0,255,136,0.4)}
+.epistemic-inferred{color:#00d4aa;background:rgba(0,212,170,0.15);border:1px solid rgba(0,212,170,0.4)}
+.epistemic-assumed{color:#ff6b6b;background:rgba(255,107,107,0.15);border:1px solid rgba(255,107,107,0.4)}
+.epistemic-recommended{color:#ffd93d;background:rgba(255,217,61,0.15);border:1px solid rgba(255,217,61,0.4)}
+.epistemic-unknown{color:var(--text-dim);background:rgba(107,123,143,0.15);border:1px solid rgba(107,123,143,0.4)}
 
 /* Activity */
 .activity-panel{padding:24px}
@@ -346,7 +352,7 @@ div.vis-tooltip{background:var(--bg-panel);border:1px solid var(--border);color:
       <a href="#" onclick="switchTab('questions');return false" data-tab="questions">Questions</a>
       <a href="#" onclick="switchTab('edges');return false" data-tab="edges">Edges</a>
       <a href="#" onclick="switchTab('tools');return false" data-tab="tools">Tools</a>
-      <a href="#" onclick="switchTab('graph');return false" data-tab="graph">Graph_2D</a>
+      <a href="#" onclick="switchTab('graph2d');return false" data-tab="graph2d">Graph_2D</a>
       <a href="#" onclick="switchTab('brain');return false" data-tab="brain">Brain_3D</a>
       <a href="#" onclick="switchTab('observer');return false" data-tab="observer">Observer</a>
       <a href="#" onclick="switchTab('update');return false" data-tab="update">Update</a>
@@ -457,6 +463,15 @@ div.vis-tooltip{background:var(--bg-panel);border:1px solid var(--border);color:
           <option value="project">project</option><option value="person">person</option><option value="event">event</option>
           <option value="concept">concept</option><option value="agent">agent</option><option value="question">question</option><option value="session">session</option>
         </select>
+        <select id="nodeEpistemic" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px">
+          <option value="unknown">unknown</option>
+          <option value="observed">observed</option>
+          <option value="inferred">inferred</option>
+          <option value="assumed">assumed</option>
+          <option value="recommended">recommended</option>
+        </select>
+      </div>
+      <div class="form-row">
         <input type="text" id="nodeNamespace" placeholder="Namespace (default: hermes)">
       </div>
       <textarea id="nodeContent" placeholder="Content (optional)" style="min-height:60px;margin-bottom:8px"></textarea>
@@ -600,6 +615,14 @@ div.vis-tooltip{background:var(--bg-panel);border:1px solid var(--border);color:
       <div class="tool-actions">
         <button class="btn" onclick="importGraph()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Import</button>
         <span id="importResult" style="font-size:12px;color:var(--text-dim)"></span>
+      </div>
+    </div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">Mine Sessions</div>
+      <div class="tool-card-desc">Import Hermes sessions into MindBank automatically. Extracts decisions, facts, problems, and preferences.</div>
+      <div class="tool-actions">
+        <button class="btn" onclick="mineSessions()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Mine All Sessions</button>
+        <span id="mineResult" style="font-size:12px;color:var(--text-dim)"></span>
       </div>
     </div>
   </div>
@@ -747,6 +770,76 @@ div.vis-tooltip{background:var(--bg-panel);border:1px solid var(--border);color:
         </div>
         <div id="bulk-connect-preview" style="margin-top:8px;font-size:11px;color:var(--text-dim);display:none"></div>
       </div>
+    </div>
+  </div>
+
+  <!-- EPISTEMIC CLASSIFICATION -->
+  <div class="tools-group">
+    <div class="tools-group-hdr">Epistemic Classification</div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">Batch Classify</div>
+      <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px">Set epistemic status for all nodes in a namespace. This activates confidence scoring.</p>
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <select id="epistemic-ns" style="flex:1;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px">
+          <option value="">All namespaces</option>
+        </select>
+        <select id="epistemic-label" style="flex:1;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px">
+          <option value="observed">observed</option>
+          <option value="inferred">inferred</option>
+          <option value="assumed">assumed</option>
+          <option value="recommended">recommended</option>
+          <option value="unknown">unknown</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <select id="epistemic-type" style="flex:1;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px">
+          <option value="">All types</option>
+          <option value="fact">fact</option>
+          <option value="decision">decision</option>
+          <option value="problem">problem</option>
+          <option value="advice">advice</option>
+          <option value="concept">concept</option>
+          <option value="preference">preference</option>
+          <option value="project">project</option>
+          <option value="topic">topic</option>
+        </select>
+        <button class="btn btn-cyber-sm" onclick="previewEpistemicBatch()" style="flex:1">Preview</button>
+      </div>
+      <div id="epistemic-preview" style="font-size:12px;color:var(--text-dim);margin-bottom:10px"></div>
+      <button class="btn btn-cyber" onclick="applyEpistemicBatch()" id="epistemic-apply-btn" disabled style="opacity:0.5">Apply Classification</button>
+      <div id="epistemic-status" style="font-size:12px;color:var(--text-dim);margin-top:8px"></div>
+    </div>
+    <div class="tool-card" style="margin-top:12px">
+      <div class="tool-card-hdr">Auto-Detect</div>
+      <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px">Automatically classify nodes based on type and content patterns.</p>
+      <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">
+        <div>• facts → observed</div>
+        <div>• decisions, problems → inferred</div>
+        <div>• advice, preferences → recommended</div>
+        <div>• concepts, topics → assumed (if no evidence)</div>
+      </div>
+      <button class="btn btn-cyber-sm" onclick="runEpistemicAutoDetect()">Run Auto-Detect</button>
+      <div id="epistemic-auto-status" style="font-size:12px;color:var(--text-dim);margin-top:8px"></div>
+    </div>
+  </div>
+
+  <!-- NEURAL CONSOLIDATION -->
+  <div class="tools-group">
+    <div class="tools-group-hdr">Neural Consolidation</div>
+    <div class="tool-card">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">
+        <div class="tool-card-hdr" style="margin-bottom:0">Dream Engine</div>
+        <div style="margin-left:auto">
+          <button onclick="triggerDream()" style="background:var(--accent);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px" id="dream-trigger-btn">Run Consolidation</button>
+        </div>
+      </div>
+      <div id="dream-progress" style="display:none;margin-bottom:12px;">
+        <div style="display:flex;align-items:center;gap:8px;color:var(--text-dim);font-size:13px;">
+          <span style="display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:dqa-spin 0.8s linear infinite;"></span>
+          <span id="dream-progress-text">Running neural consolidation...</span>
+        </div>
+      </div>
+      <div id="dream-status" style="display:none;margin-bottom:16px;font-size:12px;color:var(--text-dim)"></div>
     </div>
   </div>
 
@@ -937,54 +1030,6 @@ div.vis-tooltip{background:var(--bg-panel);border:1px solid var(--border);color:
     </div>
   </div>
 
-  <!-- COMPRESSION SETTINGS -->
-  <div class="tools-group">
-    <div class="tools-group-hdr">Compression</div>
-    <div class="tool-card">
-      <div class="tool-card-hdr">LLM Compression</div>
-      <div class="tool-card-desc">Compress session text into structured facts using local LLM. No data leaves your machine.</div>
-      
-      <div style="margin-bottom:16px">
-        <span style="font-size:12px">Status:</span>
-        <span id="compStatusText" style="font-size:12px;color:var(--red)">● Disabled</span>
-      </div>
-      
-      <div style="margin-bottom:16px">
-        <label style="display:block;font-size:12px;margin-bottom:8px">
-          <input type="checkbox" id="compEnabled" style="margin-right:8px" onchange="toggleCompression()">
-          Enable Compression
-        </label>
-      </div>
-      
-      <div style="margin-bottom:16px">
-        <label style="display:block;font-size:12px;margin-bottom:8px">Model:</label>
-        <select id="compModel" style="width:100%;padding:8px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px" onchange="updateCompressionModel()">
-          <option value="phi4-mini">Phi-4 Mini (3.8B) — Recommended</option>
-          <option value="gemma3:4b">Gemma 3 (4B)</option>
-          <option value="gemma3:1b">Gemma 3 (1B) — Fastest</option>
-        </select>
-      </div>
-      
-      <div id="compSetupBox" style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px;display:none">
-        <p style="font-size:12px;margin-bottom:12px">
-          <strong>One-Click Setup</strong><br>
-          This will pull the selected model via Ollama and enable compression.
-        </p>
-        <button id="btnCompSetup" class="btn" onclick="setupCompression()" style="width:100%;background:var(--cyan);color:#000;border:1px solid var(--cyan);padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:700">
-          Setup & Enable
-        </button>
-        <div id="compSetupProgress" style="display:none;margin-top:12px">
-          <div style="width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:spin 1s linear infinite;display:inline-block;vertical-align:middle;margin-right:8px"></div>
-          <span style="font-size:12px">Pulling model...</span>
-        </div>
-      </div>
-      
-      <div style="font-size:11px;color:var(--text-dim)">
-        ℹ️ Compression runs in the background and extracts facts/decisions from session text.
-      </div>
-    </div>
-  </div>
-
   <!-- SYSTEM -->
   <div class="tools-group">
     <div class="tools-group-hdr">System</div>
@@ -996,7 +1041,12 @@ div.vis-tooltip{background:var(--bg-panel);border:1px solid var(--border);color:
   </section>
 </div>
 
-<!-- GRAPH TAB -->
+<!-- GRAPH_2D TAB (via iframe to /graph-view) -->
+<div class="tab-content" id="tab-graph2d" style="padding:0;margin:0">
+  <iframe id="graph2dFrame" src="" style="width:100%;height:calc(100vh - 80px);border:none;display:block"></iframe>
+</div>
+
+<!-- GRAPH TAB (inline) -->
 <div class="tab-content" id="tab-graph">
   <section style="margin-bottom:80px">
     <div class="section-header">
@@ -1032,6 +1082,9 @@ div.vis-tooltip{background:var(--bg-panel);border:1px solid var(--border);color:
 <div class="tab-content" id="tab-brain" style="padding:0;margin:0">
   <iframe id="brainFrame" src="" style="width:100%;height:calc(100vh - 80px);border:none;display:block"></iframe>
 </div>
+
+<!-- GRAPH 2D TAB -->
+
 
 <!-- OBSERVER TAB -->
 <div class="tab-content" id="tab-observer">
@@ -1266,7 +1319,7 @@ function switchProfile(profile){
 }
 
 // === Tabs ===
-let tabLoaded = { dashboard: true, questions: false, edges: false, tools: true, graph: false, brain: false, observer: false, update: false };
+let tabLoaded = { dashboard: true, questions: false, edges: false, tools: true, graph2d: false, brain: false, observer: false, update: false };
 let currentTab='dashboard';
 function switchTab(name){
   const prevTab=currentTab;
@@ -1286,7 +1339,8 @@ function switchTab(name){
   if(!tabLoaded[name]){
     tabLoaded[name]=true;
     if(name==='graph')loadGraph();
-    if(name==='brain'){const f=document.getElementById('brainFrame');if(!f.dataset.loaded){f.src='/graph-view?embed=1';f.dataset.loaded='1'}f.style.width='100%';f.style.height=(window.innerHeight-60)+'px';}
+    if(name==='brain'){const f=document.getElementById('brainFrame');if(!f.dataset.loaded){f.src='/brain-3d?embed=1';f.dataset.loaded='1'}f.style.width='100%';f.style.height=(window.innerHeight-60)+'px';}
+    if(name==='graph2d'){const f=document.getElementById('graph2dFrame');if(!f.dataset.loaded){f.src='/graph-view?embed=1';f.dataset.loaded='1'}f.style.width='100%';f.style.height=(window.innerHeight-60)+'px';}
     if(name==='questions')loadQuestions();
     if(name==='edges')loadEdges();
     if(name==='update')initUpdateTab();
@@ -1436,7 +1490,7 @@ async function loadStats(){
       <div class="legend-item"><div class="legend-dot" style="background:${(TC[e[0]]||TC.concept).bg}"></div><span>${esc(e[0])}</span><span class="legend-count">${e[1]}</span></div>
     `).join('');
   }
-  ['filterNS','graphNS','snapNS','connectNS','exportNS','edgeNSFilter','bulk-connect-source','bulk-connect-target'].forEach(id=>{
+  ['filterNS','graphNS','snapNS','connectNS','exportNS','edgeNSFilter','bulk-connect-source','bulk-connect-target','epistemic-ns'].forEach(id=>{
     const el=document.getElementById(id);if(!el)return;const cur=el.value;
     el.innerHTML='<option value="">All</option>';
     Object.keys(nsMap).forEach(ns=>{el.innerHTML+=`<option value="${ns}"${ns===cur?' selected':''}>${ns}</option>`})
@@ -1531,7 +1585,7 @@ async function loadNodes(reset=true){
   emptyEl.style.display='none';
   if(reset)tbody.innerHTML='';
   tbody.innerHTML+=nodes.map(n=>`<tr>
-    <td><span class="type-tag" style="color:${tagBg(n.node_type)};border-color:${tagBg(n.node_type)}66;background:${tagBg(n.node_type)}0D">${n.node_type}</span>${n.deduplicated?'<span style="font-size:9px;color:var(--green);margin-left:4px" title="Deduplicated">DEDUP</span>':''}</td>
+    <td><span class="type-tag" style="color:${tagBg(n.node_type)};border-color:${tagBg(n.node_type)}66;background:${tagBg(n.node_type)}0D">${n.node_type}</span>${n.deduplicated?'<span style="font-size:9px;color:var(--green);margin-left:4px" title="Deduplicated">DEDUP</span>':''}${n.epistemic_label&&n.epistemic_label!=='unknown'?`<span class="epistemic-tag epistemic-${n.epistemic_label}" style="margin-left:4px;font-size:9px;padding:1px 4px;border-radius:3px;text-transform:uppercase;letter-spacing:0.05em">${n.epistemic_label}</span>`:''}</td>
     <td><a href="#" onclick="showDetail('${n.id}');return false" style="color:var(--cyan);text-decoration:none;font-weight:600">${esc(n.label)}</a></td>
     <td><span class="ns-tag">${esc(n.namespace)}</span></td>
     <td style="color:var(--text-dim);font-size:12px">${esc((n.summary||n.content||'').substring(0,50))}</td>
@@ -1547,7 +1601,14 @@ function loadMoreNodes(){nodesOffset+=50;loadNodes(false)}
 async function createNode(){
   const label=document.getElementById('nodeLabel').value.trim();
   if(!label){toast('Label required',true);return}
-  const body={label,node_type:document.getElementById('nodeType').value,namespace:document.getElementById('nodeNamespace').value||'hermes',content:document.getElementById('nodeContent').value,summary:document.getElementById('nodeSummary').value};
+  const body={
+    label,
+    node_type:document.getElementById('nodeType').value,
+    namespace:document.getElementById('nodeNamespace').value||'hermes',
+    content:document.getElementById('nodeContent').value,
+    summary:document.getElementById('nodeSummary').value,
+    epistemic_label:document.getElementById('nodeEpistemic').value
+  };
   const n=await api('/nodes',{method:'POST',body:JSON.stringify(body)});
   if(n){toast('Created: '+n.label);addFeed('create',n.label);document.getElementById('nodeLabel').value='';document.getElementById('nodeContent').value='';document.getElementById('nodeSummary').value='';loadNodes();loadStats()}
 }
@@ -1609,7 +1670,10 @@ async function rebuildSnapshot(){
 async function showDetail(id){
   const n=await api('/nodes/'+id);if(!n)return;
   document.getElementById('detailLabel').textContent=n.label;
-  document.getElementById('detailMeta').innerHTML=`<span class="type-tag" style="color:${tagBg(n.node_type)};border-color:${tagBg(n.node_type)}66;background:${tagBg(n.node_type)}0D">${n.node_type}</span> <span class="ns-tag">${n.namespace}</span> <span style="color:var(--text-faint)">v${n.version||1}</span> <span style="color:var(--text-faint)">| imp:${(n.importance||0).toFixed(2)} | accessed ${n.access_count||0}×</span> <span style="color:var(--text-faint)">| ${n.created_at||'—'}</span>`;
+  const epistemicBadge = n.epistemic_label && n.epistemic_label !== 'unknown' 
+    ? `<span class="epistemic-tag epistemic-${n.epistemic_label}" style="margin-left:8px;font-size:10px;padding:2px 6px;border-radius:4px;text-transform:uppercase;letter-spacing:0.05em">${n.epistemic_label}</span>` 
+    : '';
+  document.getElementById('detailMeta').innerHTML=`<span class="type-tag" style="color:${tagBg(n.node_type)};border-color:${tagBg(n.node_type)}66;background:${tagBg(n.node_type)}0D">${n.node_type}</span> <span class="ns-tag">${n.namespace}</span> ${epistemicBadge} <span style="color:var(--text-faint)">v${n.version||1}</span> <span style="color:var(--text-faint)">| imp:${(n.importance||0).toFixed(2)} | accessed ${n.access_count||0}×</span> <span style="color:var(--text-faint)">| ${n.created_at||'—'}</span>`;
   document.getElementById('detailContent').textContent=n.content||'No content';
   const nb=await api('/nodes/'+id+'/neighbors');
   document.getElementById('detailNeighbors').innerHTML=nb&&nb.length?nb.map(x=>`<div style="padding:6px 0;border-bottom:1px solid rgba(0,212,170,0.06);font-size:12px"><span style="color:var(--text-faint)">${x.edge_type}</span> → <a href="#" onclick="showDetail('${x.id}');return false" style="color:var(--cyan);text-decoration:none;font-weight:600"><span class="type-tag" style="color:${tagBg(x.node_type)};border-color:${tagBg(x.node_type)}66;background:${tagBg(x.node_type)}0D;font-size:9px;padding:1px 4px">${x.node_type}</span> ${esc(x.label)}</a></div>`).join(''):'<div style="color:var(--text-faint);font-size:12px">No connections</div>';
@@ -1785,6 +1849,23 @@ async function importGraph(){
       loadStats();loadGraph();
     }
   }catch(e){toast('Invalid JSON: '+e.message,true)}
+}
+
+async function mineSessions() {
+  const status = document.getElementById('mineResult');
+  status.textContent = 'Mining sessions...';
+  try {
+    const r = await api('/sessions/mine', {method: 'POST', body: JSON.stringify({mine_all: true, workspace: 'hermes'})});
+    if (r) {
+      status.innerHTML = `<span style="color:#00ff88">Mined ${r.mined}/${r.total} sessions (${r.failed} failed)</span>`;
+      toast(`Mined ${r.mined} sessions into MindBank`);
+      loadStats(); loadNodes();
+    } else {
+      status.innerHTML = '<span style="color:#ff4444">Mining failed</span>';
+    }
+  } catch(e) {
+    status.innerHTML = '<span style="color:#ff4444">Error: ' + e.message + '</span>';
+  }
 }
 
 // === Obsidian Import ===
@@ -2157,9 +2238,9 @@ async function loadDebugHealth(){
   if(pgEl)pgEl.style.color=data.postgres==='connected'?'var(--green)':'var(--red)';
   if(ollamaEl)ollamaEl.textContent=data.ollama==='connected'?'OK':'FAIL';
   if(ollamaEl)ollamaEl.style.color=data.ollama==='connected'?'var(--green)':'var(--red)';
-  if(uptimeEl){const m=Math.floor(data.uptime_sec/60),s=data.uptime_sec%60;uptimeEl.textContent=m+'m '+s+'s';}
+  if(uptimeEl){const uptime=data.uptime_seconds||0;const h=Math.floor(uptime/3600),m=Math.floor((uptime%3600)/60),s=Math.floor(uptime%60);uptimeEl.textContent=h>0?h+'h '+m+'m '+s+'s':m+'m '+s+'s';}
   if(goEl)goEl.textContent=data.goroutines||'-';
-  if(verEl)verEl.textContent='v'+data.version+'  |  '+data.go_version+'  |  PG '+data.postgres_version;
+  if(verEl)verEl.textContent='v'+(data.version||'0.5.2')+'  |  '+(data.go_version||'go1.23')+'  |  PG '+(data.postgres_version||'16');
 }
 
 async function runIntegrityScan(){
@@ -2199,6 +2280,134 @@ async function runHeal(fixes,dryRun){
   toast(msg+applied);
   runIntegrityScan();
   loadDebugHealLog();
+}
+
+// === Epistemic Classification Functions ===
+let epistemicBatchNodes = [];
+
+async function previewEpistemicBatch() {
+  const ns = document.getElementById('epistemic-ns').value;
+  const type = document.getElementById('epistemic-type').value;
+  const previewEl = document.getElementById('epistemic-preview');
+  const btn = document.getElementById('epistemic-apply-btn');
+  
+  let url = '/api/v1/nodes?limit=5000';
+  if (ns) url += '&namespace=' + encodeURIComponent(ns);
+  if (type) url += '&type=' + encodeURIComponent(type);
+  
+  previewEl.textContent = 'Loading...';
+  try {
+    const nodes = await api(url);
+    if (!Array.isArray(nodes)) {
+      previewEl.textContent = 'Error: invalid response';
+      return;
+    }
+    epistemicBatchNodes = nodes.filter(n => n.epistemic_label === 'unknown' || !n.epistemic_label);
+    previewEl.innerHTML = `Found <strong>${epistemicBatchNodes.length}</strong> unclassified nodes out of ${nodes.length} total`;
+    btn.disabled = epistemicBatchNodes.length === 0;
+    btn.style.opacity = epistemicBatchNodes.length === 0 ? '0.5' : '1';
+  } catch(e) {
+    previewEl.textContent = 'Error: ' + e.message;
+  }
+}
+
+async function applyEpistemicBatch() {
+  const label = document.getElementById('epistemic-label').value;
+  const statusEl = document.getElementById('epistemic-status');
+  const btn = document.getElementById('epistemic-apply-btn');
+  
+  if (epistemicBatchNodes.length === 0) {
+    toast('No nodes to classify', true);
+    return;
+  }
+  
+  if (!confirm(`Set ${epistemicBatchNodes.length} nodes to "${label}"?`)) return;
+  
+  btn.disabled = true;
+  statusEl.textContent = 'Applying...';
+  let updated = 0;
+  
+  for (const n of epistemicBatchNodes) {
+    try {
+      await api('/api/v1/nodes/' + n.id, {
+        method: 'PUT',
+        body: JSON.stringify({ epistemic_label: label })
+      });
+      updated++;
+    } catch(e) {
+      console.error('Failed to update node', n.id, e);
+    }
+  }
+  
+  statusEl.textContent = `Updated ${updated}/${epistemicBatchNodes.length} nodes to "${label}"`;
+  toast(`Classified ${updated} nodes as ${label}`);
+  epistemicBatchNodes = [];
+  loadNodes();
+  loadStats();
+}
+
+async function runEpistemicAutoDetect() {
+  const statusEl = document.getElementById('epistemic-auto-status');
+  statusEl.textContent = 'Loading nodes...';
+  
+  try {
+    const nodes = await api('/api/v1/nodes?limit=5000');
+    if (!Array.isArray(nodes)) {
+      statusEl.textContent = 'Error: invalid response';
+      return;
+    }
+    
+    // Classification rules based on node type
+    const typeMapping = {
+      'fact': 'observed',
+      'decision': 'inferred',
+      'problem': 'inferred',
+      'advice': 'recommended',
+      'preference': 'recommended',
+      'concept': 'assumed',
+      'topic': 'assumed',
+      'project': 'inferred',
+      'person': 'observed',
+      'event': 'observed',
+      'agent': 'inferred',
+      'question': 'assumed',
+      'session': 'observed'
+    };
+    
+    let updated = 0;
+    let skipped = 0;
+    
+    for (const n of nodes) {
+      // Skip if already classified (not unknown)
+      if (n.epistemic_label && n.epistemic_label !== 'unknown') {
+        skipped++;
+        continue;
+      }
+      
+      const suggestedLabel = typeMapping[n.node_type] || 'unknown';
+      if (suggestedLabel === 'unknown') {
+        skipped++;
+        continue;
+      }
+      
+      try {
+        await api('/api/v1/nodes/' + n.id, {
+          method: 'PUT',
+          body: JSON.stringify({ epistemic_label: suggestedLabel })
+        });
+        updated++;
+      } catch(e) {
+        console.error('Failed to auto-classify node', n.id, e);
+      }
+    }
+    
+    statusEl.innerHTML = `Auto-detect complete:<br>• ${updated} nodes classified<br>• ${skipped} nodes skipped (already classified or unmapped type)`;
+    toast(`Auto-classified ${updated} nodes`);
+    loadNodes();
+    loadStats();
+  } catch(e) {
+    statusEl.textContent = 'Error: ' + e.message;
+  }
 }
 
 async function loadDebugStats(){
@@ -2864,11 +3073,16 @@ async function runQualityAnalysis() {
   dqaChecked = new Set();
 
   try {
-    progressText.textContent = 'Fetching graph...';
-    const graphRes = await fetch(API + '/graph?limit=2000');
-    const graphData = await graphRes.json();
-    const nodes = Array.isArray(graphData.nodes) ? graphData.nodes : (graphData.nodes || []);
-    const allEdgesDqa = Array.isArray(graphData.edges) ? graphData.edges : (graphData.edges || []);
+    progressText.textContent = 'Fetching all nodes...';
+    // Fetch ALL nodes and edges separately for accurate analysis (not limited sample)
+    const [nodesRes, edgesRes] = await Promise.all([
+      fetch(API + '/nodes?limit=10000'),
+      fetch(API + '/edges?limit=10000')
+    ]);
+    const nodesData = await nodesRes.json();
+    const edgesData = await edgesRes.json();
+    const nodes = Array.isArray(nodesData) ? nodesData : (nodesData.nodes || []);
+    const allEdgesDqa = Array.isArray(edgesData) ? edgesData : (edgesData.edges || []);
     if (!nodes.length) {
       progressText.textContent = 'No nodes found.';
       runBtn.disabled = false;
@@ -2917,18 +3131,42 @@ async function runQualityAnalysis() {
       }
       components.push(comp);
     }
-    // Largest component is the "main graph"
-    components.sort((a, b) => b.length - a.length);
+    // Find project/session nodes (organizational anchors)
+    const anchorIds = new Set();
+    for (const n of nodes) {
+      const nt = _s(n.node_type);
+      if (nt === 'project' || nt === 'session' || nt === 'event') {
+        anchorIds.add(_s(n.id));
+      }
+    }
+    // Build anchor reachability: which nodes can reach ANY anchor
+    const anchorReachable = new Set();
+    for (const anchorId of anchorIds) {
+      if (anchorReachable.has(anchorId)) continue;
+      const reachQueue = [anchorId];
+      anchorReachable.add(anchorId);
+      while (reachQueue.length) {
+        const cur = reachQueue.shift();
+        for (const nb of (adj.get(cur) || [])) {
+          if (!anchorReachable.has(nb)) {
+            anchorReachable.add(nb);
+            reachQueue.push(nb);
+          }
+        }
+      }
+    }
+    // Disconnected = nodes that cannot reach any anchor (and are not anchors themselves)
     const orphanIds = new Set(orphans.map(n => _s(n.id)));
-    const disconnected = components.length > 1
-      ? components.slice(1).flat().filter(id => !orphanIds.has(id))
-      : [];
+    const disconnected = nodes
+      .filter(n => !anchorIds.has(_s(n.id)) && !anchorReachable.has(_s(n.id)) && !orphanIds.has(_s(n.id)))
+      .map(n => _s(n.id));
 
     // Check 3: Duplicate labels (same workspace + namespace + label + node_type)
     // Must match backend dedup logic: GROUP BY workspace_name, namespace, label, node_type
     const labelMap = new Map();
     for (const n of nodes) {
-      const key = _s(n.workspace_name) + '::' + _s(n.namespace) + '::' + _s(n.label).toLowerCase() + '::' + _s(n.node_type);
+      const ws = _s(n.workspace_name) || 'hermes'; // default workspace if not present
+      const key = ws + '::' + _s(n.namespace) + '::' + _s(n.label).toLowerCase() + '::' + _s(n.node_type);
       if (!labelMap.has(key)) labelMap.set(key, []);
       labelMap.get(key).push(n);
     }
@@ -2974,19 +3212,26 @@ async function runQualityAnalysis() {
     progressText.textContent = 'Rendering results...';
     await new Promise(r => setTimeout(r, 200));
 
-    // Calculate quality score — robust: normalize ids, cap at 0, never negative good count
+    // Calculate quality score — weighted, non-overlapping categories
+    // Priority: empty > duplicate > orphan > disconnected > uncontained > lowImportance
+    // A node is only counted in its highest-priority category
     const allNodeIds = new Set(nodes.map(n => _s(n.id)));
-    const badIds = new Set([
-      ...orphans.map(n => _s(n.id)),
-      ...disconnected.map(id => _s(id)),
-      ...duplicates.map(n => _s(n.id)),
-      ...emptyContent.map(n => _s(n.id)),
-      ...lowImportance.map(n => _s(n.id)),
-      ...uncontained.map(n => _s(n.id))
-    ]);
-    // Remove any bad IDs that aren't actually in our node set (defensive)
-    for (const bid of badIds) { if (!allNodeIds.has(bid)) badIds.delete(bid); }
-    const totalIssues = Math.min(badIds.size, nodes.length);
+    const issuePriority = [
+      { key: 'empty', items: emptyContent.map(n => _s(n.id)) },
+      { key: 'duplicate', items: duplicates.map(n => _s(n.id)) },
+      { key: 'orphan', items: orphans.map(n => _s(n.id)) },
+      { key: 'disconnected', items: disconnected },
+      { key: 'uncontained', items: uncontained.map(n => _s(n.id)) },
+      { key: 'lowImportance', items: lowImportance.map(n => _s(n.id)) }
+    ];
+    const assignedBadIds = new Set();
+    const categoryCounts = {};
+    for (const cat of issuePriority) {
+      const uniqueInCat = cat.items.filter(id => allNodeIds.has(id) && !assignedBadIds.has(id));
+      categoryCounts[cat.key] = uniqueInCat.length;
+      for (const id of uniqueInCat) assignedBadIds.add(id);
+    }
+    const totalIssues = assignedBadIds.size;
     const clean = Math.max(0, nodes.length - totalIssues);
     const score = nodes.length === 0 ? 100 : Math.round((clean / nodes.length) * 100);
 
@@ -3023,18 +3268,26 @@ async function runQualityAnalysis() {
 
 function calculateQualityScore(nodes, orphans, disconnected, duplicates, emptyContent, lowImportance, uncontained) {
   if (nodes.length === 0) return 100;
-  const _s = (x) => String(x === null || x === undefined ? '' : x).trim();
+  // Calculate quality score — weighted, non-overlapping categories
+  // Priority: empty > duplicate > orphan > disconnected > uncontained > lowImportance
+  // A node is only counted in its highest-priority category
   const allNodeIds = new Set(nodes.map(n => _s(n.id)));
-  const badIds = new Set([
-    ...orphans.map(n => _s(n.id)),
-    ...disconnected.map(id => _s(id)),
-    ...duplicates.map(n => _s(n.id)),
-    ...emptyContent.map(n => _s(n.id)),
-    ...lowImportance.map(n => _s(n.id)),
-    ...(uncontained || []).map(n => _s(n.id))
-  ]);
-  for (const bid of badIds) { if (!allNodeIds.has(bid)) badIds.delete(bid); }
-  const totalIssues = Math.min(badIds.size, nodes.length);
+  const issuePriority = [
+    { key: 'empty', items: emptyContent.map(n => _s(n.id)) },
+    { key: 'duplicate', items: duplicates.map(n => _s(n.id)) },
+    { key: 'orphan', items: orphans.map(n => _s(n.id)) },
+    { key: 'disconnected', items: disconnected },
+    { key: 'uncontained', items: uncontained.map(n => _s(n.id)) },
+    { key: 'lowImportance', items: lowImportance.map(n => _s(n.id)) }
+  ];
+  const assignedBadIds = new Set();
+  const categoryCounts = {};
+  for (const cat of issuePriority) {
+    const uniqueInCat = cat.items.filter(id => allNodeIds.has(id) && !assignedBadIds.has(id));
+    categoryCounts[cat.key] = uniqueInCat.length;
+    for (const id of uniqueInCat) assignedBadIds.add(id);
+  }
+  const totalIssues = assignedBadIds.size;
   const clean = Math.max(0, nodes.length - totalIssues);
   return Math.round((clean / nodes.length) * 100);
 }
@@ -3301,14 +3554,16 @@ async function dqaQuickFix() {
           const edges = nodeIds.map(tid => ({
             source_id: projectId,
             target_id: tid,
-            edge_type: 'contains',
-            workspace_name: 'hermes'
+            edge_type: 'contains'
           }));
-          await fetch(API + '/edges/batch', {
+          const batchRes = await fetch(API + '/edges/batch', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ edges })
           });
+          if (!batchRes.ok) {
+            console.error('Edge batch failed:', batchRes.status, await batchRes.text());
+          }
           executed.uncontained += nodeIds.length;
         }
       } catch(e) { console.error('contain-nodes failed', ns, e); }
@@ -3549,14 +3804,16 @@ async function fixSelected() {
           const edges = nodeIds.map(tid => ({
             source_id: projectId,
             target_id: tid,
-            edge_type: 'contains',
-            workspace_name: 'hermes'
+            edge_type: 'contains'
           }));
-          await fetch(API + '/edges/batch', {
+          const batchRes = await fetch(API + '/edges/batch', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ edges })
           });
+          if (!batchRes.ok) {
+            console.error('Edge batch failed:', batchRes.status, await batchRes.text());
+          }
           containedCount += nodeIds.length;
         }
       } catch(e) { console.error('contain-nodes failed', ns, e); }
@@ -4071,7 +4328,7 @@ document.addEventListener('keydown', function(e) {
   // 1-6: switch tabs (when not in input)
   const tag = e.target.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-  const tabs = ['dashboard','questions','edges','tools','graph','brain','observer','update'];
+  const tabs = ['dashboard','questions','edges','tools','graph2d','brain','observer','update'];
   const idx = parseInt(e.key) - 1;
   if (idx >= 0 && idx < tabs.length) { e.preventDefault(); switchTab(tabs[idx]); }
   // R: refresh current data
@@ -4450,6 +4707,63 @@ async function checkAutoCaptureStatus(){
 // Check auto-capture status periodically
 setInterval(checkAutoCaptureStatus,30000);
 checkAutoCaptureStatus();
+
+// === Neural Consolidation (Dream Engine) ===
+async function triggerDream() {
+  const btn = document.getElementById('dream-trigger-btn');
+  const progress = document.getElementById('dream-progress');
+  const status = document.getElementById('dream-status');
+  
+  btn.disabled = true;
+  btn.textContent = 'Running...';
+  progress.style.display = 'block';
+  status.style.display = 'none';
+  
+  try {
+    const r = await fetch(API + '/dream/trigger', { method: 'POST' });
+    const data = await r.json();
+    
+    if (r.ok) {
+      status.innerHTML = `
+        <div style="color:var(--green)">✓ Consolidation complete</div>
+        <div>Cycle #${data.cycle_id} · Strengthened ${data.edges_strengthened} · Pruned ${data.edges_pruned} · Bridged ${data.edges_bridged} · Clusters ${data.clusters_found}</div>
+      `;
+    } else {
+      status.innerHTML = `<div style="color:var(--red)">✗ ${data.error || 'Consolidation failed'}</div>`;
+    }
+  } catch(e) {
+    status.innerHTML = `<div style="color:var(--red)">✗ Network error: ${e.message}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Run Consolidation';
+    progress.style.display = 'none';
+    status.style.display = 'block';
+  }
+}
+
+async function showDreamStatus() {
+  const status = document.getElementById('dream-status');
+  status.style.display = 'block';
+  status.textContent = 'Loading status...';
+  
+  try {
+    const r = await fetch(API + '/dream/status');
+    const data = await r.json();
+    
+    if (data.status === 'never_run') {
+      status.innerHTML = '<div>No consolidation has been run yet. Click "Run Consolidation" to start.</div>';
+    } else {
+      status.innerHTML = `
+        <div>Cycle #${data.cycle_id} · ${data.status}</div>
+        <div>Started: ${new Date(data.started_at).toLocaleString()}</div>
+        ${data.completed_at ? `<div>Completed: ${new Date(data.completed_at).toLocaleString()}</div>` : ''}
+        <div>Strengthened: ${data.edges_strengthened} · Pruned: ${data.edges_pruned} · Bridged: ${data.edges_bridged} · Clusters: ${data.clusters_found}</div>
+      `;
+    }
+  } catch(e) {
+    status.innerHTML = `<div style="color:var(--red)">✗ Failed to load status: ${e.message}</div>`;
+  }
+}
 </script>
 <script src="observer-tab.js"></script>
 </body>

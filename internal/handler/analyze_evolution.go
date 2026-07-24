@@ -34,12 +34,25 @@ func (h *AnalyzeHandler) Evolution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Query all versions (predecessor chain)
+	// Query all versions (predecessor chain) — includes current node + all predecessors
+	// A node may have multiple predecessors in a linear chain: v3 -> v2 -> v1
+	// We walk backward from current node through predecessor_id links
 	rows, err := h.pool.Query(ctx, `
+		WITH RECURSIVE version_chain AS (
+			-- Anchor: current node
+			SELECT id, label, content, importance, access_count, created_at, valid_to, predecessor_id
+			FROM nodes
+			WHERE id = $1
+			UNION ALL
+			-- Recursive: walk backward through predecessors
+			SELECT n.id, n.label, n.content, n.importance, n.access_count, n.created_at, n.valid_to, n.predecessor_id
+			FROM nodes n
+			INNER JOIN version_chain vc ON n.id = vc.predecessor_id
+		)
 		SELECT id, label, content, importance, access_count, created_at, valid_to
-		FROM nodes
-		WHERE id = $1 OR predecessor_id = $1
+		FROM version_chain
 		ORDER BY created_at ASC
+		LIMIT 50
 	`, nodeID)
 	if err != nil {
 		respondError(w, 500, "version query failed")
@@ -54,6 +67,7 @@ func (h *AnalyzeHandler) Evolution(w http.ResponseWriter, r *http.Request) {
 		Importance  float64 `json:"importance"`
 		AccessCount int     `json:"access_count"`
 		AgeDays     int     `json:"age_days"`
+		IsCurrent   bool    `json:"is_current"`
 	}
 
 	var versions []versionInfo
@@ -66,12 +80,13 @@ func (h *AnalyzeHandler) Evolution(w http.ResponseWriter, r *http.Request) {
 		var vCreatedAt time.Time
 		var vValidTo *time.Time
 		var vContent string
-		err := rows.Scan(&v.ID, &v.Label, &vContent, &v.Importance, &v.AccessCount, &vCreatedAt, &vValidTo)
-		if err != nil {
-			continue
+		if err := rows.Scan(&v.ID, &v.Label, &vContent, &v.Importance, &v.AccessCount, &vCreatedAt, &vValidTo); err != nil {
+			respondError(w, 500, "version scan failed: "+err.Error())
+			return
 		}
 		v.ContentLen = len(vContent)
 		v.AgeDays = int(time.Since(vCreatedAt).Hours() / 24)
+		v.IsCurrent = (vValidTo == nil)
 		versions = append(versions, v)
 		totalAccessCount += v.AccessCount
 		if versionCount == 0 {
@@ -79,32 +94,55 @@ func (h *AnalyzeHandler) Evolution(w http.ResponseWriter, r *http.Request) {
 		}
 		versionCount++
 	}
+	if err := rows.Err(); err != nil {
+		respondError(w, 500, "version row iteration failed: "+err.Error())
+		return
+	}
 
 	// Compute evolution metrics
 	ageDays := int(time.Since(firstCreatedAt).Hours()/24) + 1
+	if ageDays < 1 {
+		ageDays = 1
+	}
 	successRate := float64(totalAccessCount) / float64(ageDays)
 
-	// Maturity level based on age and access patterns
+	// Maturity level based on age, access patterns, and version stability
+	// stable = old + many versions + still accessed
+	// evolving = moderate age or some versions
+	// volatile = new or single version
 	maturityLevel := "volatile"
-	if versionCount >= 3 && ageDays > 30 {
+	if versionCount >= 3 && ageDays > 30 && totalAccessCount > 0 {
 		maturityLevel = "stable"
-	} else if versionCount >= 2 || ageDays > 7 {
+	} else if (versionCount >= 2 && ageDays > 7) || (ageDays > 14 && totalAccessCount > 0) {
 		maturityLevel = "evolving"
 	}
 
 	// Evolution score: combines importance, access rate, and version stability
-	// Higher score = more mature and valuable node
-	evolutionScore := importance * float64(successRate)
+	// Formula: importance * success_rate * stability_bonus
+	// stability_bonus rewards nodes that have versions but are still accessed (not abandoned)
+	stabilityBonus := 1.0
 	if versionCount > 1 {
-		// Penalize high version count (volatility)
-		evolutionScore = evolutionScore / float64(versionCount)
+		// More versions with continued access = more stable knowledge
+		stabilityBonus = 1.0 + (float64(totalAccessCount) / float64(versionCount) / 10.0)
+		if stabilityBonus > 2.0 {
+			stabilityBonus = 2.0
+		}
 	}
+	evolutionScore := importance * successRate * stabilityBonus
 
-	// Convergence delta: how much the node has changed over versions
-	// (simplified: based on version count and age)
+	// Convergence delta: measures how much the node has stabilized
+	// 0.0 = perfectly stable (no changes, high access)
+	// 1.0+ = still converging (frequent changes or low access)
 	convergenceDelta := 1.0
 	if versionCount > 1 {
+		// Fewer versions per day = more converged
 		convergenceDelta = float64(versionCount) / float64(ageDays)
+		if convergenceDelta > 1.0 {
+			convergenceDelta = 1.0 // cap at 1.0 (max convergence)
+		}
+	} else if totalAccessCount > 0 {
+		// Single version with access = partially converged
+		convergenceDelta = 0.5
 	}
 
 	respondJSON(w, 200, map[string]any{

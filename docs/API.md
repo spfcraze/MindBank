@@ -9,7 +9,7 @@ All endpoints accept and return JSON unless noted.
 Set `MB_API_KEY` in `.env` to require Bearer token auth on all endpoints.
 
 ```
-Authorization: Bearer YOUR_API_KEY
+Authorization: Bearer ***
 ```
 
 If `MB_API_KEY` is empty, auth is disabled (development mode).
@@ -30,7 +30,8 @@ Request:
   "content": "JWT with access + refresh tokens",
   "summary": "Short description (optional)",
   "namespace": "my-project",
-  "importance": 0.8
+  "importance": 0.8,
+  "epistemic_label": "observed"
 }
 ```
 
@@ -44,6 +45,7 @@ Response: `201 Created` — the full node object.
 | summary | string | No | Short summary (max 1KB) |
 | namespace | string | No | Project namespace (default: "global") |
 | importance | float | No | 0.0-1.0 (default: 0.5) |
+| epistemic_label | string | No | observed, inferred, assumed, recommended, unknown (default: unknown) |
 | metadata | object | No | JSON metadata |
 
 ### Get Node
@@ -134,6 +136,22 @@ Finds duplicate nodes (same label + type + namespace) and soft-deletes older ver
 | namespace | string | Scope to namespace (empty = all) |
 | dry_run | bool | If true, report only (default: false) |
 
+### Update Epistemic Label
+
+```
+PUT /api/v1/nodes/epistemic?label=observed&node_id=uuid
+```
+
+Valid labels: `observed`, `inferred`, `assumed`, `recommended`, `unknown`
+
+Response:
+```json
+{
+  "node_id": "uuid",
+  "epistemic_label": "observed"
+}
+```
+
 ## Edges
 
 ### Create Edge
@@ -151,7 +169,7 @@ POST /api/v1/edges
 }
 ```
 
-Valid edge types: `contains`, `relates_to`, `depends_on`, `decided_by`, `participated_in`, `produced`, `contradicts`, `supports`, `temporal_next`, `mentions`, `learned_from`
+Valid edge types: `contains`, `relates_to`, `depends_on`, `decided_by`, `participated_in`, `produced`, `contradicts`, `supports`, `derived_from`, `tested_by`, `temporal_next`, `mentions`, `learned_from`
 
 ### List Edges
 
@@ -305,3 +323,70 @@ This means:
 - `GET /nodes/{id}/history` returns all versions
 - Old data is never lost
 - Edges always point to the current version
+
+## Confidence Scoring (Enhanced V3)
+
+The system provides confidence scoring for nodes based on topology + epistemic signals.
+
+### Formula
+```
+confidence = 0.25×frequency + 0.20×connectivity + 0.15×ageStability
+           + 0.10×importance + 0.15×groundingScore + 0.15×epistemicBonus
+           - 0.05×contradictionPenalty
+```
+
+### Components
+| Factor | Weight | Description |
+|--------|--------|-------------|
+| frequency | 0.25 | min(access_count / 50, 1.0) |
+| connectivity | 0.20 | min(edge_count / 10, 1.0) |
+| ageStability | 0.15 | 1.0 - min(age_days / 365, 1.0) — newer is better |
+| importance | 0.10 | User-assigned score (0.0-1.0) |
+| groundingScore | 0.15 | min(evidence_count / 5, 1.0) — counts supports, derived_from, tested_by edges |
+| epistemicBonus | 0.15 | observed(+0.15), inferred(+0.05), assumed(-0.15), recommended(0), unknown(0) |
+| contradictionPenalty | 0.05 | min(contradiction_count × 0.10, 0.30) |
+
+### Trust Levels
+- **High**: ≥ 0.60
+- **Medium**: ≥ 0.35
+- **Low**: < 0.35
+
+### Endpoints
+```
+GET /api/v1/analyze/confidence?node_id=uuid
+GET /api/v1/analyze/confidence?namespace=my-project
+```
+
+Response includes: `score`, `trust_level`, `breakdown` (per-factor scores), `edge_count`, `contradiction_count`, `evidence_count`, `epistemic_label`.
+
+## Analysis Endpoints
+
+### Contradictions
+```
+GET /api/v1/analyze/contradictions?namespace=my-project
+```
+Lists all `contradicts` edges with source/target summaries.
+
+### Gaps
+```
+GET /api/v1/analyze/gaps?namespace=my-project
+```
+Detects: orphan nodes (0 edges), unanswered questions, unsolved problems, stale nodes.
+
+### Dependence Graph
+```
+GET /api/v1/analyze/dependence?node_id=uuid&max_depth=3
+```
+Returns upstream/downstream dependency chains.
+
+### Diff
+```
+GET /api/v1/analyze/diff?since=2024-01-01T00:00:00Z&namespace=my-project
+```
+Reports new/updated/deleted nodes and edges since timestamp.
+
+### Heal
+```
+POST /api/v1/analyze/heal?namespace=my-project&dry_run=true
+```
+Auto-links orphan nodes to related content via FTS similarity. Review suggested links before applying.

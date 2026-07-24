@@ -39,11 +39,22 @@ func NewSearchRepo(pool *pgxpool.Pool) *SearchRepo {
 	}
 }
 
+// clampLimit bounds a caller-supplied limit instead of resetting it to 10:
+// HybridSearch passes limit*3 as its candidate pool, so a reset here silently
+// capped any search with limit > 33 at ~10 candidates per tier.
+func clampLimit(limit, max int) int {
+	if limit <= 0 {
+		return 10
+	}
+	if limit > max {
+		return max
+	}
+	return limit
+}
+
 // FullTextSearch performs PostgreSQL FTS using ts_rank_cd with synonym expansion.
 func (r *SearchRepo) FullTextSearch(ctx context.Context, query string, workspace, namespace string, limit int) ([]models.SearchResult, error) {
-	if limit <= 0 || limit > 100 {
-		limit = 10
-	}
+	limit = clampLimit(limit, 300)
 
 	query = sanitizeSearchQuery(query)
 
@@ -56,6 +67,7 @@ func (r *SearchRepo) FullTextSearch(ctx context.Context, query string, workspace
 		       ts_rank_cd(search_vector, websearch_to_tsquery('english', $1)) AS rank
 		FROM nodes
 		WHERE valid_to IS NULL
+		  AND node_type NOT IN ('session', 'event')
 		  AND search_vector @@ websearch_to_tsquery('english', $1)
 		  AND ($2 = '' OR workspace_name = $2)
 		  AND ($3 = '' OR namespace = $3)
@@ -69,6 +81,7 @@ func (r *SearchRepo) FullTextSearch(ctx context.Context, query string, workspace
 			       ts_rank_cd(search_vector, plainto_tsquery('english', $1)) AS rank
 			FROM nodes
 			WHERE valid_to IS NULL
+			  AND node_type NOT IN ('session', 'event')
 			  AND search_vector @@ plainto_tsquery('english', $1)
 			  AND ($2 = '' OR workspace_name = $2)
 			  AND ($3 = '' OR namespace = $3)
@@ -92,17 +105,35 @@ func (r *SearchRepo) FullTextSearch(ctx context.Context, query string, workspace
 		}
 		results = append(results, sr)
 	}
+	// pgx defers execution errors (statement timeout, dropped connection) to
+	// rows.Err(); without this check they look identical to "no results".
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("fts rows: %w", err)
+	}
 
 	// If FTS returned nothing, try trigram with original + expanded terms
 	if len(results) == 0 {
-		// Try each synonym term individually with trigram
+		// Try each synonym term individually with trigram, deduping by node:
+		// the same node matching several synonyms would otherwise appear
+		// multiple times and accrue inflated RRF scores downstream.
+		seen := make(map[string]bool)
 		for _, term := range terms {
 			trigResults, err := r.trigramSearch(ctx, term, workspace, namespace, limit)
-			if err == nil && len(trigResults) > 0 {
-				results = append(results, trigResults...)
+			if err != nil {
+				continue
+			}
+			for _, tr := range trigResults {
+				if seen[tr.NodeID] {
+					continue
+				}
+				seen[tr.NodeID] = true
+				results = append(results, tr)
 				if len(results) >= limit {
 					break
 				}
+			}
+			if len(results) >= limit {
+				break
 			}
 		}
 		// If still nothing, try original query with trigram
@@ -132,6 +163,7 @@ func (r *SearchRepo) trigramSearch(ctx context.Context, query string, workspace,
 		       ) AS sim
 		FROM nodes
 		WHERE valid_to IS NULL
+		  AND node_type NOT IN ('session', 'event')
 		  AND ($2 = '' OR workspace_name = $2)
 		  AND ($3 = '' OR namespace = $3)
 		  AND (
@@ -157,14 +189,15 @@ func (r *SearchRepo) trigramSearch(ctx context.Context, query string, workspace,
 		}
 		results = append(results, sr)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("trigram rows: %w", err)
+	}
 	return results, nil
 }
 
 // VectorSearch performs semantic search using pgvector cosine similarity.
 func (r *SearchRepo) VectorSearch(ctx context.Context, embedding []float32, workspace, namespace string, limit int) ([]models.SearchResult, error) {
-	if limit <= 0 || limit > 100 {
-		limit = 10
-	}
+	limit = clampLimit(limit, 300)
 
 	vecStr := vectorToLiteral(embedding)
 
@@ -174,6 +207,7 @@ func (r *SearchRepo) VectorSearch(ctx context.Context, embedding []float32, work
 		FROM node_embeddings ne
 		JOIN nodes n ON n.id = ne.node_id
 		WHERE n.valid_to IS NULL
+		  AND n.node_type NOT IN ('session', 'event')
 		  AND ($2 = '' OR n.workspace_name = $2)
 		  AND ($3 = '' OR n.namespace = $3)
 		ORDER BY ne.embedding <=> $1::vector
@@ -191,6 +225,9 @@ func (r *SearchRepo) VectorSearch(ctx context.Context, embedding []float32, work
 			return nil, fmt.Errorf("scan vec result: %w", err)
 		}
 		results = append(results, sr)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("vector rows: %w", err)
 	}
 	return results, nil
 }
@@ -220,12 +257,11 @@ func (r *SearchRepo) CacheStats() (size int, maxAge time.Duration) {
 
 // HybridSearch combines FTS + vector results using Reciprocal Rank Fusion.
 func (r *SearchRepo) HybridSearch(ctx context.Context, query string, embedding []float32, workspace, namespace string, limit int, edgeRepo *EdgeRepo) ([]models.SearchResult, error) {
-	if limit <= 0 || limit > 100 {
-		limit = 10
-	}
+	limit = clampLimit(limit, 100)
 
-	// Check result cache first (key = query|workspace|namespace|limit)
-	cacheKey := query + "|" + workspace + "|" + namespace + "|" + fmt.Sprintf("%d", limit)
+	// Check result cache first. \x1f separators can't appear in normal
+	// workspace/namespace values, so keys can't collide across tenants.
+	cacheKey := query + "\x1f" + workspace + "\x1f" + namespace + "\x1f" + fmt.Sprintf("%d", limit)
 	if cached, ok := r.resultCache.Get(cacheKey); ok {
 		slog.Debug("result cache hit", "query", query, "workspace", workspace)
 		return cached, nil
@@ -326,7 +362,7 @@ func (r *SearchRepo) HybridSearch(ctx context.Context, query string, embedding [
 	}
 
 	// Graph expansion: boost results with graph-connected nodes
-	results = r.GraphExpand(ctx, results, edgeRepo, limit)
+	results = r.GraphExpand(ctx, results, edgeRepo, limit, workspace, namespace)
 
 	// Cache the final results before returning
 	r.resultCache.Set(cacheKey, results)
@@ -390,7 +426,10 @@ func (r *SearchRepo) ImportanceScore(ctx context.Context, nodeID string) (float3
 
 // GraphExpand expands search results by finding 1-hop graph neighbors of top text results.
 // Neighbors are scored and merged into the result set with a bias toward text results.
-func (r *SearchRepo) GraphExpand(ctx context.Context, textResults []models.SearchResult, edgeRepo *EdgeRepo, limit int) []models.SearchResult {
+// workspace/namespace repeat the search's tenant filters: edges can cross those
+// boundaries, so unfiltered neighbors would leak other tenants' memories into
+// (cached) results.
+func (r *SearchRepo) GraphExpand(ctx context.Context, textResults []models.SearchResult, edgeRepo *EdgeRepo, limit int, workspace, namespace string) []models.SearchResult {
 	if len(textResults) == 0 || edgeRepo == nil {
 		return textResults
 	}
@@ -463,6 +502,19 @@ func (r *SearchRepo) GraphExpand(ctx context.Context, textResults []models.Searc
 		for _, nw := range neighbors {
 			// Skip nodes already in results
 			if existing[nw.ID] {
+				continue
+			}
+			// Skip container/shell nodes: knowledge nodes are 'produced' by a
+			// session, so graph expansion would otherwise pull those session
+			// shells back into recall (noise + wasted tokens).
+			if nw.NodeType == "session" || nw.NodeType == "event" {
+				continue
+			}
+			// Enforce the search's tenant filters on expanded neighbors
+			if workspace != "" && nw.WorkspaceName != workspace {
+				continue
+			}
+			if namespace != "" && nw.Namespace != namespace {
 				continue
 			}
 

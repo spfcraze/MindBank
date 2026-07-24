@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"mindbank/internal/models"
 
@@ -219,6 +220,31 @@ func (r *SessionRepo) Close(ctx context.Context, id string) error {
 		return fmt.Errorf("close session: %w", err)
 	}
 	return nil
+}
+
+// ListRecent returns sessions created within the given duration.
+func (r *SessionRepo) ListRecent(ctx context.Context, workspace, namespace string, within time.Duration) ([]models.Session, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, workspace_name, name, is_active, metadata, summary, created_at, updated_at
+		FROM sessions
+		WHERE workspace_name = $1
+		  AND created_at > now() - $2::interval
+		ORDER BY created_at DESC
+	`, workspace, within)
+	if err != nil {
+		return nil, fmt.Errorf("list recent sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var sessions []models.Session
+	for rows.Next() {
+		var s models.Session
+		if err := rows.Scan(&s.ID, &s.WorkspaceName, &s.Name, &s.IsActive, &s.Metadata, &s.Summary, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan session: %w", err)
+		}
+		sessions = append(sessions, s)
+	}
+	return sessions, nil
 }
 
 // GetContext returns a token-limited context for a session (messages + associated nodes).

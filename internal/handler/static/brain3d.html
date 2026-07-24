@@ -5,7 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MIND_BANK // BRAIN_3D</title>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="brain3d.css?v=4">
+    <link rel="stylesheet" href="brain3d.css?v=5">
+    <style>
+        /* Critical CSS to prevent FOUC before stylesheet loads */
+        html,body { margin:0; padding:0; background:#050508; color:#00D4AA; font-family:'JetBrains Mono',monospace; overflow:hidden; }
+        #app { visibility:hidden; }
+        #loading { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); color:#00D4AA; font-family:'JetBrains Mono',monospace; font-size:14px; letter-spacing:2px; }
+    </style>
     <script type="importmap">
     {
         "imports": {
@@ -33,8 +39,8 @@
                 </label>
                 <input type="text" id="search-input" placeholder="Search nodes..." 
                        oninput="searchNodes(this.value)"
-                       style="background:rgba(255,176,0,0.04);color:var(--text);border:1px solid var(--border);padding:5px 12px;border-radius:4px;font-size:10px;width:160px;font-family:var(--font-mono);">
-                <select id="topic-filter" style="background:rgba(255,176,0,0.04);color:var(--text);border:1px solid var(--border);padding:5px 10px;border-radius:4px;font-size:10px;font-family:var(--font-mono);">
+                       style="background:rgba(0,212,170,0.04);color:var(--text);border:1px solid var(--border);padding:5px 12px;border-radius:4px;font-size:10px;width:160px;font-family:var(--font-mono);">
+                <select id="topic-filter" style="background:rgba(0,212,170,0.04);color:var(--text);border:1px solid var(--border);padding:5px 10px;border-radius:4px;font-size:10px;font-family:var(--font-mono);">
                     <option value="">All Topics</option>
                     <option value="deployment">Deployment</option>
                     <option value="database">Database</option>
@@ -47,12 +53,12 @@
                     <option value="config">Config</option>
                     <option value="architecture">Architecture</option>
                 </select>
-                <select id="namespace-filter" style="background:rgba(255,176,0,0.04);color:var(--text);border:1px solid var(--border);padding:5px 10px;border-radius:4px;font-size:10px;font-family:var(--font-mono);">
+                <select id="namespace-filter" style="background:rgba(0,212,170,0.04);color:var(--text);border:1px solid var(--border);padding:5px 10px;border-radius:4px;font-size:10px;font-family:var(--font-mono);">
                     <option value="">All namespaces</option>
                 </select>
-                <button id="reset-cam" title="Reset camera" style="background:rgba(255,176,0,0.04);color:var(--text);border:1px solid var(--border);font-family:var(--font-mono);">Reset Cam</button>
-                <button id="capture-btn" title="Capture screenshot" style="background:rgba(255,176,0,0.04);color:var(--text);border:1px solid var(--border);font-family:var(--font-mono);">Capture</button>
-                <a href="/" class="back" style="background:rgba(255,176,0,0.04);color:var(--text);border:1px solid var(--border);font-family:var(--font-mono);">← Dashboard</a>
+                <button id="reset-cam" title="Reset camera" style="background:rgba(0,212,170,0.04);color:var(--text);border:1px solid var(--border);font-family:var(--font-mono);">Reset Cam</button>
+                <button id="capture-btn" title="Capture screenshot" style="background:rgba(0,212,170,0.04);color:var(--text);border:1px solid var(--border);font-family:var(--font-mono);">Capture</button>
+                <a href="/" class="back" style="background:rgba(0,212,170,0.04);color:var(--text);border:1px solid var(--border);font-family:var(--font-mono);">← Dashboard</a>
             </div>
         </header>
 
@@ -103,6 +109,26 @@
                         <div class="activity-empty">Waiting for activity...</div>
                     </div>
                 </div>
+
+                <!-- Legend (moved out of the canvas so the graph stays clean) -->
+                <div class="sidebar-section" id="legend-section">
+                    <div class="sidebar-title">📖 Legend</div>
+                    <div class="legend-sub">Node shapes</div>
+                    <div class="legend-item"><span class="legend-glyph" style="color:#a78bfa;">◆</span> Problem — diamond</div>
+                    <div class="legend-item"><span class="legend-glyph" style="color:#4ecdc4;">▪</span> Fact — cube</div>
+                    <div class="legend-item"><span class="legend-glyph" style="color:#ff6b35;">⚖</span> Decision — scale</div>
+                    <div class="legend-item"><span class="legend-glyph" style="color:#94a3b8;">◎</span> Session — orbit</div>
+                    <div class="legend-item"><span class="legend-glyph" style="color:#4ecdc4;">✦</span> Project — cluster (anchor)</div>
+                    <div class="legend-item"><span class="legend-glyph" style="color:#a78bfa;">⬡</span> Concept — rings</div>
+                    <div class="legend-sub">Edge colors</div>
+                    <div class="legend-item"><span class="legend-color" style="background:#3b82f6;"></span> produced / contains</div>
+                    <div class="legend-item"><span class="legend-color" style="background:#4ecdc4;"></span> depends_on / supports</div>
+                    <div class="legend-item"><span class="legend-color" style="background:#a78bfa;"></span> influences</div>
+                    <div class="legend-item"><span class="legend-color" style="background:#ff6b35;"></span> contradicts</div>
+                    <div class="legend-item"><span class="legend-color" style="background:#64748b;"></span> relates_to (faint)</div>
+                    <div class="legend-note">Size = importance · flow dots show direction</div>
+                    <div class="legend-note">Click a node to focus its connections</div>
+                </div>
             </aside>
 
             <!-- CENTER: 3D Canvas -->
@@ -121,16 +147,6 @@
                 <!-- Activity Indicator -->
                 <div id="activity-indicator">
                     <span class="pulse-dot"></span>Live
-                </div>
-
-                <!-- Edge Legend -->
-                <div id="edge-legend">
-                    <div class="legend-title">Edge Types</div>
-                    <div class="legend-item"><span class="legend-color" style="background:#4ecdc4;"></span> depends_on / supports</div>
-                    <div class="legend-item"><span class="legend-color" style="background:#a78bfa;"></span> influences</div>
-                    <div class="legend-item"><span class="legend-color" style="background:#ff6b35;"></span> contradicts</div>
-                    <div class="legend-item"><span class="legend-color" style="background:#404040;"></span> relates_to</div>
-                    <div class="legend-item"><span class="legend-color" style="background:#3b82f6;"></span> contains</div>
                 </div>
 
                 <!-- Hover Info Panel (floating) -->
@@ -261,7 +277,7 @@
     </div>
 
     <script type="module">
-        import { Brain3D } from './brain3d.js?v=7';
+        import { Brain3D } from './brain3d.js?v=11';
         import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
         import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
         import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -304,6 +320,7 @@
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 const data = await res.json();
                 graphData = data;
+                window.graphData = data;  // expose for global access (showConnections, etc.)
                 console.log('[Brain3D] Loaded:', data.nodes.length, 'nodes,', data.edges.length, 'edges');
                 loading.textContent = `Loaded ${data.nodes.length} nodes. Building visualization...`;
 
@@ -311,7 +328,38 @@
                 const knowledgeNodes = data.nodes.filter(n => knowledgeTypes.has(n.node_type));
                 const sessionNodes = data.nodes.filter(n => n.node_type === 'session');
                 
-                const displayNodes = knowledgeNodes.length > 0 ? knowledgeNodes : data.nodes;
+                // Synthesize missing session nodes for edges whose source/target isn't in the node list
+                // The /graph endpoint may not include session nodes, but edges reference them
+                const existingNodeIds = new Set(data.nodes.map(n => n.id));
+                const missingIds = new Set();
+                for (const e of data.edges) {
+                    if (!existingNodeIds.has(e.source)) missingIds.add(e.source);
+                    if (!existingNodeIds.has(e.target)) missingIds.add(e.target);
+                }
+                let synthCount = 0;
+                for (const missingId of missingIds) {
+                    // Determine if this is a source (likely session) or target
+                    const isSource = data.edges.some(e => e.source === missingId);
+                    const edge = data.edges.find(e => e.source === missingId || e.target === missingId);
+                    const nodeType = isSource ? 'session' : 'problem';
+                    data.nodes.push({
+                        id: missingId,
+                        node_type: nodeType,
+                        label: edge ? (edge.source === missingId ? 'Session' : 'Node') : 'Unknown',
+                        namespace: 'global',
+                        importance: 0.3,
+                        content: '',
+                        summary: '',
+                        metadata: { synthetic: true }
+                    });
+                    synthCount++;
+                }
+                if (synthCount > 0) {
+                    console.log('[Brain3D] Synthesized', synthCount, 'missing session nodes for edge connectivity');
+                }
+
+                // Display ALL nodes (including sessions) so edges are visible
+                const displayNodes = data.nodes;
                 
                 console.log('[Brain3D] Knowledge nodes:', knowledgeNodes.length, '| Session nodes:', sessionNodes.length, '| Displaying:', displayNodes.length);
                 
@@ -364,12 +412,10 @@
                     brain.setTopicFilter(document.getElementById('topic-filter').value);
                 });
 
-                // Reset camera
+                // Reset camera — refit to the actual layout bounds instead of
+                // a fixed position that may sit inside the graph
                 document.getElementById('reset-cam').addEventListener('click', () => {
-                    brain.camera.position.set(0, 30, 60);
-                    brain.camera.lookAt(0, 0, 0);
-                    brain.controls.target.set(0, 0, 0);
-                    brain.controls.update();
+                    brain.fitCameraToLayout();
                 });
 
                 // Screenshot capture
@@ -385,12 +431,12 @@
 
                 // Wire hover to right sidebar
                 brain.onNodeHover = (node) => {
-                    if (node) showNodeDetail(node);
+                    if (node) window.showNodeDetail(node);
                 };
                 brain.onNodeSelect = (node) => {
                     if (node) {
-                        showNodeDetail(node);
-                        showConnections(node);
+                        window.showNodeDetail(node);
+                        window.showConnections(node);
                     }
                 };
 
@@ -486,6 +532,39 @@
         // ═══════════════════════════════════════════════════════════════════════
         // RIGHT SIDEBAR: Node Details & Insights
         // ═══════════════════════════════════════════════════════════════════════
+        window.showNodeDetail = function(node) {
+            document.getElementById('node-detail-section').style.display = 'block';
+            document.getElementById('nd-label').textContent = node.label || node.id;
+            document.getElementById('nd-type').textContent = node.node_type;
+            document.getElementById('nd-namespace').textContent = node.namespace || 'global';
+            document.getElementById('nd-importance').textContent = (node.importance || 0.5).toFixed(2) + ' / 1.0';
+            document.getElementById('nd-accessed').textContent = (node.access_count || 0) + '×';
+            document.getElementById('nd-created').textContent = node.created_at ? new Date(node.created_at).toLocaleDateString() : '—';
+            document.getElementById('nd-epistemic').textContent = node.epistemic_label || 'unknown';
+            document.getElementById('nd-content').textContent = node.content ? node.content.substring(0, 300) + (node.content.length > 300 ? '...' : '') : 'No content';
+            document.getElementById('nd-summary').textContent = node.summary || 'No summary';
+        }
+
+        window.showConnections = function(node) {
+            const gd = window.graphData;
+            if (!gd) return;
+            const connected = gd.edges.filter(e => e.source === node.id || e.target === node.id);
+            document.getElementById('connections-section').style.display = 'block';
+            document.getElementById('conn-count').textContent = '(' + connected.length + ')';
+            
+            const list = document.getElementById('connections-list');
+            list.innerHTML = connected.slice(0, 20).map(e => {
+                const otherId = e.source === node.id ? e.target : e.source;
+                const other = gd.nodes.find(n => n.id === otherId);
+                const direction = e.source === node.id ? '→' : '←';
+                return `<div class="conn-item" onclick="focusNodeById('${otherId}')">
+                    <span class="conn-dir">${direction}</span>
+                    <span class="conn-type">${e.edge_type}</span>
+                    <span class="conn-label">${other ? (other.label || otherId).substring(0, 20) : otherId.substring(0, 12)}</span>
+                </div>`;
+            }).join('');
+        }
+
         function populateRightSidebar(data, nodes, edges) {
             // Graph health metrics
             const nodeCount = nodes.length;
@@ -672,7 +751,12 @@
             while (feed.children.length > 20) feed.removeChild(feed.lastChild);
         };
 
-        main();
+        // Defer main() until stylesheets are fully loaded to prevent FOUC
+        function runMain() {
+            document.getElementById('app').style.visibility = 'visible';
+            main();
+        }
+        runMain();
     </script>
 </body>
 </html>

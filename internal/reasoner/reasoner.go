@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"mindbank/internal/embedder"
 	"mindbank/internal/models"
@@ -179,7 +181,9 @@ func (r *RuleBased) ProcessAndStore(ctx context.Context, sessionID, workspace, n
 		}
 
 		// Enqueue for embedding
-		_, _ = r.pool.Exec(ctx, `INSERT INTO embedding_queue (source_type, source_id) VALUES ('node', $1)`, nodeID)
+		if err := embedder.EnqueueNode(ctx, r.pool, nodeID); err != nil {
+			slog.Warn("failed to enqueue embedding", "node_id", nodeID, "error", err)
+		}
 
 		// Link to session
 		_, _ = r.pool.Exec(ctx, `
@@ -211,22 +215,51 @@ func truncate(s string, maxLen int) string {
 
 // LLMReasoner uses an LLM for more sophisticated extraction.
 // For now, this is a placeholder — you'd call your LLM API here.
+// SettingsGetter is the minimal read interface the reasoner needs to pick up
+// runtime LLM config saved from the dashboard (DB overrides env defaults).
+type SettingsGetter interface {
+	Get(ctx context.Context, key string) (string, error)
+}
+
 type LLMReasoner struct {
 	pool     *pgxpool.Pool
 	embedder *embedder.Client
-	apiURL   string // OpenAI-compatible endpoint
-	apiKey   string
-	model    string
+	defURL   string // env default OpenAI-compatible endpoint
+	defKey   string
+	defModel string
+	settings SettingsGetter // optional runtime overrides (dashboard-configurable)
 }
 
-func NewLLMReasoner(pool *pgxpool.Pool, emb *embedder.Client, apiURL, apiKey, model string) *LLMReasoner {
+func NewLLMReasoner(pool *pgxpool.Pool, emb *embedder.Client, apiURL, apiKey, model string, settings SettingsGetter) *LLMReasoner {
 	return &LLMReasoner{
 		pool:     pool,
 		embedder: emb,
-		apiURL:   apiURL,
-		apiKey:   apiKey,
-		model:    model,
+		defURL:   apiURL,
+		defKey:   apiKey,
+		defModel: model,
+		settings: settings,
 	}
+}
+
+// resolve returns the effective LLM config: dashboard-saved DB settings
+// (llm_api_url / llm_api_key / llm_model) override the env defaults. Reading is
+// cheap and happens per extraction (infrequent), so config changes take effect
+// live without a restart.
+func (l *LLMReasoner) resolve() (url, key, model string) {
+	url, key, model = l.defURL, l.defKey, l.defModel
+	if l.settings != nil {
+		ctx := context.Background()
+		if v, _ := l.settings.Get(ctx, "llm_api_url"); v != "" {
+			url = v
+		}
+		if v, _ := l.settings.Get(ctx, "llm_api_key"); v != "" {
+			key = v
+		}
+		if v, _ := l.settings.Get(ctx, "llm_model"); v != "" {
+			model = v
+		}
+	}
+	return url, key, model
 }
 
 // ExtractionResult is what the LLM returns.
@@ -241,6 +274,200 @@ type ExtractedFact struct {
 	Summary  string `json:"summary"`
 }
 
+// Enabled reports whether LLM extraction is configured (a URL and model exist,
+// from either the dashboard settings or env).
+func (l *LLMReasoner) Enabled() bool {
+	if l == nil {
+		return false
+	}
+	url, _, model := l.resolve()
+	return url != "" && model != ""
+}
+
+const extractionSystemPrompt = `You extract durable, reusable memories from a coding-assistant work session for a long-term memory system. Return ONLY a JSON object {"nodes":[...]} and nothing else.`
+
+const extractionUserPrompt = `Extract the memories worth remembering across FUTURE sessions from the session below.
+
+Each node in "nodes" must have:
+- "label": a concise 3-8 word noun phrase naming the memory. PLAIN TEXT ONLY — no markdown (no **, #, backticks), no leading bullet or number, no trailing colon. E.g. "Local Postgres DSN", "Decision to use pgvector HNSW index".
+- "type": exactly one of: decision, fact, preference, problem, advice, person, project, concept, event.
+- "content": 1-3 complete sentences stating the memory precisely and self-containedly, useful WITHOUT the transcript.
+- "summary": one short sentence.
+
+Only include: concrete decisions made, technical facts learned, user/project preferences, bugs/problems and their resolution status, and key entities (people, projects, tools). Merge duplicates. Ignore chit-chat, raw tool output, code dumps, and anything transient. Prefer 5-20 high-quality memories over many low-quality ones. If nothing durable, return {"nodes":[]}.
+
+Session:
+%s
+
+Return ONLY the JSON object.`
+
+// ExtractFromText runs LLM-based extraction over a block of session text and
+// returns sanitized, deduplicated memory nodes. Falls back to an empty result
+// (never an error the caller must handle) when the LLM is unavailable.
+func (l *LLMReasoner) ExtractFromText(ctx context.Context, text string) (*ExtractionResult, error) {
+	url, key, model := l.resolve()
+	if url == "" || model == "" || strings.TrimSpace(text) == "" {
+		return &ExtractionResult{}, nil
+	}
+	// Bound input so a huge transcript can't blow the context window.
+	const maxInput = 24000
+	if len(text) > maxInput {
+		text = text[:maxInput]
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"model": model,
+		"messages": []map[string]string{
+			{"role": "system", "content": extractionSystemPrompt},
+			{"role": "user", "content": fmt.Sprintf(extractionUserPrompt, text)},
+		},
+		"temperature": 0,
+		"stream":      false,
+		"max_tokens":  2000, // bound generation time; extractions are small
+	})
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return &ExtractionResult{}, nil
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		slog.Warn("llm extract: request failed, will fall back", "error", err)
+		return &ExtractionResult{}, nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		slog.Warn("llm extract: non-200", "status", resp.StatusCode)
+		return &ExtractionResult{}, nil
+	}
+
+	var llmResp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&llmResp); err != nil || len(llmResp.Choices) == 0 {
+		return &ExtractionResult{}, nil
+	}
+
+	raw := extractJSONObject(llmResp.Choices[0].Message.Content)
+	var result ExtractionResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		slog.Warn("llm extract: unparseable JSON, falling back", "error", err)
+		return &ExtractionResult{}, nil
+	}
+	result.Nodes = sanitizeExtracted(result.Nodes)
+	// Free VRAM immediately after extraction (local Ollama only) so the model
+	// doesn't linger in memory for Ollama's default keep-alive window. Cloud
+	// endpoints (with an API key / non-11434 host) are left alone.
+	l.unloadIfLocal(url, key, model)
+	return &result, nil
+}
+
+// unloadIfLocal asks a local Ollama to drop the extraction model from memory
+// right after use (keep_alive: 0), so it only occupies VRAM during the few
+// seconds of extraction. No-op for cloud/OpenAI-compatible endpoints.
+func (l *LLMReasoner) unloadIfLocal(url, key, model string) {
+	if key != "" || !strings.Contains(url, "11434") {
+		return // cloud endpoint — don't try to unload
+	}
+	base := strings.TrimSuffix(strings.TrimSuffix(url, "/"), "/v1")
+	body, _ := json.Marshal(map[string]any{"model": model, "keep_alive": 0})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "POST", base+"/api/generate", bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req); err == nil {
+		resp.Body.Close()
+	}
+}
+
+// extractJSONObject pulls the first balanced {...} out of an LLM reply,
+// tolerating ```json fences and surrounding prose.
+func extractJSONObject(s string) string {
+	s = strings.TrimSpace(s)
+	start := strings.Index(s, "{")
+	end := strings.LastIndex(s, "}")
+	if start >= 0 && end > start {
+		return s[start : end+1]
+	}
+	return s
+}
+
+var validExtractTypes = map[string]bool{
+	"decision": true, "fact": true, "preference": true, "problem": true,
+	"advice": true, "person": true, "project": true, "concept": true, "event": true,
+}
+
+// sanitizeExtracted cleans labels, validates types, drops empties, and
+// deduplicates — a guard against messy LLM output regardless of the prompt.
+func sanitizeExtracted(nodes []ExtractedFact) []ExtractedFact {
+	out := make([]ExtractedFact, 0, len(nodes))
+	seen := make(map[string]bool)
+	for _, n := range nodes {
+		label := cleanLabel(n.Label)
+		content := strings.TrimSpace(n.Content)
+		if label == "" || content == "" {
+			continue
+		}
+		t := strings.ToLower(strings.TrimSpace(n.NodeType))
+		if !validExtractTypes[t] {
+			t = "fact"
+		}
+		key := strings.ToLower(label)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		summary := strings.TrimSpace(n.Summary)
+		if summary == "" {
+			summary = firstSentence(content)
+		}
+		out = append(out, ExtractedFact{Label: label, NodeType: t, Content: content, Summary: summary})
+	}
+	return out
+}
+
+// cleanLabel strips markdown, list markers, and trailing punctuation so labels
+// are clean noun phrases instead of transcript fragments.
+func cleanLabel(s string) string {
+	s = strings.TrimSpace(s)
+	// Drop leading list/heading markers: -, *, #, 1., 2)
+	s = regexp.MustCompile(`^[\s>#*\-]+`).ReplaceAllString(s, "")
+	s = regexp.MustCompile(`^\d+[.)]\s*`).ReplaceAllString(s, "")
+	// Strip markdown emphasis and backticks
+	s = strings.NewReplacer("**", "", "__", "", "`", "").Replace(s)
+	// Collapse whitespace, trim trailing punctuation
+	s = strings.Join(strings.Fields(s), " ")
+	s = strings.TrimRight(s, " :.-—")
+	if len(s) > 100 {
+		s = strings.TrimSpace(s[:100])
+	}
+	return s
+}
+
+func firstSentence(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexAny(s, ".!?"); i > 0 && i < 200 {
+		return s[:i+1]
+	}
+	if len(s) > 160 {
+		return s[:160] + "..."
+	}
+	return s
+}
+
 // ExtractBatch sends a batch of messages to the LLM for extraction.
 // This is a stub — implement when you have an LLM API configured.
 func (l *LLMReasoner) ExtractBatch(ctx context.Context, messages []string) (*ExtractionResult, error) {
@@ -248,8 +475,9 @@ func (l *LLMReasoner) ExtractBatch(ctx context.Context, messages []string) (*Ext
 	// For now, concatenate messages and use a simple heuristic prompt
 	combined := strings.Join(messages, "\n---\n")
 
+	url, key, model := l.resolve()
 	// If no LLM configured, return empty
-	if l.apiURL == "" {
+	if url == "" || model == "" {
 		return &ExtractionResult{}, nil
 	}
 
@@ -264,7 +492,7 @@ Return ONLY valid JSON, no other text.`
 
 	// Call LLM API (OpenAI-compatible)
 	body, _ := json.Marshal(map[string]any{
-		"model": l.model,
+		"model": model,
 		"messages": []map[string]string{
 			{"role": "system", "content": "You are a fact extractor. Return only valid JSON."},
 			{"role": "user", "content": prompt},
@@ -273,13 +501,13 @@ Return ONLY valid JSON, no other text.`
 		"max_tokens":  2000,
 	})
 
-	req, err := http.NewRequestWithContext(ctx, "POST", l.apiURL+"/chat/completions", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", url+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if l.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+l.apiKey)
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -348,7 +576,13 @@ func (l *LLMReasoner) ProcessAndStoreLLM(ctx context.Context, sessionID, workspa
 			continue
 		}
 
-		_, _ = l.pool.Exec(ctx, `INSERT INTO embedding_queue (source_type, source_id) VALUES ('node', $1)`, nodeID)
+		// EnqueueNode resets an existing queue row to pending; the previous
+		// bare INSERT hit the unique constraint whenever the ON CONFLICT
+		// branch above refreshed content, permanently leaving the embedding
+		// keyed to the OLD text (recall then matched the outdated meaning).
+		if err := embedder.EnqueueNode(ctx, l.pool, nodeID); err != nil {
+			slog.Warn("llm: failed to enqueue embedding", "node_id", nodeID, "error", err)
+		}
 		_, _ = l.pool.Exec(ctx, `INSERT INTO session_nodes (session_id, node_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, sessionID, nodeID)
 	}
 

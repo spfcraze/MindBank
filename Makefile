@@ -15,7 +15,7 @@ run: build db-up
 	@echo "Starting MindBank API..."
 	@pkill -x "./mindbank-api" 2>/dev/null || true
 	@sleep 1
-	@MB_DB_DSN="postgres://mindbank:***@localhost:5434/mindbank?sslmode=disable" \
+	@MB_DB_DSN="postgres://mindbank:mindbank@localhost:5434/mindbank?sslmode=disable" \
 		MB_OLLAMA_URL="http://localhost:11434" \
 		MB_PORT=8095 \
 		nohup ./mindbank-api >> mindbank.log 2>&1 &

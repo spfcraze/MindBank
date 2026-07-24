@@ -10,6 +10,7 @@ import (
 	"mindbank/internal/embedder"
 	"mindbank/internal/models"
 	"mindbank/internal/repository"
+	"mindbank/internal/utils"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -70,7 +71,7 @@ func (h *AskHandler) Ask(w http.ResponseWriter, r *http.Request) {
 	for _, sr := range results {
 		line := sr.Content
 		if len(line) > 200 {
-			line = line[:200] + "..."
+			line = utils.TruncateUTF8(line, 200) + "..."
 		}
 		entry := "[" + sr.NodeType + "] " + sr.Label + ": " + line + "\n"
 		entryTokens := len(entry) / 4
@@ -117,6 +118,26 @@ func (h *AskHandler) Snapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	nsFilter := r.URL.Query().Get("namespace")
 	name := r.URL.Query().Get("name")
+
+	// regenerate=1 forces a fresh snapshot (bypasses the 5-min cache) — useful
+	// after bulk edits or for a guaranteed-current wake-up context.
+	if r.URL.Query().Get("regenerate") == "1" {
+		h.snapshotRepo.InvalidateCache(workspace, nsFilter, name)
+		maxTokens, _ := strconv.Atoi(r.URL.Query().Get("max_tokens"))
+		if maxTokens <= 0 {
+			maxTokens = 2000
+		}
+		content, tokenCount, _, err := h.snapshotRepo.GenerateFiltered(r.Context(), workspace, nsFilter, name, maxTokens)
+		if err != nil {
+			respondError(w, 500, "failed to generate snapshot")
+			return
+		}
+		if nsFilter != "" {
+			h.snapshotRepo.SetCache(workspace, nsFilter, name, content, tokenCount)
+		}
+		respondJSON(w, 200, map[string]any{"content": content, "token_count": tokenCount})
+		return
+	}
 
 	content, tokenCount, err := h.snapshotRepo.GetFiltered(r.Context(), workspace, nsFilter, name)
 	if err != nil {
@@ -296,6 +317,7 @@ func (h *AskHandler) Graph(w http.ResponseWriter, r *http.Request) {
 		Target   string  `json:"target"`
 		EdgeType string  `json:"edge_type"`
 		Weight   float32 `json:"weight"`
+		Salience float32 `json:"salience"`
 	}
 	var edges []graphEdge
 
@@ -309,9 +331,10 @@ func (h *AskHandler) Graph(w http.ResponseWriter, r *http.Request) {
 			placeholders += fmt.Sprintf("$%d", i+1)
 		}
 		edgeQuery := fmt.Sprintf(`
-			SELECT id, source_id, target_id, edge_type::text, weight
+			SELECT id, source_id, target_id, edge_type::text, weight, COALESCE(salience, 1.0)
 			FROM edges
-			WHERE source_id IN (%s) OR target_id IN (%s)
+			WHERE (source_id IN (%s) OR target_id IN (%s))
+			  AND valid_to IS NULL
 			ORDER BY weight DESC
 			LIMIT 2000
 		`, placeholders, placeholders)
@@ -321,7 +344,7 @@ func (h *AskHandler) Graph(w http.ResponseWriter, r *http.Request) {
 			defer edgeRows.Close()
 			for edgeRows.Next() {
 				var e graphEdge
-				if err := edgeRows.Scan(&e.ID, &e.Source, &e.Target, &e.EdgeType, &e.Weight); err != nil {
+				if err := edgeRows.Scan(&e.ID, &e.Source, &e.Target, &e.EdgeType, &e.Weight, &e.Salience); err != nil {
 					continue
 				}
 				edges = append(edges, e)

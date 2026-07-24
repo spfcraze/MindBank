@@ -12,7 +12,7 @@ import (
 )
 
 func setupIntegrationDB(t *testing.T) *pgxpool.Pool {
-	dsn := "postgres://mindbank:${MB_POSTGRES_PASSWORD:-mindbank_test}@localhost:5434/mindbank?sslmode=disable"
+	dsn := "postgres://mindbank:mindbank@localhost:5434/mindbank?sslmode=disable"
 	pool, err := pgxpool.New(context.Background(), dsn)
 	if err != nil {
 		t.Skipf("DB not available: %v", err)
