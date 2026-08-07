@@ -1,4 +1,4 @@
--- Migration 064: Add valid_to to edges table for temporal versioning
+-- Migration 055: Add valid_to to edges table for temporal versioning
 -- The dream engine (neural consolidation) requires soft-delete capability on edges
 
 -- Add valid_to column to edges (if not exists)
