@@ -31,7 +31,7 @@ func Load() Config {
 	ollama := envStr("MB_OLLAMA_URL", "http://localhost:11434")
 	return Config{
 		Port:       envInt("MB_PORT", 8095),
-		DBDSN:      envStr("MB_DB_DSN", "postgres://mindbank:mindbank@localhost:5434/mindbank?sslmode=disable"),
+		DBDSN:      envStr("MB_DB_DSN", "postgres://mindbank:mindbank@localhost:5436/mindbank?sslmode=disable"),
 		OllamaURL:  ollama,
 		EmbedModel: envStr("MB_EMBED_MODEL", "nomic-embed-text"),
 		LogLevel:   envStr("MB_LOG_LEVEL", "info"),

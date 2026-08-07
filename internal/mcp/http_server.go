@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"strings"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -96,6 +97,22 @@ func (hs *HTTPServer) handleMCP(w http.ResponseWriter, r *http.Request) {
 	// indefinitely (mirrors the 60s cap the stdio transport applies).
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
+
+	// Transport-level client context: HTTP headers override the auto-derived
+	// namespace (e.g. a client that knows its project pins it per request).
+	// Header values come from Hermes config interpolation; an unresolved
+	// "${VAR}" placeholder or empty value must be treated as absent.
+	clean := func(v string) string {
+		v = strings.TrimSpace(v)
+		if v == "" || strings.Contains(v, "${") {
+			return ""
+		}
+		return v
+	}
+	ctx = withClientCtx(ctx,
+		clean(r.Header.Get("X-Mindbank-Workspace")),
+		clean(r.Header.Get("X-Mindbank-Namespace")),
+		clean(r.Header.Get("X-Mindbank-Session")))
 
 	resp := hs.mcpServer.handleRequest(ctx, &req)
 	if resp == nil {

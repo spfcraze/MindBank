@@ -59,14 +59,19 @@ func NewRouter(ctx context.Context, pool *pgxpool.Pool, cfg config.Config) http.
 	nodeRepo := repository.NewNodeRepo(pool)
 	edgeRepo := repository.NewEdgeRepo(pool)
 	searchRepo := repository.NewSearchRepo(pool)
-	// Link node repo to search repo for cache invalidation on writes
+	// Link repos to search repo for cache invalidation on writes
 	nodeRepo.SetSearchRepo(searchRepo)
+	edgeRepo.SetSearchRepo(searchRepo)
 	sessionRepo := repository.NewSessionRepo(pool)
 	snapshotRepo := repository.NewSnapshotRepo(pool)
 	// Link node repo to snapshot repo for cache invalidation on writes
 	nodeRepo.SetSnapshotRepo(snapshotRepo)
 	depRepo := repository.NewDependenceRepo(pool)
 	settingsRepo := repository.NewSettingsRepo(pool)
+
+	// JSPACE feedback loop: marks workspace-active memories (toggleable).
+	jspaceFeedback := NewJSpaceFeedback(pool, settingsRepo, time.Hour)
+	go jspaceFeedback.Run(ctx)
 
 	// Embedder client
 	embClient := embedder.NewClient(cfg.OllamaURL, cfg.EmbedModel)
@@ -282,6 +287,7 @@ func NewRouter(ctx context.Context, pool *pgxpool.Pool, cfg config.Config) http.
 			r.Post("/synchronize", ah.Synchronize)
 			r.Get("/observability", ah.Observability)
 			r.Post("/link-orphans", ah.LinkOrphans)
+			r.Post("/repair-orphan-edges", ah.RepairOrphanEdges)
 			r.Post("/merge-duplicates", ah.MergeDuplicates)
 			r.Post("/connect-components", ah.ConnectComponents)
 			r.Get("/embedding-recall", ah.EmbeddingRecall)
@@ -293,6 +299,14 @@ func NewRouter(ctx context.Context, pool *pgxpool.Pool, cfg config.Config) http.
 		// Graph Analytics
 		gah := NewGraphAnalyticsHandler(pool)
 		r.Get("/analytics/graph", gah.GraphMetrics)
+
+		// JSPACE (global workspace) overview + feedback loop toggle
+		jsh := NewJSpaceHandler(pool)
+		r.Get("/jspace/overview", jsh.Overview)
+		r.Get("/jspace/live", jsh.Live)
+		r.Get("/jspace/raw", jsh.Raw)
+		r.Get("/jspace/feedback", jspaceFeedback.StatusHandler)
+		r.Post("/jspace/feedback", jspaceFeedback.ToggleHandler)
 
 		// Updates
 		RegisterUpdateRoutes(r, uh)

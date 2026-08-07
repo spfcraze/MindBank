@@ -1,47 +1,55 @@
-# MindBank Quick Start
+# MindBank Quickstart
 
-## Prerequisites
-- Docker & Docker Compose
-- curl
-- Ollama (for embeddings)
+The fastest way to a running MindBank.
 
-## 1. Start Postgres
+## One command
+
 ```bash
-docker compose up -d
+curl -sSL https://raw.githubusercontent.com/spfcraze/MindBank/main/scripts/install.sh | bash
 ```
 
-## 2. Start MindBank (API + MCP)
-```bash
-bash scripts/start.sh
-```
+The installer checks for **Git**, **Go 1.25+**, and **Docker**, then clones, builds, and starts everything. Open **http://localhost:8095**.
 
-This starts:
-- API server on http://localhost:8095
-- MCP server on http://localhost:8096/mcp
+## What the installer does
 
-## 3. Verify
+1. Clones the repo to `~/mindbank`
+2. Creates `.env` from `.env.example`
+3. Starts Postgres + pgvector (`docker compose up -d --wait`)
+4. Builds `mindbank-api` + `mindbank-mcp`
+5. Starts both servers (API :8095, MCP :8096)
+6. Prints the health-check URL
+
+## After install
+
 ```bash
+# Verify
 curl http://localhost:8095/api/v1/health
-curl http://localhost:8096/mcp
+
+# Check the dashboard
+open http://localhost:8095          # macOS
+xdg-open http://localhost:8095      # Linux
+
+# Stop
+kill $(cat ~/mindbank/.mindbank-api.pid) $(cat ~/mindbank/.mindbank-mcp.pid)
+
+# Restart
+cd ~/mindbank && bash scripts/start.sh
 ```
 
-## 4. Open Dashboard
-http://localhost:8095
+## Optional: embeddings + LLM mining
 
-## 5. Auto-Start on Boot (optional)
 ```bash
-bash scripts/install-service.sh
-systemctl --user start mindbank.target
+ollama pull nomic-embed-text     # required for semantic search
+ollama pull qwen3-coder:latest   # optional: LLM session mining
 ```
 
-## Configuration
-Edit `.env` to change passwords, ports, or model settings.
+## Connect an agent (MCP)
 
-## Edge Types (23 total)
-The system supports 23 typed edges for rich graph relationships:
-- Causal: depends_on, learned_from, decided_by, produced, supports, contradicts
-- Epistemic: tested_by, invalidated_by, derived_from, assumed
-- Temporal: superseded_by, refined_by, merged_into
-- Agent: created_by, reviewed_by, executed_by
-- Failure: failed_due_to, precondition_for, incompatible_with
-- Structural: contains, relates_to, temporal_next, mentions, participated_in
+```yaml
+mcp_servers:
+  mindbank:
+    url: http://127.0.0.1:8096/mcp
+    enabled: true
+```
+
+See the [README](README.md) for the full feature walkthrough and the MCP tool list.

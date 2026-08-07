@@ -2,6 +2,7 @@ package autocapture
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -97,7 +98,7 @@ func isAllDigits(s string) bool {
 //
 // Signal priority:
 //  1. Explicit working_directory / cwd (any record)
-//  2. Frequency-scored /home/rat/<project> scan across system prompt +
+//  2. Frequency-scored /home/<user>/<project> scan across system prompt +
 //     message bodies — the reliable signal (a real session mentions its
 //     project directory many times)
 //  3. claude source_file encoding (.claude/projects/-home-rat-<proj>/...)
@@ -145,7 +146,7 @@ func NamespaceFromSession(data []byte) string {
 		}
 	}
 
-	// Source 2: frequency-scored /home/rat/<project> across all text
+	// Source 2: frequency-scored /home/<user>/<project> across all text
 	if ns := extractProjectFromText(strings.Join(textParts, "\n")); ns != "" {
 		return ns
 	}
@@ -191,7 +192,7 @@ func decodeSessionRecords(data []byte) []map[string]interface{} {
 
 // namespaceFromClaudeSourceFile decodes a claude projects path
 // (.claude/projects/-home-rat-myproj/<uuid>.jsonl) into a namespace. The
-// encoding replaces '/' with '-', so "-home-rat-myproj" → "/home/rat/myproj"
+// encoding replaces '/' with '-', so "-home-<user>-myproj" → "/home/<user>/myproj"
 // → "myproj". Returns "" when the decoded dir is just the home directory
 // (no project) or nothing usable.
 func namespaceFromClaudeSourceFile(sourceFile string) string {
@@ -208,38 +209,65 @@ func namespaceFromClaudeSourceFile(sourceFile string) string {
 	// rest is like "-home-rat-myproj"; decode dashes to path separators
 	decoded := strings.ReplaceAll(rest, "-", "/")
 	ns := DeriveNamespaceFromPath(decoded)
-	// "/home/rat" decodes to base "rat" (home, not a project) — reject it
+	// "/home/<user>" decodes to base "<user>" (home, not a project) — reject it
 	if ns == "rat" || ns == "home" {
 		return ""
 	}
 	return ns
 }
 
+
+// homeDirPrefix is the current user's home directory with a trailing slash,
+// e.g. "/home/<user>/". Resolved at runtime so namespace detection works for any
+// user (and no personal username is baked into the code).
+var homeDirPrefix = func() string {
+	if h, err := os.UserHomeDir(); err == nil && h != "" {
+		return strings.TrimRight(h, "/") + "/"
+	}
+	return "/"
+}()
+
+// homePathLiteral returns the OS-native home path pattern ("/home/<user>/") for
+// transcript scanning. Legacy "/home/<user>/" transcripts still match via the
+// user's own home prefix when the username is the same; other usernames are
+// handled because the prefix is computed, not hardcoded.
+func homePathLiteral() string { return homeDirPrefix }
+
+// homeUser returns the current username from the home path ("" if unknown).
+func homeUser() string {
+	p := strings.TrimRight(homeDirPrefix, "/")
+	if i := strings.LastIndex(p, "/"); i >= 0 {
+		return p[i+1:]
+	}
+	return p
+}
+
+
 // NamespaceFromText derives a namespace by scanning arbitrary text (e.g. a
-// markdown transcript) for /home/rat/<project> paths. Returns "" if none
+// markdown transcript) for /home/<user>/<project> paths. Returns "" if none
 // found, so callers can keep their own fallback.
 func NamespaceFromText(text string) string {
 	return extractProjectFromText(text)
 }
 
-// extractProjectFromText scans text for /home/rat/<project> patterns and returns
+// extractProjectFromText scans text for /home/<user>/<project> patterns and returns
 // the most likely project name. Uses frequency scoring to pick the best match.
 func extractProjectFromText(text string) string {
-	// Find all /home/rat/<name> patterns
-	// Match Linux paths: /home/rat/<project>
+	// Find all home/<user>/<name> patterns
+	// Match Linux paths: /home/<user>/<project>
 	// Also match WSL paths: \\wsl.localhost\Ubuntu\home\rat\<project>
 	// Also match Windows paths: C:\Users\ratz\... equivalent
 
 	projectCounts := make(map[string]int)
 
-	// Linux-style: /home/rat/<project>
+	// Linux-style: /home/<user>/<project>
 	searchText := text
 	for {
-		idx := strings.Index(searchText, "/home/rat/")
+		idx := strings.Index(searchText, homeDirPrefix)
 		if idx < 0 {
 			break
 		}
-		rest := searchText[idx+len("/home/rat/"):]
+		rest := searchText[idx+len(homeDirPrefix):]
 		// Extract the project directory name (until next / or space or punctuation)
 		end := strings.IndexAny(rest, " \t\n\r/\\")
 		if end < 0 {
@@ -262,18 +290,18 @@ func extractProjectFromText(text string) string {
 		searchText = rest[end:]
 	}
 
-	// If no /home/rat/ paths, try \home\rat\ (WSL escaped)
+	// If no home-relative paths, try the WSL-escaped form
 	if len(projectCounts) == 0 {
 		searchText = text
 		// Try with backslash separators (WSL/Windows escaped)
 		searchText = strings.ReplaceAll(searchText, "\\\\", "\\") // unescape JSON backslashes
-		searchText = strings.ReplaceAll(searchText, "\\home\\rat\\", "/home/rat/")
+		searchText = strings.ReplaceAll(searchText, "\\home\\"+homeUser()+"\\", homeDirPrefix)
 		for {
-			idx := strings.Index(searchText, "/home/rat/")
+			idx := strings.Index(searchText, homeDirPrefix)
 			if idx < 0 {
 				break
 			}
-			rest := searchText[idx+len("/home/rat/"):]
+			rest := searchText[idx+len(homeDirPrefix):]
 			end := strings.IndexAny(rest, " \t\n\r\\/")
 			if end < 0 {
 				end = len(rest)

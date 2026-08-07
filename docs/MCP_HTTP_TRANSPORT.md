@@ -20,7 +20,7 @@ HTTP mode bypasses this entirely.
 ### Start HTTP Mode
 
 ```bash
-cd /home/rat/mindbank
+cd ~/mindbank
 ./mindbank-mcp --transport http --http-port 8096
 ```
 
@@ -39,7 +39,7 @@ In `~/.hermes/config.yaml`:
 mcp_servers:
   mindbank:
     url: http://127.0.0.1:8096/mcp  # HTTP transport
-    # command: /home/rat/mindbank/mindbank-mcp  # stdio transport (broken with Hermes)
+    # command: ~/mindbank/mindbank-mcp  # stdio transport (broken with Hermes)
     timeout: 30
     enabled: true
 ```
@@ -98,6 +98,86 @@ POST to `/mcp` with JSON-RPC 2.0 body:
   }
 }
 ```
+
+## Tools
+
+| Tool | Description |
+|------|-------------|
+| `create_node` | Create a memory (dedup-aware: reports "created" vs "already existed — reinforced") |
+| `create_nodes` | Batch-create up to 50 memories in one call; per-item created/reinforced/failed report |
+| `update_node` | Update label/content/summary/importance/epistemic_label/status (creates a new version) |
+| `delete_node` | Soft-delete a node (workspace-scoped; version history retained) |
+| `get_node` | Fetch a single node by ID with full content, metadata, and connection count |
+| `search` | Hybrid FTS + semantic search; `node_types` filter; FTS-only fallback when Ollama is down |
+| `ask` | Natural-language recall with context snippet (token-lean) |
+| `recent` | Most recently created/updated memories (recency recall) |
+| `snapshot` | Pre-computed wake-up context of the most important memories |
+| `neighbors` | Nodes connected to a given node (depth-1 traversal) |
+| `history` | Temporal version history of a node |
+| `create_edge` | Create a connection between two nodes |
+| `dependence` | Trace causal precursors (domain of dependence) for a node or query |
+| `refine_connectivity` | Feedback-driven topological editing (missing_context / too_much_noise / granularity_mismatch) |
+| `evolution` | Evolution maturity score for a node |
+| `cluster_sessions` | Group session nodes into episodic clusters by embedding similarity |
+| `list_namespaces` | List namespaces with node counts |
+| `conflicts` | List or detect knowledge conflicts |
+| `dream_status` | Dream Engine (neural consolidation) cycle status |
+| `mine_sessions` | Trigger background session mining + report session count |
+
+## Client Context & Namespaces (auto-derivation)
+
+MindBank MCP auto-detects which project you're working in, so memories land in
+the right namespace instead of `global`.
+
+**Resolution priority** for `workspace`/`namespace` on every call:
+1. Explicit argument passed to the tool
+2. HTTP header: `X-Mindbank-Workspace` / `X-Mindbank-Namespace` /
+   `X-Mindbank-Session` (session id resolved to that session's project)
+3. Pinned context (`set_context` tool, persisted in `~/.mindbank/mcp-context.json`)
+4. Auto-derived from Hermes transcripts — **only when unambiguous**:
+   - `X-Mindbank-Session: <sid>` → that session's project, resolved from Hermes'
+     `state.db` full transcript (authoritative), falling back to the session's
+     `request_dump_<sid>_*.json` error snapshots (accurate even with hundreds
+     of concurrent sessions)
+   - otherwise, the newest `request_dump_*.json` is used **only when exactly one
+     Hermes session is active** — with multiple concurrent sessions the server
+     does NOT guess (it returns `global`) to avoid mis-tagging memories
+5. Fallback: workspace `hermes`, namespace `global`
+
+**Concurrent sessions (recommended setup).** Hermes can run hundreds of sessions
+at once; "newest transcript" is then meaningless. Make each session identify its
+project:
+- Add the header to `mcp_servers.mindbank` in `~/.hermes/config.yaml` (and each
+  profile config):
+  ```yaml
+  mcp_servers:
+    mindbank:
+      url: http://127.0.0.1:8096/mcp
+      headers:
+        X-Mindbank-Namespace: ${MINDBANK_NAMESPACE}
+      enabled: true
+  ```
+- Launch Hermes with `scripts/hermes-mind.sh` (alias `hermes=hermes-mind`):
+  it sets `MINDBANK_NAMESPACE` to the launch directory's project name before
+  exec'ing Hermes, so every memory from that session lands in that project.
+  Unset `MINDBANK_NAMESPACE` sends an empty header, which the server ignores.
+- Hermes MCP client (patched `hermes-agent/tools/mcp_tool.py`) now also sends
+  `X-Mindbank-Session: <session id>` automatically on every HTTP MCP call,
+  so MindBank resolves the namespace from that session's own transcript even
+  when the launcher wrapper isn't used. No config needed for this path.
+
+If auto-detection is wrong or you work outside `/home/<user>/<project>`, pin it
+explicitly:
+
+```jsonc
+// tools/call set_context
+{ "workspace": "hermes", "namespace": "klixsor" }
+// clear: { "namespace": "" }
+```
+
+`get_context` shows the effective context (header / pinned / derived).
+Clients that know their project can also send `X-Mindbank-Namespace` on every
+request — that takes priority over both pinned and derived context.
 
 ## Fallback: mcporter CLI
 

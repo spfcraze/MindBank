@@ -60,15 +60,16 @@ func (h *AnalyzeHandler) RefineConnectivity(w http.ResponseWriter, r *http.Reque
 
 // refineMissingContext finds semantically proximate unconnected nodes and creates relates_to edges.
 func (h *AnalyzeHandler) refineMissingContext(ctx context.Context, w http.ResponseWriter, nodeID string) {
-	// Get the source node's embedding and namespace
+	// Get the source node's embedding, namespace and workspace
 	var sourceEmbeddingStr string
 	var sourceNS string
+	var sourceWorkspace string
 	err := h.pool.QueryRow(ctx, `
-		SELECT ne.embedding::text, n.namespace
+		SELECT ne.embedding::text, n.namespace, n.workspace_name
 		FROM nodes n
 		JOIN node_embeddings ne ON n.id = ne.node_id
 		WHERE n.id = $1 AND n.valid_to IS NULL
-	`, nodeID).Scan(&sourceEmbeddingStr, &sourceNS)
+	`, nodeID).Scan(&sourceEmbeddingStr, &sourceNS, &sourceWorkspace)
 	if err != nil {
 		respondError(w, 404, "node not found or has no embedding")
 		return
@@ -121,10 +122,10 @@ func (h *AnalyzeHandler) refineMissingContext(ctx context.Context, w http.Respon
 		// Create edge if similarity is strong enough (distance < 0.4, i.e., similarity > 0.6)
 		if s.Distance < 0.4 {
 			_, err := h.pool.Exec(ctx, `
-				INSERT INTO edges (source_id, target_id, edge_type, weight, metadata)
-				VALUES ($1, $2, 'relates_to', $3, '{"auto_connected":true,"reason":"embedding_similarity"}')
+				INSERT INTO edges (workspace_name, source_id, target_id, edge_type, weight, metadata)
+				VALUES ($1, $2, $3, 'relates_to', $4, '{"auto_connected":true,"reason":"embedding_similarity"}')
 				ON CONFLICT (source_id, target_id, edge_type) DO NOTHING
-			`, nodeID, s.NodeID, 1.0-s.Distance)
+			`, sourceWorkspace, nodeID, s.NodeID, 1.0-s.Distance)
 			if err != nil {
 				log.Printf("[refine] edge insert failed: %v", err)
 			} else {

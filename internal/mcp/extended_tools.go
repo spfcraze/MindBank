@@ -9,8 +9,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
+	"mindbank/internal/dedup"
 	"mindbank/internal/embedder"
 	"mindbank/internal/models"
 )
@@ -284,3 +286,262 @@ func (s *Server) toolConflicts(ctx context.Context, args json.RawMessage) (any, 
 	}
 }
 
+
+// createNode is the shared create path for the create_node and create_nodes
+// tools. It reports whether the memory was newly created or already known
+// (dedup + re-observation reinforcement), so agents aren't told "created"
+// for a memory they've saved before.
+func (s *Server) createNode(ctx context.Context, label, typ, content, summary, workspace, namespace, epistemic string) (string, error) {
+	if err := validateLabel(label); err != nil {
+		return "", err
+	}
+	if typ == "" {
+		return "", fmt.Errorf("type is required")
+	}
+	nodeType := models.NodeType(typ)
+	if !nodeType.IsValid() {
+		return "", fmt.Errorf("invalid node_type: %s", typ)
+	}
+	// Effective context: explicit arg > header > pinned > derived-from-transcript.
+	workspace, namespace = s.resolveContext(ctx, workspace, namespace)
+
+	// Dedup transparency: check before Create so the message is truthful
+	// ("reinforced" vs "created"). Create itself re-checks and reinforces.
+	alreadyKnown := false
+	if hash := dedup.ComputeHash(label, content, summary); hash != "" {
+		if existingID, err := dedup.CheckDuplicate(ctx, s.pool, hash); err == nil && existingID != "" {
+			if existing, err := s.nodeRepo.Get(ctx, existingID); err == nil && existing != nil {
+				alreadyKnown = true
+			}
+		}
+	}
+
+	node, err := s.nodeRepo.Create(ctx, models.NodeCreate{
+		WorkspaceName:  workspace,
+		Namespace:     namespace,
+		Label:         label,
+		NodeType:      nodeType,
+		Content:       content,
+		Summary:       summary,
+		EpistemicLabel: epistemic,
+	})
+	if err != nil {
+		return "", err
+	}
+	if alreadyKnown {
+		return fmt.Sprintf("Memory already existed — reinforced (id: %s, label: %q, confirmations: %d)", node.ID, node.Label, node.ConfirmationCount), nil
+	}
+	return fmt.Sprintf("Created node: %s (id: %s)", node.Label, node.ID), nil
+}
+
+// toolGetNode fetches a single node with full content and connectivity.
+func (s *Server) toolGetNode(ctx context.Context, args json.RawMessage) (any, error) {
+	var req struct {
+		NodeID string `json:"node_id"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return nil, err
+	}
+	if err := validateUUID(req.NodeID); err != nil {
+		return nil, err
+	}
+	node, err := s.nodeRepo.Get(ctx, req.NodeID)
+	if err != nil {
+		return nil, err
+	}
+	if node == nil {
+		return "Node not found.", nil
+	}
+	var edgeCount int
+	_ = s.pool.QueryRow(ctx,
+		`SELECT count(*) FROM edges WHERE (source_id = $1 OR target_id = $1) AND valid_to IS NULL`,
+		node.ID).Scan(&edgeCount)
+
+	return fmt.Sprintf("ID: %s\nLabel: %s\nType: %s\nWorkspace: %s\nNamespace: %s\nImportance: %.2f\nEpistemic: %s\nStatus: %s\nConfirmations: %d\nConnections: %d\nCreated: %s\nSummary: %s\nContent: %s",
+		node.ID, node.Label, node.NodeType, node.WorkspaceName, node.Namespace,
+		node.Importance, node.EpistemicLabel, node.Status, node.ConfirmationCount,
+		edgeCount, node.CreatedAt.Format("2006-01-02"), node.Summary, node.Content), nil
+}
+
+// toolDeleteNode soft-deletes a node (workspace-scoped; versions retained).
+func (s *Server) toolDeleteNode(ctx context.Context, args json.RawMessage) (any, error) {
+	var req struct {
+		NodeID    string `json:"node_id"`
+		Workspace string `json:"workspace,omitempty"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return nil, err
+	}
+	if err := validateUUID(req.NodeID); err != nil {
+		return nil, err
+	}
+	if req.Workspace == "" {
+		req.Workspace = "hermes"
+	}
+	deleted, err := s.nodeRepo.Delete(ctx, req.NodeID, req.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	if !deleted {
+		return "Node not found in that workspace (or already deleted).", nil
+	}
+	return "Node deleted (soft delete — version history retained).", nil
+}
+
+// toolCreateNodes batch-creates memories in one call (agents commonly extract
+// many facts per session; per-node round-trips waste context and time).
+func (s *Server) toolCreateNodes(ctx context.Context, args json.RawMessage) (any, error) {
+	var req struct {
+		Nodes []struct {
+			Label          string `json:"label"`
+			Type           string `json:"type"`
+			Content        string `json:"content,omitempty"`
+			Summary        string `json:"summary,omitempty"`
+			EpistemicLabel string `json:"epistemic_label,omitempty"`
+		} `json:"nodes"`
+		Workspace string `json:"workspace,omitempty"`
+		Namespace string `json:"namespace,omitempty"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return nil, err
+	}
+	if len(req.Nodes) == 0 {
+		return nil, fmt.Errorf("nodes array is required")
+	}
+	if len(req.Nodes) > 50 {
+		return nil, fmt.Errorf("max 50 nodes per call")
+	}
+	if req.Workspace == "" {
+		req.Workspace = "hermes"
+	}
+	var out strings.Builder
+	created, reinforced, failed := 0, 0, 0
+	for i, n := range req.Nodes {
+		res, err := s.createNode(ctx, n.Label, n.Type, n.Content, n.Summary, req.Workspace, req.Namespace, n.EpistemicLabel)
+		if err != nil {
+			failed++
+			fmt.Fprintf(&out, "%d. ERROR: %v\n", i+1, err)
+			continue
+		}
+		fmt.Fprintf(&out, "%d. %s\n", i+1, res)
+		if strings.Contains(res, "already existed") {
+			reinforced++
+		} else {
+			created++
+		}
+	}
+	return fmt.Sprintf("Created %d, reinforced %d, failed %d.\n%s", created, reinforced, failed, out.String()), nil
+}
+
+// toolRecent lists the most recently created/updated memories.
+func (s *Server) toolRecent(ctx context.Context, args json.RawMessage) (any, error) {
+	var req struct {
+		Workspace string `json:"workspace,omitempty"`
+		Namespace string `json:"namespace,omitempty"`
+		Limit     int    `json:"limit,omitempty"`
+	}
+	_ = json.Unmarshal(args, &req)
+	req.Workspace, req.Namespace = s.resolveContext(ctx, req.Workspace, req.Namespace)
+	if req.Limit <= 0 || req.Limit > 100 {
+		req.Limit = 10
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT label, node_type::text, namespace, COALESCE(content, ''), created_at
+		FROM nodes
+		WHERE valid_to IS NULL AND workspace_name = $1 AND ($2 = '' OR namespace = $2)
+		ORDER BY GREATEST(created_at, updated_at) DESC
+		LIMIT $3`, req.Workspace, req.Namespace, req.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out strings.Builder
+	fmt.Fprintf(&out, "Recent memories in %s%s:\n", req.Workspace, map[bool]string{true: "/" + req.Namespace, false: ""}[req.Namespace != ""])
+	count := 0
+	for rows.Next() {
+		var label, ntype, ns, content string
+		var createdAt time.Time
+		if err := rows.Scan(&label, &ntype, &ns, &content, &createdAt); err != nil {
+			continue
+		}
+		count++
+		fmt.Fprintf(&out, "- [%s] %s (%s/%s) %s — %s\n", ntype, label, req.Workspace, ns, createdAt.Format("01-02"), snippet(content, 90))
+	}
+	if count == 0 {
+		return "No memories found.", nil
+	}
+	return out.String(), nil
+}
+
+// toolHistory lists a node's temporal version history.
+func (s *Server) toolHistory(ctx context.Context, args json.RawMessage) (any, error) {
+	var req struct {
+		NodeID string `json:"node_id"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return nil, err
+	}
+	if err := validateUUID(req.NodeID); err != nil {
+		return nil, err
+	}
+	entries, err := s.nodeRepo.GetHistory(ctx, req.NodeID)
+	if err != nil {
+		return nil, err
+	}
+	if len(entries) == 0 {
+		return "No version history found for this node.", nil
+	}
+	var out strings.Builder
+	for _, e := range entries {
+		fmt.Fprintf(&out, "v%d (%s): %s\n", e.Version, e.ValidFrom.Format("2006-01-02 15:04"), e.Label)
+	}
+	return out.String(), nil
+}
+
+
+// toolSetContext pins the default workspace/namespace for subsequent tool
+// calls (persisted across restarts). Use when auto-derivation from the
+// session transcript is wrong, or to switch projects mid-session.
+func (s *Server) toolSetContext(ctx context.Context, args json.RawMessage) (any, error) {
+	// Pointer fields distinguish "not provided" from "clear to empty string".
+	var req struct {
+		Workspace *string `json:"workspace"`
+		Namespace *string `json:"namespace"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return nil, err
+	}
+	if req.Workspace == nil && req.Namespace == nil {
+		return nil, fmt.Errorf("provide workspace and/or namespace (pass \"\" to clear a value)")
+	}
+	pc := &pinnedContext{UpdatedAt: time.Now().UTC().Format(time.RFC3339)}
+	if req.Workspace != nil {
+		pc.Workspace = *req.Workspace
+	}
+	if req.Namespace != nil {
+		pc.Namespace = *req.Namespace
+	}
+	if err := savePinnedContext(pc); err != nil {
+		return nil, fmt.Errorf("save context: %w", err)
+	}
+	s.pinned = pc
+	return fmt.Sprintf("Context set: workspace=%q namespace=%q (applies to calls without explicit args)", pc.Workspace, pc.Namespace), nil
+}
+
+// toolGetContext reports the effective context: explicit/pinned/derived.
+func (s *Server) toolGetContext(ctx context.Context, args json.RawMessage) (any, error) {
+	ws, ns := s.resolveContext(ctx, "", "")
+	cc := clientCtxFrom(ctx)
+	headerNS, headerWS, headerSID := "", "", ""
+	if cc != nil {
+		headerNS, headerWS, headerSID = cc.namespace, cc.workspace, cc.session
+	}
+	sessionNS := ""
+	if headerSID != "" {
+		sessionNS = sessionNamespace(headerSID)
+	}
+	return fmt.Sprintf(
+		"effective: workspace=%q namespace=%q\nheader: workspace=%q namespace=%q session=%q\nsession-derived: namespace=%q\npinned: workspace=%q namespace=%q\nnewest-transcript (single-session only): namespace=%q",
+		ws, ns, headerWS, headerNS, headerSID, sessionNS,
+		s.pinned.Workspace, s.pinned.Namespace, s.deriveNamespace()), nil
+}

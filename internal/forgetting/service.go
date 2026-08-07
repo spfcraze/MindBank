@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"mindbank/internal/models"
+	"mindbank/internal/workspace"
 )
 
 // Service handles automatic forgetting of expired nodes.
@@ -46,6 +47,7 @@ func (s *Service) ExpireNodes(ctx context.Context) (int64, error) {
 		  AND expires_at < now()
 		  AND valid_to IS NULL
 		  AND lower(coalesce(metadata->>'important', 'false')) NOT IN ('true', 't', 'yes', '1')
+		  AND lower(coalesce(metadata->>'workspace_active', 'false')) NOT IN ('true', 't', 'yes', '1')
 		  AND (last_accessed IS NULL OR last_accessed < now() - interval '14 days')
 	`)
 	if err != nil {
@@ -96,6 +98,9 @@ func (s *Service) ExpireNodes(ctx context.Context) (int64, error) {
 			INSERT INTO forgetting_log (node_id, action, reason)
 			VALUES ($1, 'expired', $2)
 		`, node.id, fmt.Sprintf("TTL expired for %s", node.nodeType))
+
+		// Workspace capture: memory left the workspace via TTL expiry.
+		workspace.Record(ctx, s.pool, "expired", node.id, "", "", map[string]any{"reason": "ttl"})
 
 		count++
 	}

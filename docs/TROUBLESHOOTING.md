@@ -73,7 +73,7 @@ make build
 2. Check the DSN is correct (port, password)
 3. Test the binary directly:
 ```bash
-MB_DB_DSN="postgres://mindbank:mindbank_secret@localhost:5434/mindbank?sslmode=disable" ./mindbank-mcp
+MB_DB_DSN="postgres://mindbank:mindbank@localhost:5434/mindbank?sslmode=disable" ./mindbank-mcp
 ```
 You should see JSON-RPC initialization output.
 

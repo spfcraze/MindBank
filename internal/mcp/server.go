@@ -23,6 +23,7 @@ import (
 // Server implements a simple MCP-compatible stdio server for mindbank.
 type Server struct {
 	pool        *pgxpool.Pool
+	pinned      *pinnedContext
 	nodeRepo    *repository.NodeRepo
 	edgeRepo    *repository.EdgeRepo
 	searchRepo  *repository.SearchRepo
@@ -38,6 +39,7 @@ type Server struct {
 func NewServer(pool *pgxpool.Pool, emb *embedder.Client) *Server {
 	s := &Server{
 		pool:        pool,
+		pinned:      loadPinnedContext(),
 		nodeRepo:    repository.NewNodeRepo(pool),
 		edgeRepo:    repository.NewEdgeRepo(pool),
 		searchRepo:  repository.NewSearchRepo(pool),
@@ -52,6 +54,7 @@ func NewServer(pool *pgxpool.Pool, emb *embedder.Client) *Server {
 	// saves a memory and re-searches within the cache TTL doesn't see it.
 	s.nodeRepo.SetSearchRepo(s.searchRepo)
 	s.nodeRepo.SetSnapshotRepo(s.snapRepo)
+	s.edgeRepo.SetSearchRepo(s.searchRepo)
 	return s
 }
 
@@ -254,6 +257,20 @@ func (s *Server) handleToolCall(ctx context.Context, req *MCPRequest) *MCPRespon
 		result, err = s.toolListNamespaces(ctx, params.Arguments)
 	case "conflicts":
 		result, err = s.toolConflicts(ctx, params.Arguments)
+	case "get_node":
+		result, err = s.toolGetNode(ctx, params.Arguments)
+	case "delete_node":
+		result, err = s.toolDeleteNode(ctx, params.Arguments)
+	case "create_nodes":
+		result, err = s.toolCreateNodes(ctx, params.Arguments)
+	case "recent":
+		result, err = s.toolRecent(ctx, params.Arguments)
+	case "history":
+		result, err = s.toolHistory(ctx, params.Arguments)
+	case "set_context":
+		result, err = s.toolSetContext(ctx, params.Arguments)
+	case "get_context":
+		result, err = s.toolGetContext(ctx, params.Arguments)
 	default:
 		return s.error(req, -32601, fmt.Sprintf("unknown tool: %s", params.Name))
 	}
@@ -284,37 +301,62 @@ func (s *Server) toolCreateNode(ctx context.Context, args json.RawMessage) (any,
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
-	if err := validateLabel(req.Label); err != nil {
-		return nil, err
-	}
-	if req.Type == "" {
-		return nil, fmt.Errorf("type is required")
-	}
-	nodeType := models.NodeType(req.Type)
-	if !nodeType.IsValid() {
-		return nil, fmt.Errorf("invalid node_type: %s", req.Type)
-	}
 	// Do NOT derive the namespace from the server's PWD: this MCP runs as a
-	// long-lived HTTP service (WorkingDirectory=/home/rat/mindbank), so PWD is
+	// long-lived HTTP service (WorkingDirectory=$HOME/mindbank), so PWD is
 	// fixed and would mis-tag every memory as "mindbank" regardless of the
 	// agent's actual project. Callers that want project isolation must pass an
 	// explicit namespace; otherwise it defaults to "global" in NodeRepo.Create.
-	if req.Workspace == "" {
-		req.Workspace = "hermes"
+	return s.createNode(ctx, req.Label, req.Type, req.Content, req.Summary, req.Workspace, req.Namespace, req.EpistemicLabel)
+}
+
+// hybridSearch runs hybrid FTS + vector search. When the embedder (Ollama)
+// is unavailable it degrades to FTS-only, so recall still works during
+// embedder outages instead of failing every search.
+func (s *Server) hybridSearch(ctx context.Context, query, workspace, namespace string, limit int, nodeTypes string) ([]models.SearchResult, error) {
+	var embedding []float32
+	var err error
+	if cached, ok := s.embedCache.Get(query); ok {
+		embedding = cached
+	} else {
+		embedding, err = s.embedder.Embed(ctx, query)
+		if err != nil {
+			// FTS-only fallback — better than failing the whole recall.
+			results, ftsErr := s.searchRepo.FullTextSearch(ctx, query, workspace, namespace, limit)
+			if ftsErr != nil {
+				return nil, fmt.Errorf("embedding failed: %w (fts fallback: %v)", err, ftsErr)
+			}
+			if len(results) == 0 {
+				return results, nil // caller renders "no results"
+			}
+			results = filterByNodeTypes(results, nodeTypes)
+			return results, nil
+		}
+		s.embedCache.Set(query, embedding)
 	}
-	node, err := s.nodeRepo.Create(ctx, models.NodeCreate{
-		WorkspaceName:  req.Workspace,
-		Namespace:     req.Namespace,
-		Label:         req.Label,
-		NodeType:      nodeType,
-		Content:       req.Content,
-		Summary:       req.Summary,
-		EpistemicLabel: req.EpistemicLabel,
-	})
+
+	results, err := s.searchRepo.HybridSearch(ctx, query, embedding, workspace, namespace, limit, s.edgeRepo)
 	if err != nil {
 		return nil, err
 	}
-	return fmt.Sprintf("Created node: %s (id: %s)", node.Label, node.ID), nil
+	return filterByNodeTypes(results, nodeTypes), nil
+}
+
+// filterByNodeTypes keeps only results whose node_type is in the comma-list.
+func filterByNodeTypes(results []models.SearchResult, nodeTypes string) []models.SearchResult {
+	if nodeTypes == "" {
+		return results
+	}
+	allowed := map[string]bool{}
+	for _, t := range strings.Split(nodeTypes, ",") {
+		allowed[strings.ToLower(strings.TrimSpace(t))] = true
+	}
+	filtered := results[:0]
+	for _, r := range results {
+		if allowed[strings.ToLower(r.NodeType)] {
+			filtered = append(filtered, r)
+		}
+	}
+	return filtered
 }
 
 func (s *Server) toolSearch(ctx context.Context, args json.RawMessage) (any, error) {
@@ -322,6 +364,7 @@ func (s *Server) toolSearch(ctx context.Context, args json.RawMessage) (any, err
 		Query               string `json:"query"`
 		Workspace           string `json:"workspace,omitempty"`
 		Namespace           string `json:"namespace,omitempty"`
+		NodeTypes           string `json:"node_types,omitempty"`
 		Limit               int    `json:"limit,omitempty"`
 		DependenceExpansion bool   `json:"dependence_expansion,omitempty"`
 	}
@@ -331,26 +374,10 @@ func (s *Server) toolSearch(ctx context.Context, args json.RawMessage) (any, err
 	if err := validateLimit(req.Limit); err != nil {
 		return nil, err
 	}
-	// Do NOT auto-derive namespace from PWD — search ALL namespaces by default.
-	// Only filter if the caller explicitly provides a namespace.
-	if req.Workspace == "" {
-		req.Workspace = "hermes"
-	}
+	// Effective context: explicit arg > header > pinned > derived-from-transcript.
+	req.Workspace, req.Namespace = s.resolveContext(ctx, req.Workspace, req.Namespace)
 
-	// Try cache first
-	var embedding []float32
-	var err error
-	if cached, ok := s.embedCache.Get(req.Query); ok {
-		embedding = cached
-	} else {
-		embedding, err = s.embedder.Embed(ctx, req.Query)
-		if err != nil {
-			return nil, fmt.Errorf("embedding failed: %w (try a different query or retry)", err)
-		}
-		s.embedCache.Set(req.Query, embedding)
-	}
-
-	results, err := s.searchRepo.HybridSearch(ctx, req.Query, embedding, req.Workspace, req.Namespace, req.Limit, s.edgeRepo)
+	results, err := s.hybridSearch(ctx, req.Query, req.Workspace, req.Namespace, req.Limit, req.NodeTypes)
 	if err != nil {
 		return nil, err
 	}
@@ -445,30 +472,16 @@ func (s *Server) toolAsk(ctx context.Context, args json.RawMessage) (any, error)
 		Query               string `json:"query"`
 		Workspace           string `json:"workspace,omitempty"`
 		Namespace           string `json:"namespace,omitempty"`
+		NodeTypes           string `json:"node_types,omitempty"`
 		DependenceExpansion bool   `json:"dependence_expansion,omitempty"`
 	}
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
-	// Do NOT auto-derive namespace from PWD — search ALL namespaces by default.
-	if req.Workspace == "" {
-		req.Workspace = "hermes"
-	}
+	// Effective context: explicit arg > header > pinned > derived-from-transcript.
+	req.Workspace, req.Namespace = s.resolveContext(ctx, req.Workspace, req.Namespace)
 
-	// Try cache first
-	var embedding []float32
-	var err error
-	if cached, ok := s.embedCache.Get(req.Query); ok {
-		embedding = cached
-	} else {
-		embedding, err = s.embedder.Embed(ctx, req.Query)
-		if err != nil {
-			return nil, fmt.Errorf("embedding failed: %w (try a different query or retry)", err)
-		}
-		s.embedCache.Set(req.Query, embedding)
-	}
-
-	results, err := s.searchRepo.HybridSearch(ctx, req.Query, embedding, req.Workspace, req.Namespace, 5, s.edgeRepo)
+	results, err := s.hybridSearch(ctx, req.Query, req.Workspace, req.Namespace, 5, req.NodeTypes)
 	if err != nil {
 		return nil, err
 	}
@@ -521,9 +534,7 @@ func (s *Server) toolSnapshot(ctx context.Context, args json.RawMessage) (any, e
 	if err := json.Unmarshal(args, &req); err != nil {
 		return nil, err
 	}
-	if req.Workspace == "" {
-		req.Workspace = "hermes"
-	}
+	req.Workspace, req.Namespace = s.resolveContext(ctx, req.Workspace, req.Namespace)
 
 	content, tokenCount, err := s.snapRepo.GetFiltered(ctx, req.Workspace, req.Namespace, "default")
 	if err != nil {
@@ -717,6 +728,7 @@ func (s *Server) tools() []map[string]any {
 					"query":                map[string]string{"type": "string", "description": "Search query"},
 					"workspace":            map[string]string{"type": "string", "description": "Filter by workspace"},
 					"namespace":            map[string]string{"type": "string", "description": "Filter by namespace"},
+					"node_types":           map[string]string{"type": "string", "description": "Comma-separated node types to keep, e.g. fact,decision (default: all)"},
 					"limit":                map[string]string{"type": "integer", "description": "Max results (default: 10)"},
 					"dependence_expansion": map[string]string{"type": "boolean", "description": "Trace causal precursors of top result (default: false)"},
 				},
@@ -732,6 +744,7 @@ func (s *Server) tools() []map[string]any {
 					"query":                map[string]string{"type": "string", "description": "Your question"},
 					"workspace":            map[string]string{"type": "string", "description": "Filter by workspace"},
 					"namespace":            map[string]string{"type": "string", "description": "Filter by project namespace (isolates memories)"},
+					"node_types":           map[string]string{"type": "string", "description": "Comma-separated node types to keep, e.g. fact,decision (default: all)"},
 					"dependence_expansion": map[string]string{"type": "boolean", "description": "Trace causal precursors of top result (default: false)"},
 				},
 				"required": []string{"query"},
@@ -873,6 +886,84 @@ func (s *Server) tools() []map[string]any {
 				"properties": map[string]any{
 					"action": map[string]string{"type": "string", "description": "Action: 'list' (show open conflicts) or 'detect' (trigger detection). Default: list"},
 				},
+			},
+		},
+		{
+			"name":        "get_node",
+			"description": "Fetch a single node by ID with full content, metadata, and connection count. Use after search to read a memory in full.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"node_id": map[string]string{"type": "string", "description": "Node ID"},
+				},
+				"required": []string{"node_id"},
+			},
+		},
+		{
+			"name":        "delete_node",
+			"description": "Soft-delete a node (workspace-scoped; version history retained). Use to remove wrong or obsolete memories.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"node_id":   map[string]string{"type": "string", "description": "Node ID"},
+					"workspace": map[string]string{"type": "string", "description": "Workspace name (default: hermes)"},
+				},
+				"required": []string{"node_id"},
+			},
+		},
+		{
+			"name":        "create_nodes",
+			"description": "Batch-create multiple memories in one call (max 50). Each item: label, type, content, summary. Reports created vs already-known (reinforced) per item.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"nodes":     map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"label": map[string]string{"type": "string"}, "type": map[string]string{"type": "string"}, "content": map[string]string{"type": "string"}, "summary": map[string]string{"type": "string"}}, "required": []string{"label", "type"}}},
+					"workspace": map[string]string{"type": "string", "description": "Workspace name (default: hermes)"},
+					"namespace": map[string]string{"type": "string", "description": "Project namespace (default: global)"},
+				},
+				"required": []string{"nodes"},
+			},
+		},
+		{
+			"name":        "recent",
+			"description": "List the most recently created or updated memories. Use to recall what was worked on recently.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"workspace": map[string]string{"type": "string", "description": "Workspace name (default: hermes)"},
+					"namespace": map[string]string{"type": "string", "description": "Filter by namespace"},
+					"limit":     map[string]string{"type": "integer", "description": "Max results (default: 10)"},
+				},
+			},
+		},
+		{
+			"name":        "history",
+			"description": "Show the temporal version history of a node (label and timestamp per version).",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"node_id": map[string]string{"type": "string", "description": "Node ID"},
+				},
+				"required": []string{"node_id"},
+			},
+		},
+		{
+			"name":        "set_context",
+			"description": "Pin the default workspace/namespace for subsequent calls (persisted). Use when auto-detection from the session transcript is wrong or you switch projects mid-session. Pass empty strings to clear.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"workspace": map[string]string{"type": "string", "description": "Workspace name (default: hermes)"},
+					"namespace": map[string]string{"type": "string", "description": "Project namespace"},
+				},
+			},
+		},
+		{
+			"name":        "get_context",
+			"description": "Show the effective workspace/namespace (header, pinned, and auto-derived from the active Hermes session).",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{},
 			},
 		},
 	}

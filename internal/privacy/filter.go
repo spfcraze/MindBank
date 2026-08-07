@@ -2,6 +2,7 @@ package privacy
 
 import (
 	"regexp"
+	"sort"
 )
 
 var (
@@ -40,7 +41,7 @@ var (
 
 	// aws_secret matches AWS secret access keys (40 char base64-like)
 	// Constrained: must follow an AWS access key or appear near "secret" context
-	awsSecretPattern = regexp.MustCompile(`(?i)(AKIA[0-9A-Z]{16}[^\n]{0,50}[A-Za-z0-9/+=]{40}|secret[^\n]{0,20}[A-Za-z0-9/+=]{40})`)
+	awsSecretPattern = regexp.MustCompile(`(?i)(AKIA[0-9A-Z]{16}[^,\n]{0,50}[A-Za-z0-9/+=]{40}|secret[^,\n]{0,20}[A-Za-z0-9/+=]{40})`)
 
 	// stripe_key matches Stripe API keys (sk_live_, sk_test_, pk_live_, pk_test_)
 	stripeKeyPattern = regexp.MustCompile(`(sk|pk)_(live|test)_[a-zA-Z0-9]{24,}`)
@@ -74,9 +75,18 @@ var DefaultPatterns = map[string]*regexp.Regexp{
 
 // Filter strips all default patterns from the given text, replacing matches
 // with "[REDACTED]".
+// Filter redacts secrets from text. DefaultPatterns is a map, and Go
+// randomizes map iteration order; overlapping patterns can then redact
+// differently per call (e.g. aws_secret swallowing a following OpenAI key).
+// Iterating in sorted key order makes redaction deterministic.
 func Filter(text string) string {
-	for _, re := range DefaultPatterns {
-		text = re.ReplaceAllString(text, "[REDACTED]")
+	names := make([]string, 0, len(DefaultPatterns))
+	for name := range DefaultPatterns {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		text = DefaultPatterns[name].ReplaceAllString(text, "[REDACTED]")
 	}
 	return text
 }

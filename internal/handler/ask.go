@@ -227,7 +227,7 @@ func (h *AskHandler) Graph(w http.ResponseWriter, r *http.Request) {
 
 	// Build query for nodes — include edge_count for orphan detection
 	// EXCLUDE session nodes (they're now in sessions table)
-	query := fmt.Sprintf(`SELECT n.id, n.namespace, n.label, n.node_type::text, n.content, n.summary, n.topic, n.importance, n.access_count, n.metadata, n.epistemic_label,
+	query := fmt.Sprintf(`SELECT n.id, n.namespace, n.label, n.node_type::text, n.content, n.summary, COALESCE(n.topic, '') AS topic, n.importance, n.access_count, n.metadata, COALESCE(n.epistemic_label, '') AS epistemic_label,
 		COALESCE(e.cnt, 0) AS edge_count
 		FROM nodes n
 		LEFT JOIN (

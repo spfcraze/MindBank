@@ -4,13 +4,13 @@
 *.env
 !.env.example
 
-# Compiled binaries
-mindbank
-mindbank-api
-mindbank-mcp
-backfill-ns
-cleanup-labels
-scheduler
+# Compiled binaries (root only — anchored so cmd/<name>/ sources stay tracked)
+/mindbank
+/mindbank-api
+/mindbank-mcp
+/backfill-ns
+/cleanup-labels
+/scheduler
 *.exe
 *.dll
 *.so
@@ -32,6 +32,13 @@ node_modules/
 # Logs & generated reports
 *.log
 recall_audit_report.json
+
+.update_tarball_url
+
+# Build outputs (bin/) and rotated logs
+/bin/
+*.log.[0-9]*
+backups/
 
 # OS
 .DS_Store
