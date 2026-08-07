@@ -1,0 +1,15 @@
+{
+  "name": "brain3d-physics",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "brain3d_physics_bg.wasm",
+    "brain3d_physics.js",
+    "brain3d_physics.d.ts"
+  ],
+  "main": "brain3d_physics.js",
+  "types": "brain3d_physics.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
