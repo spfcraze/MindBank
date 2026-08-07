@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS profiles (
     category        TEXT NOT NULL CHECK (category IN ('preference', 'fact', 'goal', 'project', 'skill', 'constraint')),
     fact            TEXT NOT NULL,
     confidence      REAL NOT NULL DEFAULT 0.5 CHECK (confidence >= 0 AND confidence <= 1),
-    source_node_id  UUID REFERENCES nodes(id) ON DELETE SET NULL,
+    source_node_id  TEXT REFERENCES nodes(id) ON DELETE SET NULL,
     valid_from      TIMESTAMPTZ NOT NULL DEFAULT now(),
     valid_to        TIMESTAMPTZ,
     metadata        JSONB NOT NULL DEFAULT '{}',
