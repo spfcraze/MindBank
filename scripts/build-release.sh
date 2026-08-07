@@ -28,7 +28,7 @@ rsync -a \
   --exclude='tests' --exclude='*_test.go' --exclude='*.test' \
   --exclude='docs/plans' --exclude='docs/bugs' \
   --exclude='.env' --exclude='.env.dsn' --exclude='.env.*' \
-  --exclude='mindbank-api' --exclude='mindbank-mcp' --exclude='mindbank-api.new' \
+  --exclude='/mindbank-api' --exclude='/mindbank-mcp' --exclude='/mindbank-api.new' \
   --exclude='restart.sh' --exclude='start_mindbank.sh' --exclude='start_server.sh' \
   --exclude='web' \
   --exclude='internal/handler/static/*.bak' --exclude='internal/handler/static/*.backup.*' \
@@ -38,7 +38,7 @@ rsync -a \
   --exclude='internal/handler/static/static' \
   --exclude='internal/handler/static/mindbank-api' \
   --exclude='scripts/__pycache__' --exclude='__pycache__' --exclude='*.pyc' \
-  --exclude='cleanup-labels' --exclude='backfill-ns' --exclude='mindbank' --exclude='scheduler' \
+  --exclude='/cleanup-labels' --exclude='/backfill-ns' --exclude='/mindbank' --exclude='/scheduler' --exclude='/mindbank-api' --exclude='/mindbank-mcp' \
   "$MINDBANK_DIR/" "$RELEASE_DIR/"
 
 # ---- Scrub any residual personal paths in included files ----
