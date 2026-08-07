@@ -1,0 +1,52 @@
+# Secrets / local config
+.env
+.env.dsn
+*.env
+!.env.example
+
+# Compiled binaries (root only — anchored so cmd/<name>/ sources stay tracked)
+/mindbank
+/mindbank-api
+/mindbank-mcp
+/backfill-ns
+/cleanup-labels
+/scheduler
+*.exe
+*.dll
+*.so
+*.new
+internal/handler/static/mindbank-api
+
+# Release artifacts / prepared trees
+ready/
+ready-backup-*/
+release/
+*.tar.gz
+
+# Rust build output (brain3d physics)
+brain3d-physics/target/
+
+# Node
+node_modules/
+
+# Logs & generated reports
+*.log
+recall_audit_report.json
+
+.update_tarball_url
+
+# Build outputs (bin/) and rotated logs
+/bin/
+*.log.[0-9]*
+backups/
+
+# OS
+.DS_Store
+
+# Stray artifacts / backups
+__pycache__/
+*.pyc
+*.old
+*.backup.*
+*.bak
+/1

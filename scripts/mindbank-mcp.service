@@ -1,0 +1,20 @@
+[Unit]
+Description=MindBank MCP Server
+After=mindbank-api.service
+Requires=mindbank-api.service
+
+[Service]
+Type=simple
+User=%USER%
+WorkingDirectory=%INSTALL_DIR%
+ExecStart=%INSTALL_DIR%/mindbank-mcp
+Restart=on-failure
+RestartSec=5
+Environment=MCP_TRANSPORT=http
+Environment=MCP_HTTP_PORT=%MCP_PORT%
+Environment=MB_DB_DSN=%DB_DSN%
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

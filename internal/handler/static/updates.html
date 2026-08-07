@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MindBank — Updates</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'SF Mono','Fira Code','Cascadia Code',monospace;background:#050608;color:#E8ECF0;min-height:100vh}
+.header{background:#0b0e14;border-bottom:1px solid #14312b;padding:10px 20px;display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:10}
+.header h1{font-size:16px;color:#00D4AA;letter-spacing:3px;text-shadow:0 0 15px #00D4AA30}
+.header .live{width:6px;height:6px;border-radius:50%;background:#00D4AA;box-shadow:0 0 8px #00D4AA;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.header a{margin-left:auto;font-size:12px;color:#555;text-decoration:none}
+.header a:hover{color:#00D4AA}
+.tabs{display:flex;gap:0;margin-left:20px}
+.tab{padding:6px 16px;cursor:pointer;font-family:inherit;font-size:12px;color:#555;background:transparent;border:none;border-bottom:2px solid transparent;transition:all .2s}
+.tab:hover{color:#888}.tab.active{color:#00D4AA;border-bottom-color:#00D4AA}
+a.tab{text-decoration:none}.a.tab:hover{color:#888}
+.container{max-width:800px;margin:40px auto;padding:0 20px}
+.card{background:#0b0e14;border:1px solid #14312b;border-radius:8px;padding:20px;margin-bottom:16px}
+.card h2{font-size:13px;color:#555;text-transform:uppercase;letter-spacing:1px;margin-bottom:14px}
+.version-row{display:flex;align-items:center;gap:20px;margin-bottom:12px}
+.version-box{flex:1;text-align:center;padding:16px;border-radius:6px}
+.version-box.current{background:#ffffff06;border:1px solid #ffffff10}
+.version-box.latest{background:#00D4AA10;border:1px solid #00D4AA30}
+.version-box .label{font-size:10px;color:#555;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
+.version-box .ver{font-size:28px;font-weight:bold}
+.version-box.current .ver{color:#888}
+.version-box.latest .ver{color:#00D4AA;text-shadow:0 0 10px #00D4AA20}
+.version-box .date{font-size:10px;color:#444;margin-top:4px}
+.arrow{font-size:24px;color:#333}
+.status-badge{display:inline-block;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:bold;text-transform:uppercase}
+.status-badge.up-to-date{background:#00D4AA18;color:#00D4AA;border:1px solid #00D4AA30}
+.status-badge.update-available{background:#F5C51818;color:#F5C518;border:1px solid #F5C51830}
+.status-badge.legacy{background:#A78BFA18;color:#A78BFA;border:1px solid #A78BFA30}
+.info-row{display:flex;gap:12px;font-size:11px;color:#555;margin-bottom:12px}
+.info-row span{background:#ffffff06;padding:3px 8px;border-radius:3px}
+.changelog{background:#ffffff04;border:1px solid #ffffff08;border-radius:6px;padding:12px;font-size:12px;line-height:1.6;color:#888;max-height:200px;overflow-y:auto;white-space:pre-wrap}
+.changelog::-webkit-scrollbar{width:4px}
+.changelog::-webkit-scrollbar-thumb{background:#222}
+.btn{background:#00D4AA18;color:#00D4AA;border:1px solid #00D4AA30;padding:8px 20px;border-radius:4px;cursor:pointer;font-family:inherit;font-size:12px;transition:all .2s}
+.btn:hover{background:#00D4AA30}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn-blue{background:#3B82F618;color:#3B82F6;border-color:#3B82F630}
+.btn-blue:hover{background:#3B82F630}
+.btn-red{background:#EF444418;color:#EF4444;border-color:#EF444430}
+.btn-red:hover{background:#EF444430}
+.actions{display:flex;gap:8px;margin-top:14px}
+.progress{height:4px;background:#ffffff06;border-radius:2px;margin-top:12px;overflow:hidden;display:none}
+.progress.active{display:block}
+.progress-bar{height:100%;background:#00D4AA;border-radius:2px;transition:width .3s;width:0}
+.log{background:#06060a;border:1px solid #14312b;border-radius:6px;padding:12px;font-size:11px;line-height:1.5;color:#8A9AAA;max-height:300px;overflow-y:auto;white-space:pre-wrap;display:none;margin-top:12px}
+.log.active{display:block}
+.log::-webkit-scrollbar{width:4px}
+.log::-webkit-scrollbar-thumb{background:#222}
+.log .line-err{color:#EF4444}
+.log .line-ok{color:#00D4AA}
+.backup-info{font-size:10px;color:#444;margin-top:8px}
+.loading{text-align:center;color:#444;padding:40px}
+.spinner{display:inline-block;width:16px;height:16px;border:2px solid #333;border-top-color:#00D4AA;border-radius:50%;animation:spin 1s linear infinite;margin-right:8px}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="live"></div><h1>MINDBANK</h1>
+  <div class="tabs">
+    <a href="/" class="tab">Dashboard</a>
+    <a href="/" class="tab">Questions</a>
+    <a href="/" class="tab">Edges</a>
+    <a href="/" class="tab">Tools</a>
+    <a href="/graph-view" class="tab">Graph 2D</a>
+    <a href="/" class="tab">Brain 3D</a>
+    <a href="/updates" class="tab active">Updates</a>
+  </div>
+</div>
+
+<div class="container">
+  <div id="loadingState" class="loading">
+    <span class="spinner"></span> Checking for updates...
+  </div>
+
+  <div id="updateContent" style="display:none">
+    <!-- Version comparison -->
+    <div class="card">
+      <h2>Version</h2>
+      <div class="version-row">
+        <div class="version-box current">
+          <div class="label">Current</div>
+          <div class="ver" id="localVersion">—</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="version-box latest">
+          <div class="label">Latest</div>
+          <div class="ver" id="remoteVersion">—</div>
+          <div class="date" id="releaseDate"></div>
+        </div>
+      </div>
+      <div class="info-row">
+        <span id="installType"></span>
+        <span id="installDir"></span>
+      </div>
+      <div>
+        <span id="statusBadge" class="status-badge"></span>
+      </div>
+    </div>
+
+    <!-- Changelog -->
+    <div class="card">
+      <h2>Changelog</h2>
+      <div class="changelog" id="changelog">No changelog available.</div>
+    </div>
+
+    <!-- Actions -->
+    <div class="card">
+      <h2>Actions</h2>
+      <div class="actions">
+        <button class="btn btn-blue" onclick="checkUpdate()" id="btnCheck">Check for Updates</button>
+        <button class="btn" onclick="runUpdate()" id="btnUpdate" disabled>Update Now</button>
+      </div>
+      <div class="progress" id="progressContainer">
+        <div class="progress-bar" id="progressBar"></div>
+      </div>
+      <div class="log" id="updateLog"></div>
+      <div id="restartSection" style="display:none;margin-top:12px">
+        <p style="font-size:11px;color:#888;margin-bottom:8px">Update complete. Restart the API to apply changes:</p>
+        <button class="btn btn-red" onclick="restartAPI()" id="btnRestart">Restart API Now</button>
+        <span style="font-size:10px;color:#444;margin-left:8px" id="restartStatus"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let currentJobId = null;
+let pollInterval = null;
+
+async function restartAPI() {
+  const btn = document.getElementById('btnRestart');
+  const status = document.getElementById('restartStatus');
+  btn.disabled = true;
+  btn.textContent = 'Restarting...';
+  status.textContent = 'Killing old process, starting new one...';
+
+  try {
+    await fetch('/api/v1/updates/restart', { method: 'POST' });
+    // Wait for API to come back
+    status.textContent = 'Waiting for API to start...';
+    let attempts = 0;
+    const checkInterval = setInterval(async () => {
+      attempts++;
+      try {
+        const resp = await fetch('/api/v1/health');
+        if (resp.ok) {
+          clearInterval(checkInterval);
+          status.innerHTML = '<span style="color:#00D4AA">✓ API restarted! </span>';
+          btn.textContent = 'Restarted ✓';
+          btn.classList.remove('btn-red');
+          btn.classList.add('btn-blue');
+          // Reload after a moment
+          setTimeout(() => location.reload(), 2000);
+        }
+      } catch (e) {
+        if (attempts > 15) {
+          clearInterval(checkInterval);
+          status.innerHTML = '<span style="color:#EF4444">API not responding. Check logs.</span>';
+          btn.textContent = 'Retry';
+          btn.disabled = false;
+        }
+      }
+    }, 1000);
+  } catch (e) {
+    status.innerHTML = '<span style="color:#EF4444">Error: ' + e.message + '</span>';
+    btn.disabled = false;
+    btn.textContent = 'Restart API Now';
+  }
+}
+
+async function checkUpdate() {
+  const btn = document.getElementById('btnCheck');
+  btn.disabled = true;
+  btn.textContent = 'Checking...';
+
+  try {
+    const resp = await fetch('/api/v1/updates/check');
+    const data = await resp.json();
+    renderUpdate(data);
+  } catch (e) {
+    document.getElementById('loadingState').innerHTML =
+      '<span style="color:#EF4444">Failed to check for updates: ' + e.message + '</span>';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Check for Updates';
+  }
+}
+
+function renderUpdate(data) {
+  document.getElementById('loadingState').style.display = 'none';
+  document.getElementById('updateContent').style.display = 'block';
+
+  document.getElementById('localVersion').textContent = data.local || '0.0.0';
+  document.getElementById('remoteVersion').textContent = data.remote || 'unknown';
+  document.getElementById('releaseDate').textContent = data.date || '';
+  document.getElementById('changelog').textContent = data.changelog || 'No changelog available.';
+  document.getElementById('installType').textContent = 'Install: ' + (data.install_type || 'unknown');
+  document.getElementById('installDir').textContent = data.install_dir || '';
+
+  const badge = document.getElementById('statusBadge');
+  const btnUpdate = document.getElementById('btnUpdate');
+
+  if (data.local === '0.0.0') {
+    badge.textContent = 'Legacy Install';
+    badge.className = 'status-badge legacy';
+    btnUpdate.disabled = false;
+  } else if (data.needs_update) {
+    badge.textContent = 'Update Available';
+    badge.className = 'status-badge update-available';
+    btnUpdate.disabled = false;
+  } else {
+    badge.textContent = 'Up to Date';
+    badge.className = 'status-badge up-to-date';
+    btnUpdate.disabled = true;
+  }
+
+  if (data.release_url) {
+    document.getElementById('changelog').innerHTML =
+      '<a href="' + data.release_url + '" target="_blank" style="color:#00D4AA">' +
+      'View on GitHub →</a>\n\n' + (data.changelog || '');
+  }
+}
+
+async function runUpdate() {
+  const btnUpdate = document.getElementById('btnUpdate');
+  const btnCheck = document.getElementById('btnCheck');
+  const progress = document.getElementById('progressContainer');
+  const log = document.getElementById('updateLog');
+
+  btnUpdate.disabled = true;
+  btnCheck.disabled = true;
+  btnUpdate.textContent = 'Updating...';
+  progress.classList.add('active');
+  log.classList.add('active');
+  log.innerHTML = 'Starting update...\n';
+
+  // Animate progress bar
+  let progressVal = 0;
+  window._progressTimer = setInterval(() => {
+    progressVal = Math.min(progressVal + Math.random() * 5, 90);
+    document.getElementById('progressBar').style.width = progressVal + '%';
+  }, 500);
+
+  // Poll count limit: 300 polls = 5 minutes max
+  window._pollCount = 0;
+  window._maxPolls = 300;
+
+  try {
+    const resp = await fetch('/api/v1/updates/run', { method: 'POST' });
+    const data = await resp.json();
+
+    if (data.job_id) {
+      currentJobId = data.job_id;
+      pollInterval = setInterval(() => pollStatus(data.job_id), 1000);
+    } else {
+      throw new Error('No job ID returned');
+    }
+  } catch (e) {
+    clearInterval(progressTimer);
+    log.innerHTML += '<span class="line-err">Error: ' + e.message + '</span>\n';
+    btnUpdate.disabled = false;
+    btnCheck.disabled = false;
+    btnUpdate.textContent = 'Update Now';
+    progress.classList.remove('active');
+  }
+}
+
+async function pollStatus(jobId) {
+  try {
+    window._pollCount++;
+    if (window._pollCount > window._maxPolls) {
+      clearInterval(pollInterval);
+      clearInterval(window._progressTimer);
+      const log = document.getElementById('updateLog');
+      const btnUpdate = document.getElementById('btnUpdate');
+      const btnCheck = document.getElementById('btnCheck');
+      log.innerHTML += '\n<span class="line-err">✗ Update timed out after 5 minutes. Check server logs.</span>\n';
+      btnUpdate.textContent = 'Retry';
+      btnUpdate.disabled = false;
+      btnCheck.disabled = false;
+      document.getElementById('progressContainer').classList.remove('active');
+      return;
+    }
+
+    const resp = await fetch('/api/v1/updates/status/' + jobId);
+    const data = await resp.json();
+
+    const log = document.getElementById('updateLog');
+    // Escape output to prevent HTML injection, then use innerHTML consistently
+    const esc = (s) => (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    log.innerHTML = esc(data.output || '').replace(/\n/g,'<br>');
+
+    // Auto-scroll
+    log.scrollTop = log.scrollHeight;
+
+    if (data.status === 'success' || data.status === 'error') {
+      clearInterval(pollInterval);
+      clearInterval(window._progressTimer);
+
+      const progress = document.getElementById('progressBar');
+      progress.style.width = '100%';
+
+      const btnUpdate = document.getElementById('btnUpdate');
+      const btnCheck = document.getElementById('btnCheck');
+
+      if (data.status === 'success') {
+        log.innerHTML += '<br><span class="line-ok">✓ Update complete!</span><br>';
+        log.innerHTML += '<span class="line-ok">Restart API to apply changes.</span><br>';
+        btnUpdate.textContent = 'Updated ✓';
+        btnUpdate.classList.add('btn-blue');
+        // Show restart button
+        document.getElementById('restartSection').style.display = 'block';
+      } else {
+        log.innerHTML += '<br><span class="line-err">✗ Update failed. Check log above.</span><br>';
+        btnUpdate.textContent = 'Retry';
+        btnUpdate.disabled = false;
+      }
+      btnCheck.disabled = false;
+    }
+  } catch (e) {
+    // Keep polling unless we've hit max
+  }
+}
+
+// Auto-check on load
+checkUpdate();
+</script>
+</body>
+</html>

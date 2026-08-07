@@ -1,0 +1,20 @@
+[Unit]
+Description=MindBank API Server
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=%USER%
+WorkingDirectory=%INSTALL_DIR%
+ExecStart=%INSTALL_DIR%/mindbank-api
+Restart=on-failure
+RestartSec=5
+Environment=MB_DB_DSN=%DB_DSN%
+Environment=MB_PORT=%PORT%
+Environment=MB_LOG_LEVEL=info
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

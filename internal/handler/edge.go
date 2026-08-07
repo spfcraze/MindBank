@@ -1,0 +1,238 @@
+package handler
+
+import (
+	"log/slog"
+	"net/http"
+	"strconv"
+
+	"mindbank/internal/models"
+	"mindbank/internal/repository"
+
+	"github.com/go-chi/chi/v5"
+)
+
+type EdgeHandler struct {
+	repo     *repository.EdgeRepo
+	nodeRepo *repository.NodeRepo
+}
+
+func (h *EdgeHandler) Create(w http.ResponseWriter, r *http.Request) {
+	var req models.EdgeCreate
+	if err := bindJSON(r, &req); err != nil {
+		respondError(w, 400, "invalid request body: "+err.Error())
+		return
+	}
+	if req.SourceID == "" || req.TargetID == "" {
+		respondError(w, 400, "source_id and target_id are required")
+		return
+	}
+	if req.EdgeType == "" {
+		respondError(w, 400, "edge_type is required")
+		return
+	}
+	if !req.EdgeType.IsValid() {
+		respondError(w, 400, "invalid edge_type")
+		return
+	}
+
+	// Validate source and target nodes exist and belong to the same workspace/namespace
+	source, err := h.nodeRepo.Get(r.Context(), req.SourceID)
+	if err != nil {
+		respondError(w, 404, "source node not found")
+		return
+	}
+	target, err := h.nodeRepo.Get(r.Context(), req.TargetID)
+	if err != nil {
+		respondError(w, 404, "target node not found")
+		return
+	}
+	if source.Namespace != target.Namespace {
+		respondError(w, 400, "source and target nodes must be in the same namespace")
+		return
+	}
+	if source.WorkspaceName != target.WorkspaceName {
+		respondError(w, 400, "source and target nodes must be in the same workspace")
+		return
+	}
+	// Ensure edge workspace matches node workspace
+	if req.WorkspaceName == "" {
+		req.WorkspaceName = source.WorkspaceName
+	} else if req.WorkspaceName != source.WorkspaceName {
+		respondError(w, 400, "edge workspace must match node workspace")
+		return
+	}
+
+	// Prevent self-referencing edges
+	if req.SourceID == req.TargetID {
+		respondError(w, 400, "self-referencing edges are not allowed")
+		return
+	}
+
+	// Check edge count limit per node (BUG-P048)
+	const maxEdgesPerNode = 1000
+	var edgeCount int
+	edgeCountErr := h.nodeRepo.Pool.QueryRow(r.Context(), `
+		SELECT COUNT(*) FROM edges 
+		WHERE source_id = $1 OR target_id = $1
+	`, req.SourceID).Scan(&edgeCount)
+	if edgeCountErr == nil && edgeCount >= maxEdgesPerNode {
+		respondError(w, 429, "edge count limit reached for source node (max 1000)")
+		return
+	}
+	var targetEdgeCount int
+	edgeCountErr = h.nodeRepo.Pool.QueryRow(r.Context(), `
+		SELECT COUNT(*) FROM edges 
+		WHERE source_id = $1 OR target_id = $1
+	`, req.TargetID).Scan(&targetEdgeCount)
+	if edgeCountErr == nil && targetEdgeCount >= maxEdgesPerNode {
+		respondError(w, 429, "edge count limit reached for target node (max 1000)")
+		return
+	}
+
+	edge, err := h.repo.Create(r.Context(), req)
+	if err != nil {
+		slog.Error("create edge", "error", err)
+		respondError(w, 500, "failed to create edge: "+err.Error())
+		return
+	}
+	respondJSON(w, 201, edge)
+}
+
+func (h *EdgeHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	ok, err := h.repo.Delete(r.Context(), id)
+	if err != nil {
+		slog.Error("delete edge", "error", err)
+		respondError(w, 500, "failed to delete edge")
+		return
+	}
+	if !ok {
+		respondError(w, 404, "edge not found")
+		return
+	}
+	respondJSON(w, 200, map[string]string{"status": "deleted"})
+}
+
+func (h *EdgeHandler) List(w http.ResponseWriter, r *http.Request) {
+	// List edges with optional namespace/workspace/type filters and limits
+	ns := r.URL.Query().Get("namespace")
+	ws := r.URL.Query().Get("workspace")
+	edgeType := models.EdgeType(r.URL.Query().Get("type"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+
+	// Support count=true for accurate edge count in dashboard stats
+	if r.URL.Query().Get("count") == "true" {
+		var count int64
+		var err error
+		if edgeType != "" {
+			count, err = h.repo.CountByType(r.Context(), edgeType)
+		} else {
+			count, err = h.repo.Count(r.Context())
+		}
+		if err != nil {
+			slog.Error("count edges", "error", err)
+			respondError(w, 500, "failed to count edges")
+			return
+		}
+		respondJSON(w, 200, map[string]interface{}{"count": count})
+		return
+	}
+
+	// Filter by namespace/workspace if provided
+	if ns != "" || ws != "" {
+		edges, err := h.repo.GetByNamespaceWorkspace(r.Context(), ns, ws, edgeType, limit, offset)
+		if err != nil {
+			slog.Error("list edges filtered", "error", err)
+			respondError(w, 500, "failed to list edges")
+			return
+		}
+		if edges == nil {
+			edges = []models.Edge{}
+		}
+		respondJSON(w, 200, edges)
+		return
+	}
+
+	if edgeType != "" {
+		edges, err := h.repo.GetByType(r.Context(), edgeType, limit, offset)
+		if err != nil {
+			slog.Error("list edges", "error", err)
+			respondError(w, 500, "failed to list edges")
+			return
+		}
+		if edges == nil {
+			edges = []models.Edge{}
+		}
+		respondJSON(w, 200, edges)
+		return
+	}
+
+	// No type filter — list all edges up to limit
+	edges, err := h.repo.GetAll(r.Context(), limit, offset)
+	if err != nil {
+		slog.Error("list all edges", "error", err)
+		respondError(w, 500, "failed to list edges")
+		return
+	}
+	if edges == nil {
+		edges = []models.Edge{}
+	}
+	respondJSON(w, 200, edges)
+}
+
+func (h *EdgeHandler) GetNeighbors(w http.ResponseWriter, r *http.Request) {
+	nodeID := chi.URLParam(r, "id")
+	depthStr := r.URL.Query().Get("depth")
+
+	if depthStr != "" {
+		depth, _ := strconv.Atoi(depthStr)
+		if depth <= 0 || depth > 6 {
+			respondError(w, 400, "depth must be between 1 and 6")
+			return
+		}
+		nodes, err := h.repo.GetNeighborsDeep(r.Context(), nodeID, depth)
+		if err != nil {
+			slog.Error("get neighbors deep", "error", err)
+			respondError(w, 500, "failed to get neighbors")
+			return
+		}
+		if nodes == nil {
+			nodes = []models.NodeWithEdge{}
+		}
+		respondJSON(w, 200, nodes)
+		return
+	}
+
+	// Default: 1 hop
+	nodes, err := h.repo.GetNeighbors(r.Context(), nodeID)
+	if err != nil {
+		slog.Error("get neighbors", "error", err)
+		respondError(w, 500, "failed to get neighbors")
+		return
+	}
+	if nodes == nil {
+		nodes = []models.NodeWithEdge{}
+	}
+	respondJSON(w, 200, nodes)
+}
+
+func (h *EdgeHandler) FindPath(w http.ResponseWriter, r *http.Request) {
+	sourceID := chi.URLParam(r, "id")
+	targetID := chi.URLParam(r, "targetID")
+
+	path, err := h.repo.FindPath(r.Context(), sourceID, targetID, 6)
+	if err != nil {
+		slog.Error("find path", "error", err)
+		respondError(w, 500, "failed to find path")
+		return
+	}
+	if path == nil {
+		respondJSON(w, 200, map[string]any{"path": nil, "found": false})
+		return
+	}
+	respondJSON(w, 200, map[string]any{"path": path, "found": true, "hops": len(path) - 1})
+}
