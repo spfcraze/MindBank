@@ -71,7 +71,7 @@ func (r *SearchRepo) FullTextSearch(ctx context.Context, query string, workspace
 		  AND search_vector @@ websearch_to_tsquery('english', $1)
 		  AND ($2 = '' OR workspace_name = $2)
 		  AND ($3 = '' OR namespace = $3)
-		ORDER BY rank DESC
+		ORDER BY (ts_rank_cd(search_vector, websearch_to_tsquery('english', $1)) + CASE WHEN (lower(coalesce(metadata->>'workspace_active','false')) IN ('true','t','yes','1')) THEN 0.08 ELSE 0 END) DESC
 		LIMIT $4
 	`, expandedQuery, workspace, namespace, limit)
 	if err != nil {
@@ -85,7 +85,7 @@ func (r *SearchRepo) FullTextSearch(ctx context.Context, query string, workspace
 			  AND search_vector @@ plainto_tsquery('english', $1)
 			  AND ($2 = '' OR workspace_name = $2)
 			  AND ($3 = '' OR namespace = $3)
-			ORDER BY rank DESC
+			ORDER BY (ts_rank_cd(search_vector, plainto_tsquery('english', $1)) + CASE WHEN (lower(coalesce(metadata->>'workspace_active','false')) IN ('true','t','yes','1')) THEN 0.08 ELSE 0 END) DESC
 			LIMIT $4
 		`, expandedQuery, workspace, namespace, limit)
 		if err != nil {
@@ -173,7 +173,11 @@ func (r *SearchRepo) trigramSearch(ctx context.Context, query string, workspace,
 		      OR lower(label) LIKE '%' || lower($1) || '%'
 		      OR lower(content) LIKE '%' || lower($1) || '%'
 		  )
-		ORDER BY sim DESC
+		ORDER BY (GREATEST(
+		           similarity(lower(label), lower($1)),
+		           similarity(lower(content), lower($1)),
+		           similarity(lower(coalesce(summary,'')), lower($1))
+		       ) + CASE WHEN (lower(coalesce(metadata->>'workspace_active','false')) IN ('true','t','yes','1')) THEN 0.08 ELSE 0 END) DESC
 		LIMIT $4
 	`, cleanQuery, workspace, namespace, limit)
 	if err != nil {
@@ -210,7 +214,7 @@ func (r *SearchRepo) VectorSearch(ctx context.Context, embedding []float32, work
 		  AND n.node_type NOT IN ('session', 'event')
 		  AND ($2 = '' OR n.workspace_name = $2)
 		  AND ($3 = '' OR n.namespace = $3)
-		ORDER BY ne.embedding <=> $1::vector
+		ORDER BY ((ne.embedding <=> $1::vector) - CASE WHEN (lower(coalesce(n.metadata->>'workspace_active','false')) IN ('true','t','yes','1')) THEN 0.08 ELSE 0 END)
 		LIMIT $4
 	`, vecStr, workspace, namespace, limit)
 	if err != nil {

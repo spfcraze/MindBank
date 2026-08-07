@@ -14,12 +14,27 @@ import (
 )
 
 type EdgeRepo struct {
-	pool     *pgxpool.Pool
-	nodeRepo *NodeRepo
+	pool       *pgxpool.Pool
+	nodeRepo   *NodeRepo
+	searchRepo *SearchRepo
 }
 
 func NewEdgeRepo(pool *pgxpool.Pool) *EdgeRepo {
 	return &EdgeRepo{pool: pool, nodeRepo: NewNodeRepo(pool)}
+}
+
+// SetSearchRepo links the search repo so edge writes invalidate cached
+// hybrid results (GraphExpand bakes edges into them — without this, a new
+// edge is invisible to recall until the cache TTL expires).
+func (r *EdgeRepo) SetSearchRepo(sr *SearchRepo) {
+	r.searchRepo = sr
+}
+
+// invalidateResultCache clears cached search results after any edge mutation.
+func (r *EdgeRepo) invalidateResultCache() {
+	if r.searchRepo != nil {
+		r.searchRepo.InvalidateResultCache()
+	}
 }
 
 // Create inserts a new edge and updates the target's materialized path.
@@ -59,6 +74,9 @@ func (r *EdgeRepo) Create(ctx context.Context, req models.EdgeCreate) (*models.E
 		_ = r.nodeRepo.UpdatePath(ctx, req.TargetID, parentPath)
 	}
 
+	if r.searchRepo != nil {
+		r.searchRepo.InvalidateResultCache()
+	}
 	return e, nil
 }
 
@@ -98,6 +116,8 @@ func (r *EdgeRepo) DeleteOrphaned(ctx context.Context) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("delete orphan edges: %w", err)
 	}
+	r.invalidateResultCache()
+	r.invalidateResultCache()
 	return tag.RowsAffected(), nil
 }
 
@@ -107,6 +127,7 @@ func (r *EdgeRepo) DeleteByType(ctx context.Context, edgeType models.EdgeType) (
 	if err != nil {
 		return 0, fmt.Errorf("delete edges by type: %w", err)
 	}
+	r.invalidateResultCache()
 	return tag.RowsAffected(), nil
 }
 

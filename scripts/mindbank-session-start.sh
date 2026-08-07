@@ -9,7 +9,7 @@
 #   "hooks": {
 #     "SessionStart": [
 #       { "hooks": [ { "type": "command",
-#         "command": "/home/rat/mindbank/scripts/mindbank-session-start.sh" } ] }
+#         "command": "$HOME/mindbank/scripts/mindbank-session-start.sh" } ] }
 #     ]
 #   }
 #

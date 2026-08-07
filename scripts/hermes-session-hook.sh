@@ -2,16 +2,16 @@
 # Hermes Session Hook - Auto-mine sessions into MindBank
 # 
 # Add this to your shell profile or tmux configuration:
-#   export HERMES_SESSION_HOOK="/home/rat/mindbank/scripts/hermes-session-hook.sh"
+#   export HERMES_SESSION_HOOK="$HOME/mindbank/scripts/hermes-session-hook.sh"
 #
 # Or for tmux, add to ~/.tmux.conf:
-#   set-hook -g session-closed 'run-shell "/home/rat/mindbank/scripts/hermes-session-hook.sh #S"'
+#   set-hook -g session-closed 'run-shell "$HOME/mindbank/scripts/hermes-session-hook.sh #S"'
 
 set -e
 
 # Configuration
 MIND_BANK_API="${MIND_BANK_API:-http://127.0.0.1:8095/api/v1}"
-AUTO_MINER="${AUTO_MINER:-/home/rat/mindbank/scripts/auto_miner.py}"
+AUTO_MINER="${AUTO_MINER:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/auto_miner.py}"
 SESSION_DIR="${HERMES_SESSION_DIR:-$HOME/.hermes/sessions}"
 LOG_FILE="${MIND_BANK_LOG:-/tmp/mindbank-auto-capture.log}"
 

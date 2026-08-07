@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -119,6 +121,262 @@ func (h *AnalyzeHandler) LinkOrphans(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, 200, map[string]any{
 		"orphans": results, "count": len(results),
 		"linked": linkedCount, "dry_run": dryRun, "namespace": ns,
+	})
+}
+
+// resolveSuccessor walks the predecessor chain to the current version of a
+// node (the row a temporal Update created). Returns the current id/label and
+// ok=false when no successor exists (node fully deleted or not versioned).
+func (h *AnalyzeHandler) resolveSuccessor(ctx context.Context, nodeID string) (string, string, bool) {
+	cur, label := nodeID, ""
+	for depth := 0; depth < 10; depth++ {
+		var next, nextLabel string
+		err := h.pool.QueryRow(ctx,
+			`SELECT id, label FROM nodes WHERE predecessor_id = $1 AND valid_to IS NULL`,
+			cur).Scan(&next, &nextLabel)
+		if err != nil {
+			break
+		}
+		cur, label = next, nextLabel
+	}
+	if cur == nodeID {
+		return "", "", false
+	}
+	return cur, label, true
+}
+
+// findSimilarNode returns the best current node in the same workspace whose
+// label is similar to query, plus the top candidates for display.
+func (h *AnalyzeHandler) findSimilarNode(ctx context.Context, query, workspace string, excludeIDs ...string) (id, label string, sim float64, candidates []map[string]any) {
+	exclude := ""
+	args := []any{query, workspace}
+	if len(excludeIDs) > 0 {
+		exclude = " AND n.id <> ALL($3::text[])"
+		args = append(args, excludeIDs)
+	}
+	rows, err := h.pool.Query(ctx, `
+		SELECT n.id, n.label, similarity(n.label, $1) AS sim
+		FROM nodes n
+		WHERE n.valid_to IS NULL AND n.workspace_name = $2`+exclude+`
+		ORDER BY sim DESC
+		LIMIT 3
+	`, args...)
+	if err != nil {
+		return "", "", 0, nil
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, clabel string
+		var csim float64
+		if err := rows.Scan(&cid, &clabel, &csim); err != nil {
+			continue
+		}
+		candidates = append(candidates, map[string]any{"id": cid, "label": clabel, "sim": csim})
+		if len(candidates) == 1 {
+			id, label, sim = cid, clabel, csim
+		}
+	}
+	return id, label, sim, candidates
+}
+
+// RepairOrphanEdges handles POST /api/v1/analyze/repair-orphan-edges
+// Finds edges whose source or target is not a current node and repairs them:
+//  1. Dead endpoint with a successor version (predecessor chain) → repoint.
+//  2. Otherwise → find the most similar current node in the same workspace
+//     and reconnect (applied when similarity ≥ 0.3; candidates always shown).
+//  3. Inactive orphan residue (already soft-deleted edges) → hard-delete.
+//
+// dry_run=true (default) reports only. Per-edge detail is returned so the UI
+// can show exactly what would change before anything is applied.
+func (h *AnalyzeHandler) RepairOrphanEdges(w http.ResponseWriter, r *http.Request) {
+	dryRun := r.URL.Query().Get("dry_run") != "false"
+	ns := r.URL.Query().Get("namespace")
+	limit := 200
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 2000 {
+			limit = n
+		}
+	}
+	ctx := r.Context()
+
+	nsFilter := ""
+	args := []any{}
+	if ns != "" {
+		nsFilter = " AND e.workspace_name = $1"
+		args = append(args, ns)
+	}
+	args = append(args, limit)
+
+	rows, err := h.pool.Query(ctx, `
+		SELECT e.id, e.edge_type::text, e.source_id, e.target_id, e.workspace_name,
+		       e.valid_to IS NULL AS active,
+		       (src.id IS NULL) AS src_missing, (tgt.id IS NULL) AS tgt_missing
+		FROM edges e
+		LEFT JOIN nodes src ON src.id = e.source_id AND src.valid_to IS NULL
+		LEFT JOIN nodes tgt ON tgt.id = e.target_id AND tgt.valid_to IS NULL
+		WHERE (src.id IS NULL OR tgt.id IS NULL)` + nsFilter + `
+		ORDER BY e.created_at
+		LIMIT $` + strconv.Itoa(len(args)), args...)
+	if err != nil {
+		respondError(w, 500, "orphan edge query failed")
+		return
+	}
+	defer rows.Close()
+
+	type edgeReport struct {
+		EdgeID       string           `json:"edge_id"`
+		EdgeType     string           `json:"edge_type"`
+		Workspace    string           `json:"workspace"`
+		SourceID     string           `json:"source_id"`
+		TargetID     string           `json:"target_id"`
+		Active       bool             `json:"active"`
+		Action       string           `json:"action"`
+		OldNodeID    string           `json:"old_node_id,omitempty"`
+		NewNodeID    string           `json:"new_node_id,omitempty"`
+		NewNodeLabel string           `json:"new_node_label,omitempty"`
+		Similarity   float64          `json:"similarity,omitempty"`
+		Note         string           `json:"note,omitempty"`
+		Candidates   []map[string]any `json:"candidates,omitempty"`
+	}
+
+	var reports []edgeReport
+	var repaired, reconnected, deleted, unresolved int
+
+	// repointEdge sets an edge endpoint to newID. UNIQUE(source_id, target_id,
+	// edge_type) would reject the UPDATE when the new endpoint already holds an
+	// equivalent edge, so such stale edges are dropped first (ON CONFLICT is
+	// INSERT-only in Postgres).
+	repointEdge := func(edgeID, side, oldID, newID string, rep *edgeReport) error {
+		var dedupeSQL string
+		if side == "source" {
+			dedupeSQL = `
+				DELETE FROM edges
+				WHERE id = $1
+				  AND EXISTS (SELECT 1 FROM edges dup
+				              WHERE dup.id <> edges.id
+				                AND dup.edge_type = edges.edge_type
+				                AND dup.source_id = $2
+				                AND dup.target_id = edges.target_id)`
+		} else {
+			dedupeSQL = `
+				DELETE FROM edges
+				WHERE id = $1
+				  AND EXISTS (SELECT 1 FROM edges dup
+				              WHERE dup.id <> edges.id
+				                AND dup.edge_type = edges.edge_type
+				                AND dup.source_id = edges.source_id
+				                AND dup.target_id = $2)`
+		}
+		if _, err := h.pool.Exec(ctx, dedupeSQL, edgeID, newID); err != nil {
+			return err
+		}
+		col := "source_id"
+		if side == "target" {
+			col = "target_id"
+		}
+		tag, err := h.pool.Exec(ctx, fmt.Sprintf(
+			`UPDATE edges SET %s = $1 WHERE id = $2 AND %s = $3`, col, col), newID, edgeID, oldID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 && rep.Note == "" {
+			rep.Note = "dropped: new node already linked"
+		}
+		return nil
+	}
+
+	for rows.Next() {
+		var rep edgeReport
+		var active, srcMissing, tgtMissing bool
+		if err := rows.Scan(&rep.EdgeID, &rep.EdgeType, &rep.SourceID, &rep.TargetID, &rep.Workspace, &active, &srcMissing, &tgtMissing); err != nil {
+			continue
+		}
+		rep.Active = active
+
+		// Inactive residue: soft-deleted edges referencing dead nodes are dead weight.
+		if !active {
+			rep.Action = "delete"
+			if !dryRun {
+				if _, err := h.pool.Exec(ctx, `DELETE FROM edges WHERE id = $1`, rep.EdgeID); err != nil {
+					slog.Error("repair delete edge", "edge_id", rep.EdgeID, "error", err)
+					rep.Note = "delete failed: " + err.Error()
+				}
+			}
+			deleted++
+			reports = append(reports, rep)
+			continue
+		}
+
+		handleMissing := func(side, missingID string) {
+			// 1. Successor version — exact repair.
+			if newID, newLabel, ok := h.resolveSuccessor(ctx, missingID); ok {
+				rep.Action = "relink_" + side
+				rep.OldNodeID = missingID
+				rep.NewNodeID = newID
+				rep.NewNodeLabel = newLabel
+				if !dryRun {
+					if err := repointEdge(rep.EdgeID, side, missingID, newID, &rep); err != nil {
+						slog.Error("repair relink", "edge_id", rep.EdgeID, "error", err)
+						rep.Note = "relink failed: " + err.Error()
+					}
+				}
+				repaired++
+				return
+			}
+
+			// 2. Similar node — query with the dead node's label (any version),
+			//    else the surviving endpoint's label.
+			query := ""
+			_ = h.pool.QueryRow(ctx, `SELECT label FROM nodes WHERE id = $1 LIMIT 1`, missingID).Scan(&query)
+			if query == "" {
+				alive := rep.TargetID
+				if side == "target" {
+					alive = rep.SourceID
+				}
+				_ = h.pool.QueryRow(ctx, `SELECT label FROM nodes WHERE id = $1 LIMIT 1`, alive).Scan(&query)
+			}
+			candID, candLabel, candSim, candidates := h.findSimilarNode(ctx, query, rep.Workspace, missingID, rep.SourceID, rep.TargetID)
+			rep.Candidates = candidates
+			if candID != "" && candSim >= 0.3 {
+				rep.Action = "reconnect_" + side
+				rep.OldNodeID = missingID
+				rep.NewNodeID = candID
+				rep.NewNodeLabel = candLabel
+				rep.Similarity = candSim
+				if !dryRun {
+					if err := repointEdge(rep.EdgeID, side, missingID, candID, &rep); err != nil {
+						slog.Error("repair reconnect", "edge_id", rep.EdgeID, "error", err)
+						rep.Note = "reconnect failed: " + err.Error()
+					}
+				}
+				reconnected++
+			} else {
+				rep.Action = "unresolved"
+				rep.Note = "no successor or similar node"
+				unresolved++
+			}
+		}
+
+		if srcMissing {
+			handleMissing("source", rep.SourceID)
+		}
+		if tgtMissing {
+			handleMissing("target", rep.TargetID)
+		}
+		reports = append(reports, rep)
+	}
+
+	if reports == nil {
+		reports = []edgeReport{}
+	}
+	respondJSON(w, 200, map[string]any{
+		"dry_run":     dryRun,
+		"total":       len(reports),
+		"repaired":    repaired,
+		"reconnected": reconnected,
+		"deleted":     deleted,
+		"unresolved":  unresolved,
+		"edges":       reports,
 	})
 }
 

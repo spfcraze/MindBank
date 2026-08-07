@@ -1,35 +1,38 @@
-# MindBank v0.6.0
+# MindBank Release Notes
 
-A major update focused on making agent **recall actually work end-to-end**, a fully
-reworked dashboard, and a customizable LLM backend.
+## 0.6.1 (2026-08)
 
-## Highlights
+Public release line. This version ships the clean release branch
+(`release/0.6.1`), the one-command installer, and the full JSPACE/MCP feature set.
 
-### Recall & memory quality (critical fixes)
-- **Fixed silent search failure:** the Hermes plugin checked `isinstance(result, list)`
-  but `/search/hybrid` returns `{nodes: [...]}`, so `mindbank_search` and automatic
-  prefetch always returned "No memories found". Recall now works.
-- **Namespace detection fixed:** the plugin used `re` without importing it, so every
-  project silently fell back to the `hermes` namespace. Now resolves real project names.
-- **Generic namespaces recall globally:** `hermes`/`global`/`default` sessions now draw
-  from the whole graph; real project namespaces stay isolated (with broaden-on-empty).
-- **Session-shell nodes excluded** from search, snapshot, neighbors, and dependence
-  expansion — recall returns distilled knowledge, not transcript filenames.
-- Wake-up snapshot is regenerated fresh for the global view instead of serving a stale blob.
+> Existing 0.6.0 installs see this as an update (the updater compares version strings,
+> so the 0.6.0 tag alone would not have triggered it).
 
-### New: Settings tab (LLM backend)
-- Configure any OpenAI-compatible LLM (OpenRouter, OpenAI, Groq, DeepSeek, local Ollama)
-  from the dashboard — no GPU required. Provider auto-detect, key masking, Test Connection.
+## 0.6.0 (2026-08)
 
-### Dashboard / Brain_3D overhaul
-- Unified visual theme, force-directed 3D graph, clearer node/edge interaction,
-  working top-row controls, and a fixed Debug/heal panel.
+### Global workspace (JSPACE)
+- New **JSPACE** dashboard tab: live fleet reasoning feed, capacity-calibrated workspace heatmap with concept families and leases, workspace event stream, specialists panel, ingestion funnel, and provenance labels (RAW session data vs CURATED memory).
+- **Workspace feedback loop** (toggleable): workspace-active memories are protected from TTL expiry and boosted in recall.
+- **Workspace event stream** (`workspace_events`): every created/reinforced/entered/left/consumed/expired transition is captured.
+- **Namespace auto-attribution**: per-session project detection from Hermes transcripts (`state.db`) and per-request `X-Mindbank-Session`/`X-Mindbank-Namespace` headers — correct even with hundreds of concurrent sessions.
 
 ### MCP server
-- All 15 tools verified functional. `mine_sessions` and `conflicts detect` now trigger
-  real work in the background instead of returning stubs. Edge weight defaults fixed
-  (omitted weight → 1.0, not 0.0). Per-request timeout added to the HTTP transport.
+- **22 tools**, including new `get_node`, `delete_node`, `create_nodes` (batch), `recent`, `history`, `set_context`, `get_context`.
+- FTS-only fallback when the embedder is unavailable; `node_types` filters; dedup-aware create reporting.
+- Hermes MCP client patch sends the session id per call for accurate memory attribution.
 
-## Updating
-Existing installs: `bash scripts/update.sh`
-New installs: see `QUICKSTART.md`.
+### Memory & search
+- Edge writes now invalidate cached search results (fixes stale graph-expansion recall).
+- Search/lease metadata casts hardened (no `::boolean` on user data).
+- Orphan dedup-hash cleanup; orphan-edge repair tool.
+
+### Reliability
+- Single-command installer (`scripts/install.sh`), clean release build (`scripts/build-release.sh`).
+- Workspace event retention (30 days); lease snapshot excludes soft-deleted nodes.
+
+## 0.5.2 (2026-06)
+- Dream engine (neural consolidation), taxonomy, advanced features, auto-forgetting profiles.
+- Session mining with LLM extraction; MCP HTTP transport (Hermes integration).
+
+## 0.5.1 (2026-05)
+- Brain3D visualization, namespace clustering, security visualization.

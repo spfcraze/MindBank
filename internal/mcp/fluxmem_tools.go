@@ -41,14 +41,14 @@ func (s *Server) toolRefineConnectivity(ctx context.Context, args json.RawMessag
 
 // refineMissingContextDirect finds semantically similar unconnected nodes and creates edges.
 func (s *Server) refineMissingContextDirect(ctx context.Context, nodeID string) (string, error) {
-	// Get source embedding and namespace
-	var sourceEmbeddingStr, sourceNS string
+	// Get source embedding, namespace and workspace
+	var sourceEmbeddingStr, sourceNS, sourceWorkspace string
 	err := s.pool.QueryRow(ctx, `
-		SELECT ne.embedding::text, n.namespace
+		SELECT ne.embedding::text, n.namespace, n.workspace_name
 		FROM nodes n
 		JOIN node_embeddings ne ON n.id = ne.node_id
 		WHERE n.id = $1 AND n.valid_to IS NULL
-	`, nodeID).Scan(&sourceEmbeddingStr, &sourceNS)
+	`, nodeID).Scan(&sourceEmbeddingStr, &sourceNS, &sourceWorkspace)
 	if err != nil {
 		return "", fmt.Errorf("node not found or has no embedding")
 	}
@@ -96,10 +96,10 @@ func (s *Server) refineMissingContextDirect(ctx context.Context, nodeID string) 
 		// Create edge if similarity > 0.6 (distance < 0.4)
 		if sug.Distance < 0.4 {
 			_, err := s.pool.Exec(ctx, `
-				INSERT INTO edges (source_id, target_id, edge_type, weight, metadata)
-				VALUES ($1, $2, 'relates_to', $3, '{"auto_connected":true,"reason":"embedding_similarity"}')
+				INSERT INTO edges (workspace_name, source_id, target_id, edge_type, weight, metadata)
+				VALUES ($1, $2, $3, 'relates_to', $4, '{"auto_connected":true,"reason":"embedding_similarity"}')
 				ON CONFLICT (source_id, target_id, edge_type) DO NOTHING
-			`, nodeID, sug.NodeID, 1.0-sug.Distance)
+			`, sourceWorkspace, nodeID, sug.NodeID, 1.0-sug.Distance)
 			if err == nil {
 				sug.Created = true
 				createdCount++

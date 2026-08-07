@@ -10,6 +10,7 @@ import (
 	"mindbank/internal/dedup"
 	"mindbank/internal/forgetting"
 	"mindbank/internal/models"
+	"mindbank/internal/workspace"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -179,6 +180,7 @@ func (r *NodeRepo) Create(ctx context.Context, req models.NodeCreate) (*models.N
 			// epistemic status. This is how a fact learned repeatedly becomes a
 			// strong node instead of many weak duplicates.
 			if err := r.ReinforceObservation(ctx, existing.ID); err == nil {
+				workspace.Record(ctx, r.Pool, "reinforced", existing.ID, existing.Label, existing.Namespace, map[string]any{"confirmation": existing.ConfirmationCount + 1})
 				// Reflect the reinforcement in the returned node (the Get above
 				// read the pre-reinforcement snapshot).
 				existing.ConfirmationCount++
@@ -219,9 +221,9 @@ func (r *NodeRepo) Create(ctx context.Context, req models.NodeCreate) (*models.N
 	err = r.Pool.QueryRow(ctx, `
 		INSERT INTO nodes (workspace_name, namespace, label, node_type, content, summary, metadata, importance, expires_at, materialized_path, epistemic_label, status, confirmation_count, source, blocker)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, '/' || gen_random_uuid()::text, $10, $11, $12, $13, $14)
-		RETURNING id, workspace_name, namespace, label, node_type, content, summary, topic, metadata,
+		RETURNING id, workspace_name, namespace, label, node_type, content, summary, COALESCE(topic, '') AS topic, metadata,
 		          importance, access_count, last_accessed, valid_from, valid_to, version,
-		          predecessor_id, expires_at, created_at, updated_at, epistemic_label, status, confirmation_count, source, blocker
+		          predecessor_id, expires_at, created_at, updated_at, COALESCE(epistemic_label, '') AS epistemic_label, COALESCE(status, '') AS status, confirmation_count, COALESCE(source, '') AS source, COALESCE(blocker, '') AS blocker
 	`, ws, ns, req.Label, req.NodeType, req.Content, req.Summary, meta, imp, expiresAt, epistemicLabel, status, 0, source, blocker,
 	).Scan(&n.ID, &n.WorkspaceName, &n.Namespace, &n.Label, &n.NodeType,
 		&n.Content, &n.Summary, &n.Topic, &n.Metadata, &n.Importance, &n.AccessCount,
@@ -230,6 +232,9 @@ func (r *NodeRepo) Create(ctx context.Context, req models.NodeCreate) (*models.N
 	if err != nil {
 		return nil, fmt.Errorf("insert node: %w", err)
 	}
+
+	// Workspace capture: the memory entered the global workspace.
+	workspace.Record(ctx, r.Pool, "created", n.ID, n.Label, n.Namespace, map[string]any{"node_type": string(n.NodeType)})
 
 	// Set materialized path to /{id}
 	_, _ = r.Pool.Exec(ctx, `UPDATE nodes SET materialized_path = '/' || $1 WHERE id = $1`, n.ID)
@@ -433,9 +438,9 @@ func (r *NodeRepo) Get(ctx context.Context, id string) (*models.Node, error) {
 	err := r.Pool.QueryRow(ctx, `
 		UPDATE nodes SET access_count = access_count + 1, last_accessed = now()
 		WHERE id = $1 AND valid_to IS NULL
-		RETURNING id, workspace_name, namespace, label, node_type, content, summary, topic, metadata,
+		RETURNING id, workspace_name, namespace, label, node_type, content, summary, COALESCE(topic, '') AS topic, metadata,
 		          importance, access_count, last_accessed, valid_from, valid_to, version,
-		          predecessor_id, created_at, updated_at, epistemic_label, status, confirmation_count, source, blocker
+		          predecessor_id, created_at, updated_at, COALESCE(epistemic_label, '') AS epistemic_label, COALESCE(status, '') AS status, confirmation_count, COALESCE(source, '') AS source, COALESCE(blocker, '') AS blocker
 	`, id).Scan(&n.ID, &n.WorkspaceName, &n.Namespace, &n.Label, &n.NodeType,
 		&n.Content, &n.Summary, &n.Topic, &n.Metadata, &n.Importance, &n.AccessCount,
 		&n.LastAccessed, &n.ValidFrom, &n.ValidTo, &n.Version,
@@ -464,7 +469,7 @@ func (r *NodeRepo) Update(ctx context.Context, id string, req models.NodeUpdate)
 	err = tx.QueryRow(ctx, `
 		SELECT id, workspace_name, namespace, label, node_type, content, summary, metadata,
 		       importance, access_count, last_accessed, valid_from, valid_to, version,
-		       predecessor_id, created_at, updated_at, epistemic_label, status, confirmation_count, source, blocker,
+		       predecessor_id, created_at, updated_at, COALESCE(epistemic_label, '') AS epistemic_label, COALESCE(status, '') AS status, confirmation_count, COALESCE(source, '') AS source, COALESCE(blocker, '') AS blocker,
 		       coalesce(topic, ''), expires_at, coalesce(materialized_path, '/')
 		FROM nodes WHERE id = $1 AND valid_to IS NULL
 		FOR UPDATE
@@ -547,7 +552,7 @@ func (r *NodeRepo) Update(ctx context.Context, id string, req models.NodeUpdate)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, nullif($18, ''), $19, $20)
 		RETURNING id, workspace_name, namespace, label, node_type, content, summary, metadata,
 		          importance, access_count, last_accessed, valid_from, valid_to, version,
-		          predecessor_id, created_at, updated_at, epistemic_label, status, confirmation_count, source, blocker
+		          predecessor_id, created_at, updated_at, COALESCE(epistemic_label, '') AS epistemic_label, COALESCE(status, '') AS status, confirmation_count, COALESCE(source, '') AS source, COALESCE(blocker, '') AS blocker
 	`, old.WorkspaceName, old.Namespace, label, old.NodeType,
 		content, summary, meta, imp, old.AccessCount, now, old.Version+1, &oldID,
 		epistemicLabel, status, old.ConfirmationCount, source, blocker,
@@ -583,8 +588,25 @@ func (r *NodeRepo) Update(ctx context.Context, id string, req models.NodeUpdate)
 		return nil, fmt.Errorf("update descendant paths: %w", err)
 	}
 
-	// Relink edges: update all edges referencing old node ID to new node ID
-	// This prevents edges from becoming orphaned after temporal updates
+	// Relink edges: update all edges referencing old node ID to new node ID.
+	// This prevents edges from becoming orphaned after temporal updates. A
+	// plain UPDATE would trip the UNIQUE(source_id, target_id, edge_type)
+	// constraint (and abort the whole version bump) when the new version
+	// already holds an equivalent edge, so duplicate old-endpoint edges are
+	// dropped first.
+	for _, side := range []string{"source", "target"} {
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`
+			DELETE FROM edges e
+			USING edges dup
+			WHERE dup.id <> e.id
+			  AND e.%s_id = $2
+			  AND dup.%s_id = $1
+			  AND dup.target_id = e.target_id
+			  AND dup.edge_type = e.edge_type
+		`, side, side), n.ID, old.ID); err != nil {
+			return nil, fmt.Errorf("dedupe %s edges: %w", side, err)
+		}
+	}
 	_, err = tx.Exec(ctx, `UPDATE edges SET source_id = $1 WHERE source_id = $2`, n.ID, old.ID)
 	if err != nil {
 		return nil, fmt.Errorf("relink source edges: %w", err)
@@ -622,10 +644,30 @@ func (r *NodeRepo) Update(ctx context.Context, id string, req models.NodeUpdate)
 		return nil, fmt.Errorf("commit: %w", err)
 	}
 
+	// Workspace capture: a memory acted upon to completion is consumed from
+	// the workspace (Linda `in` semantics) — e.g. a decision that reached a
+	// terminal validation status.
+	if isTerminalStatus(status) && old.Status != status {
+		workspace.Record(ctx, r.Pool, "consumed", n.ID, n.Label, n.Namespace,
+			map[string]any{"status": string(status)})
+		_, _ = r.Pool.Exec(ctx, `UPDATE nodes SET metadata = jsonb_set(
+			coalesce(metadata, '{}'), '{workspace_consumed_at}', to_jsonb(now())) WHERE id = $1`, n.ID)
+	}
+
 	// Invalidate caches on node update
 	r.invalidateCaches(old.WorkspaceName, old.Namespace)
 
 	return n, nil
+}
+
+// isTerminalStatus reports whether a validation status closes the loop on a
+// memory (it has been resolved and can leave the workspace).
+func isTerminalStatus(s models.ValidationStatus) bool {
+	switch s {
+	case models.StatusSupported, models.StatusRefuted, models.StatusBlocked:
+		return true
+	}
+	return false
 }
 
 // UpdateTopic updates the topic field for a node (in-place, no versioning).
@@ -641,7 +683,7 @@ func (r *NodeRepo) UpdateTopic(ctx context.Context, id string, topic string) err
 }
 
 // Delete soft-deletes a node and cleans up all connected records in a transaction.
-func (r *NodeRepo) Delete(ctx context.Context, id, workspace string) (bool, error) {
+func (r *NodeRepo) Delete(ctx context.Context, id, ws string) (bool, error) {
 	tx, err := r.Pool.Begin(ctx)
 	if err != nil {
 		return false, fmt.Errorf("begin delete tx: %w", err)
@@ -652,7 +694,7 @@ func (r *NodeRepo) Delete(ctx context.Context, id, workspace string) (bool, erro
 	tag, err := tx.Exec(ctx, `
 		UPDATE nodes SET valid_to = now()
 		WHERE id = $1 AND valid_to IS NULL AND workspace_name = $2
-	`, id, workspace)
+	`, id, ws)
 	if err != nil {
 		return false, fmt.Errorf("soft-delete node: %w", err)
 	}
@@ -687,6 +729,10 @@ func (r *NodeRepo) Delete(ctx context.Context, id, workspace string) (bool, erro
 	if err := tx.Commit(ctx); err != nil {
 		return false, fmt.Errorf("commit delete tx: %w", err)
 	}
+
+	// Workspace capture: a workspace-active memory removed by delete is a
+	// consume (Linda `in`).
+	workspace.Record(ctx, r.Pool, "consumed", id, "", "", map[string]any{"reason": "deleted"})
 
 	// Invalidate caches on node deletion — invalidate all namespaces for this workspace
 	// since we don't have the namespace without an extra query
@@ -885,9 +931,9 @@ func (r *NodeRepo) List(ctx context.Context, workspace, namespace string, nodeTy
 	}
 
 	query := `
-		SELECT id, workspace_name, namespace, label, node_type, content, summary, topic, metadata,
+		SELECT id, workspace_name, namespace, label, node_type, content, summary, COALESCE(topic, '') AS topic, metadata,
 		       importance, access_count, last_accessed, valid_from, valid_to, version,
-		       predecessor_id, created_at, updated_at, epistemic_label
+		       predecessor_id, created_at, updated_at, COALESCE(epistemic_label, '') AS epistemic_label
 		FROM nodes
 		WHERE valid_to IS NULL
 	`

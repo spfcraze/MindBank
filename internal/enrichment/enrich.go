@@ -27,7 +27,7 @@ func (e *Enricher) EnrichNode(ctx context.Context, nodeID string) (bool, error) 
 	// Fetch the node
 	var node models.Node
 	err := e.pool.QueryRow(ctx, `
-		SELECT id, label, content, summary, topic, node_type
+		SELECT id, label, content, summary, COALESCE(topic, '') AS topic, node_type
 		FROM nodes WHERE id = $1 AND valid_to IS NULL
 	`, nodeID).Scan(&node.ID, &node.Label, &node.Content, &node.Summary, &node.Topic, &node.NodeType)
 	if err != nil {

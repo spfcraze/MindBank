@@ -363,6 +363,7 @@ div.vis-tooltip{background:var(--bg-panel);border:1px solid var(--border);color:
       <a href="#" onclick="switchTab('graph2d');return false" data-tab="graph2d">Graph_2D</a>
       <a href="#" onclick="switchTab('brain');return false" data-tab="brain">Brain_3D</a>
       <a href="#" onclick="switchTab('observer');return false" data-tab="observer">Observer</a>
+      <a href="#" onclick="switchTab('jspace');return false" data-tab="jspace">JSPACE</a>
       <a href="#" onclick="switchTab('update');return false" data-tab="update">Update</a>
       <a href="#" onclick="switchTab('debug');return false" data-tab="debug">Debug</a>
       <a href="#" onclick="switchTab('settings');return false" data-tab="settings">Settings</a>
@@ -593,6 +594,16 @@ div.vis-tooltip{background:var(--bg-panel);border:1px solid var(--border);color:
         <button class="btn btn-red" onclick="cleanupEdges()" style="background:var(--red);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Clean Orphan Edges</button>
         <span id="cleanupResult" style="font-size:12px;color:var(--text-dim)"></span>
       </div>
+    </div>
+    <div class="tool-card">
+      <div class="tool-card-hdr">Repair Orphan Edges</div>
+      <div class="tool-card-desc">Repoint edges to current node versions, or find similar nodes to reconnect to. Run "Find Connections" first to review.</div>
+      <div class="tool-actions">
+        <button class="btn" onclick="repairOrphanEdges(true)" style="padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Find Connections</button>
+        <button class="btn btn-red" onclick="repairOrphanEdges(false)" style="background:var(--red);color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Repair</button>
+        <span id="repairEdgesResult" style="font-size:12px;color:var(--text-dim)"></span>
+      </div>
+      <div id="repairEdgesDetail" style="font-size:12px"></div>
     </div>
     <div class="tool-card">
       <div class="tool-card-hdr">Purge Old Versions</div>
@@ -1134,6 +1145,78 @@ div.vis-tooltip{background:var(--bg-panel);border:1px solid var(--border);color:
     </div>
   </section>
 </div>
+<!-- JSPACE TAB (global workspace) -->
+<div class="tab-content" id="tab-jspace">
+  <section style="margin-bottom:80px">
+    <div class="section-header">
+      <div class="section-label">Global Workspace</div>
+      <h2 class="section-title">J<span>_</span>SPACE<span>_</span></h2>
+      <p class="section-desc">What the fleet of Hermes sessions is broadcasting, integrating, and keeping "lit up" right now. Derived layer — never written into long-term memory.</p>
+      <div style="margin-top:8px">
+        <button class="btn" onclick="loadJspace()" style="padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px">Refresh</button>
+        <button id="jspaceFeedbackBtn" onclick="toggleJspaceFeedback()" style="padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px;background:transparent;border:1px solid var(--border);color:var(--text-dim)" title="Enable/disable the workspace→memory feedback loop (activation marks, forgetting protection, recall boost)">Feedback loop: …</button>
+        <span id="jspaceMeta" style="font-size:12px;color:var(--text-dim);margin-left:8px"></span>
+      </div>
+    </div>
+
+    <!-- LIVE: what the fleet is reasoning about right now -->
+    <div class="panel" style="margin-bottom:20px;border-color:rgba(0,255,136,0.35)">
+      LIVE J-SPACE — reasoning right now <span style="color:#00ff88;border:1px solid #00ff88;border-radius:8px;padding:1px 6px;font-size:9px;margin-left:6px">RAW · state.db</span> <span id="jspaceLiveAge" style="color:var(--text-dim);font-size:11px"></span></div>
+      <div id="jspaceLive" style="min-height:80px;color:var(--text-dim);font-size:12px">Waiting for fleet activity… (auto-refreshes every 10s)</div>
+    </div>
+
+    <!-- RAW SESSION ACTIVITY (MindBank-independent) + ingestion funnel -->
+    <div class="panel" style="margin-bottom:20px;border-color:rgba(122,162,247,0.35)">
+      <div class="panel-title">RAW SESSION ACTIVITY — what sessions actually did <span style="color:#00ff88;border:1px solid #00ff88;border-radius:8px;padding:1px 6px;font-size:9px;margin-left:6px">RAW · state.db</span> <span id="jspaceRawAge" style="color:var(--text-dim);font-size:11px"></span></div>
+      <div id="jspaceFunnel" style="margin-bottom:8px;font-size:12px"></div>
+      <div id="jspaceRaw" style="min-height:50px;color:var(--text-dim);font-size:12px">Loading raw activity…</div>
+    </div>
+
+    <!-- Panel A: Broadcast Feed -->
+    <div class="panel" style="margin-bottom:20px">
+      BROADCAST FEED — what the fleet just learned <span style="color:#F5C518;border:1px solid #F5C518;border-radius:8px;padding:1px 6px;font-size:9px;margin-left:6px">CURATED · MindBank</span>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr style="color:var(--text-dim);text-align:left">
+            <th style="padding:4px">When</th><th>Memory</th><th>Type</th><th>Project</th><th>Imp</th><th>Epistemic</th>
+          </tr></thead>
+          <tbody id="jspaceBroadcasts"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Panel B: Workspace Heatmap -->
+    <div class="panel" style="margin-bottom:20px">
+      WORKSPACE HEATMAP — what's "lit up" (top <span id="jspaceK">25</span>) <span style="color:#F5C518;border:1px solid #F5C518;border-radius:8px;padding:1px 6px;font-size:9px;margin-left:6px">CURATED · MindBank</span>
+      <div style="margin-bottom:6px;font-size:12px">
+        <input id="jspacePattern" oninput="renderJspaceBubbles(window.__jspaceTop||[], window.__jspaceFamilies||[])" placeholder="tuple pattern: type:decision ns:klixsor status:open" style="width:340px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:12px">
+        <span style="color:var(--text-dim);font-size:11px">associative pattern filter (Linda-style)</span>
+      </div>
+      <div id="jspaceBubbles" style="display:flex;flex-wrap:wrap;gap:6px;min-height:120px"></div>
+      <div id="jspaceDetail" style="margin-top:10px;font-size:12px;color:var(--text-dim)"></div>
+    </div>
+
+    <!-- Panel C: Specialists (fleet) -->
+    <div class="panel" style="margin-bottom:20px">
+      SPECIALISTS — parallel sessions <span style="color:#00ff88;border:1px solid #00ff88;border-radius:8px;padding:1px 6px;font-size:9px;margin-left:6px">RAW · state.db</span>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr style="color:var(--text-dim);text-align:left">
+            <th style="padding:4px">Session</th><th>Project</th><th>Messages</th><th>Last activity</th>
+          </tr></thead>
+          <tbody id="jspaceFleet"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Panel D: Integration -->
+    <div class="panel">
+      INTEGRATION — how broadcasts connect <span style="color:#F5C518;border:1px solid #F5C518;border-radius:8px;padding:1px 6px;font-size:9px;margin-left:6px">CURATED · MindBank</span>
+      <div id="jspaceIntegration" style="font-size:13px"></div>
+    </div>
+  </section>
+</div>
+
 
 <div class="tab-content" id="tab-update">
   <div id="up-available-banner" class="panel" style="padding:20px 24px;margin-bottom:24px;border:1px solid var(--yellow);background:rgba(245,197,24,0.05);display:none">
@@ -1411,6 +1494,7 @@ let tabLoaded = { dashboard: true, questions: false, edges: false, tools: true, 
 let currentTab='dashboard';
 function switchTab(name){
   const prevTab=currentTab;
+  if(prevTab==='jspace')stopJspaceLive();
   currentTab=name;
   // Update cyberpunk nav links
   document.querySelectorAll('.nav-links a[data-tab]').forEach(a=>{
@@ -1436,6 +1520,7 @@ function switchTab(name){
     if(name==='observer' && window.sessionNodesLoader) window.sessionNodesLoader.load();
     if(name==='tools')loadCompressionSettings();
     if(name==='settings')loadLLMSettings();
+    if(name==='jspace'){loadJspace();startJspaceLive();}
   }else if(name==='graph'){
     loadGraph();
   }
@@ -1909,6 +1994,32 @@ async function cleanupEdges(){
     loadStats();
   }else{document.getElementById('cleanupResult').innerHTML='<span style="color:#ff4444">Failed</span>'}
 }
+async function repairOrphanEdges(dryRun){
+  const res=document.getElementById('repairEdgesResult');
+  const det=document.getElementById('repairEdgesDetail');
+  res.innerHTML='<span style="color:#F5C518">'+(dryRun?'Scanning...':'Repairing...')+'</span>';
+  det.innerHTML='';
+  const r=await api('/analyze/repair-orphan-edges?dry_run='+dryRun,{method:'POST',body:'{}'});
+  if(!r){res.innerHTML='<span style="color:#ff4444">Failed</span>';return}
+  const color=dryRun?'#7aa2f7':'#00ff88';
+  res.innerHTML=`<span style="color:${color}">${r.total} orphan edges · repaired ${r.repaired} · reconnected ${r.reconnected} · deleted ${r.deleted} · unresolved ${r.unresolved}</span>`;
+  if(r.edges&&r.edges.length){
+    let h='<table style="width:100%;border-collapse:collapse;margin-top:8px;font-size:12px">'
+      +'<tr style="color:var(--text-dim);text-align:left"><th style="padding:4px">Edge</th><th>Type</th><th>Action</th><th>Old → New</th><th>Sim</th><th>Note</th></tr>';
+    for(const e of r.edges){
+      const ac=e.action;
+      const aColor=ac==='delete'?'#ff6666':(ac==='unresolved'?'#F5C518':((ac.startsWith('relink')||ac.startsWith('reconnect'))?'#00ff88':'#7aa2f7'));
+      const oldToNew=e.new_node_id?`<span style="color:#ff6666">${esc((e.old_node_id||'').slice(0,8))}</span> → <span style="color:#00ff88">${esc(e.new_node_label||e.new_node_id||'').slice(0,40)}</span>`:'—';
+      h+=`<tr style="border-top:1px solid var(--border)"><td style="padding:4px">${esc(e.edge_id.slice(0,8))}</td><td>${esc(e.edge_type)}</td><td style="color:${aColor}">${ac}</td><td>${oldToNew}</td><td>${e.similarity?e.similarity.toFixed(2):''}</td><td>${esc(e.note||'')}</td></tr>`;
+      if(e.candidates&&e.candidates.length){
+        h+=`<tr><td colspan="6" style="padding:2px 4px 8px;color:var(--text-dim)">candidates: ${e.candidates.map(c=>esc(c.label)+' ('+c.sim.toFixed(2)+')').join(' · ')}</td></tr>`;
+      }
+    }
+    h+='</table>';
+    det.innerHTML=h;
+  }
+  loadStats();
+}
 async function purgeVersions(){
   const days=document.getElementById('purgeDays').value||7;
   document.getElementById('purgeResult').innerHTML='<span style="color:#F5C518">Purging...</span>';
@@ -2374,6 +2485,293 @@ async function runHeal(fixes,dryRun){
   toast(msg+applied);
   runIntegrityScan();
   loadDebugHealLog();
+}
+
+// === JSPACE (Global Workspace) Functions ===
+async function loadJspace(){
+  const meta=document.getElementById('jspaceMeta');
+  meta.innerHTML='<span style="color:#F5C518">Loading workspace...</span>';
+  const d=await api('/jspace/overview?k=25&hours=24');
+  if(!d){meta.innerHTML='<span style="color:#ff4444">Failed to load JSPACE</span>';return}
+  const occ=(d.workspace.occupancy!=null?d.workspace.occupancy:d.workspace.top.length);
+  meta.innerHTML=`<span style="color:#7aa2f7">fleet ${d.fleet&&d.fleet.active_total!=null?d.fleet.active_total:'?'} active · ${d.broadcasts.count} broadcasts/24h · workspace occupancy <b style="color:#00ff88">${occ}</b>/${d.workspace.top.length} · ${(d.workspace.families||[]).length} families</span>`;
+  renderJspaceBroadcasts(d.events||d.broadcasts.recent||[]);
+  window.__jspaceOcc=d.workspace.occupancy;
+  renderJspaceBubbles(d.workspace.top||[], d.workspace.families);
+  renderJspaceFleet(d.fleet&&d.fleet.sessions?d.fleet.sessions:[]);
+  renderJspaceIntegration(d.integration||{});
+  loadJspaceFeedback();
+  loadJspaceRaw();
+}
+function renderJspaceBroadcasts(events){
+  const tb=document.getElementById('jspaceBroadcasts');
+  const icons={created:'✚',reinforced:'↻',entered:'●',left:'○',consumed:'✓',expired:'✕'};
+  const cols={created:'#9ece8a',reinforced:'#7aa2f7',entered:'#00ff88',left:'#F5C518',consumed:'#bb9af7',expired:'#ff4444'};
+  if(!events.length){tb.innerHTML='<tr><td colspan="6" style="padding:10px;color:var(--text-dim)">No workspace events in window.</td></tr>';return}
+  tb.innerHTML=events.map(ev=>{
+    const ic=icons[ev.event_type]||'•';
+    const col=cols[ev.event_type]||'var(--text-dim)';
+    const label=ev.label||ev.node_id||'(memory)';
+    const meta=ev.meta&&ev.meta!=='{}'?ev.meta.slice(0,60):'';
+    return `<tr style="border-top:1px solid var(--border)"><td style="padding:4px;white-space:nowrap">${fmtAgo(ev.age)}</td>`
+      +`<td style="color:${col}">${ic} ${esc(ev.event_type)}</td>`
+      +`<td>${esc(label.length>60?label.slice(0,58)+'…':label)}</td>`
+      +`<td>${esc(ev.namespace||'')}</td>`
+      +`<td colspan="2" style="color:var(--text-dim)">${esc(meta)}</td></tr>`;
+  }).join('');
+}
+
+function renderJspaceBubbles(top, families){
+  const box=document.getElementById('jspaceBubbles');
+  const det=document.getElementById('jspaceDetail');
+  // Linda-style associative pattern filter: type:decision ns:klixsor status:open
+  const pat=document.getElementById('jspacePattern');
+  const q=(pat?pat.value:'').trim().toLowerCase();
+  let filtered=top;
+  if(q){
+    const terms={};
+    q.split(/\s+/).forEach(t=>{const kv=t.split(':');if(kv.length===2)terms[kv[0]]=kv[1];});
+    filtered=top.filter(m=>{
+      const lm=leaseMinsOf(m);
+      for(const k in terms){
+        const v=terms[k];
+        if(k==='type'&&!(m.node_type||'').toLowerCase().includes(v))return false;
+        if((k==='ns'||k==='namespace')&&!(m.namespace||'').toLowerCase().includes(v))return false;
+        if(k==='status'&&!(m.status||'').toLowerCase().includes(v))return false;
+        if(k==='epistemic'&&!(m.epistemic_label||'').toLowerCase().includes(v))return false;
+        if(k==='lease'){const op=v[0];const n=parseFloat(v.slice(1));if(op==='>'&&!(lm>n))return false;if(op==='<'&&!(lm<n))return false;if(!isNaN(n)&&lm<n)return false;}
+      }
+      return true;
+    });
+  }
+  document.getElementById('jspaceK').textContent=top.length+' ('+filtered.length+' match)';
+  if(!filtered.length){box.innerHTML='<div style="color:var(--text-dim);padding:20px">No memories match the pattern.</div>';return}
+  const max=Math.max(...filtered.map(m=>m.score||0),0.001);
+  const occ=(window.__jspaceOcc||top.length);
+  const famCols=['#00ff88','#F5C518','#7aa2f7','#ff9e64','#bb9af7','#f7768e','#7dcfff','#9ece8a','#e0af68'];
+  const tupleLine=m=>{
+    const lm=leaseMinsOf(m);
+    const lease=lm<0?'':(lm===0?'lease 0m':'lease '+lm+'m');
+    return '('+esc(m.node_type||'?')+', '+esc(m.namespace||'global')+', '+esc(m.epistemic_label||'?')+', '+esc(m.status||'?')+', '+(lease||'no-lease')+')';
+  };
+  const bubble=m=>{
+    const size=Math.max(10,Math.round(30*Math.sqrt((m.score||0)/max)));
+    const hot=(window.__jspaceOcc!=null&&top.indexOf(m)<window.__jspaceOcc);
+    const col=hot?'#00ff88':(m.score||0)>=max*0.2?'#F5C518':'#7aa2f7';
+    return `<div onclick="showJspaceDetail('${m.id}')" title="${esc(m.label)} (score ${(m.score||0).toFixed(2)})"`
+      +` style="min-width:${size+12}px;max-width:300px;background:rgba(122,162,247,0.08);border:1px solid ${col};border-radius:8px;padding:6px 10px;font-size:12px;cursor:pointer;color:var(--text)">`
+      +`<div style="font-weight:600">${esc(m.label.length>46?m.label.slice(0,44)+'…':m.label)}</div>`
+      +`<div style="font-size:10px;color:var(--text-dim)">${tupleLine(m)}</div>`
+      +`</div>`;
+  };
+  if(families&&families.length>1&&!q){
+    box.innerHTML=families.map((f,fi)=>{
+      const fc=famCols[fi%famCols.length];
+      return `<div style="margin:4px;padding:6px 8px;border:1px solid ${fc};border-radius:10px;min-width:200px;flex:1 1 240px">`
+        +`<div style="font-size:11px;color:${fc};font-weight:700;margin-bottom:4px">${esc(f.label)} <span style="font-weight:400;color:var(--text-dim)">· ${f.count} mem</span></div>`
+        +`<div style="display:flex;flex-wrap:wrap;gap:5px">${f.members.map(m=>{
+            const sz=Math.max(10,Math.round(28*Math.sqrt((m.score||0)/max)));
+            return `<div onclick="showJspaceDetail('${m.id}')" title="${esc(tupleLine(m))}" style="min-width:${sz+8}px;max-width:230px;background:rgba(122,162,247,0.08);border:1px solid ${fc}66;border-radius:7px;padding:4px 8px;font-size:11px;cursor:pointer">${esc(m.label.length>30?m.label.slice(0,28)+'…':m.label)}<div style="font-size:9px;color:var(--text-dim)">${esc(m.namespace||'global')} · ${leaseMinsOf(m)<0?'':leaseMinsOf(m)+'m'}</div></div>`;
+          }).join('')}</div></div>`;
+    }).join('');
+  }else{
+    box.innerHTML=filtered.map(bubble).join('');
+  }
+  det.innerHTML='<span style="color:var(--text-dim)">Green = in workspace (occupancy '+occ+') · tuple pattern filter · click a memory for its workspace properties.</span>';
+}
+function leaseMinsOf(m){if(!m.lease_until)return -1;const t=new Date(m.lease_until).getTime();if(!t)return -1;return Math.max(0,Math.round((t-Date.now())/60000));}
+
+async function showJspaceDetail(id){
+  const det=document.getElementById('jspaceDetail');
+  det.innerHTML='<span style="color:#F5C518">Loading…</span>';
+  const g=await api('/nodes/'+id);
+  if(!g){det.innerHTML='<span style="color:#ff4444">Failed</span>';return}
+  det.innerHTML='<div style="background:rgba(122,162,247,0.06);border:1px solid var(--border);border-radius:8px;padding:10px">'
+    +`<b>${esc(g.label)}</b> <span style="color:var(--text-dim)">(${esc(g.node_type||'')} · ${esc(g.namespace||'global')})</span><br>`
+    +`<span style="color:var(--text-dim)">reportable:</span> acc ${g.access_count} · <span style="color:var(--text-dim)">reused:</span> conns ${g.connections!=null?g.connections:'?'} · `
+    +`<span style="color:var(--text-dim)">modulated:</span> status ${esc(g.status||'')} · <span style="color:var(--text-dim)">broadcast:</span> ${esc((g.created_at||'').slice(0,10))} · `
+    +`<span style="color:var(--text-dim)">state:</span> ${esc(g.epistemic_label||'')} conf ${g.confirmation_count}<br>`
+    +`${esc((g.summary||g.content||'').slice(0,240))}</div>`;
+}
+function renderJspaceFleet(sessions){
+  const tb=document.getElementById('jspaceFleet');
+  if(!sessions.length){tb.innerHTML='<tr><td colspan="4" style="padding:10px;color:var(--text-dim)">No active sessions found.</td></tr>';return}
+  tb.innerHTML=sessions.slice(0,25).map(s=>{
+    const ago=fmtAgo(s.last_activity);
+    return `<tr style="border-top:1px solid var(--border)"><td style="padding:4px">${esc(s.id)}</td>`
+      +`<td style="color:${s.namespace?'#00ff88':'var(--text-dim)'}">${esc(s.namespace||'—')}</td>`
+      +`<td>${s.messages}</td><td style="white-space:nowrap">${ago}</td></tr>`;
+  }).join('')
+  +(sessions.length>25?'<tr><td colspan="4" style="padding:4px;color:var(--text-dim)">…and '+(sessions.length-25)+' more</td></tr>':'');
+}
+function renderJspaceIntegration(ig){
+  const stat=(label,v)=>`<div style="border:1px solid var(--border);border-radius:8px;padding:8px 12px"><div style="font-size:20px;font-weight:700">${v!=null?v:'?'}</div><div style="font-size:11px;color:var(--text-dim)">${label}</div></div>`;
+  document.getElementById('jspaceIntegration').innerHTML=
+    `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;padding:6px 0">`
+    +stat('Edges',ig.edges)+stat('Isolated nodes',ig.isolated_nodes)
+    +stat('Orphan edges',ig.orphan_edges)+stat('Reinforced',ig.reinforced_nodes)+stat('Consumed',ig.consumed)
+    +`</div>`
+    +`<div style="margin-top:8px;font-size:12px;color:var(--text-dim)">Orphan edges can be repaired from the <a href="#" onclick="switchTab('tools');return false" style="color:var(--cyan)">Tools → Repair Orphan Edges</a>.</div>`;
+}
+function fmtAgo(ts){
+  if(!ts)return '—';
+  const s=(Date.now()/1000)-ts;
+  if(s<60)return Math.round(s)+'s ago';
+  if(s<3600)return Math.round(s/60)+'m ago';
+  if(s<86400)return Math.round(s/3600)+'h ago';
+  return Math.round(s/86400)+'d ago';
+}
+
+async function loadJspaceFeedback(){
+  const d=await api('/jspace/feedback');
+  if(!d)return;
+  const b=document.getElementById('jspaceFeedbackBtn');
+  b.textContent='Feedback loop: '+(d.enabled?'ON':'OFF');
+  b.style.borderColor=d.enabled?'#00ff88':'var(--border)';
+  b.style.color=d.enabled?'#00ff88':'var(--text-dim)';
+  b.dataset.enabled=d.enabled?'1':'0';
+  b.title=(d.enabled?'ON':'OFF')+' · every '+d.interval_min+'m · last run '+(d.last_run?new Date(d.last_run).toLocaleTimeString():'never')+' ('+d.last_marked+' marked)';
+}
+async function toggleJspaceFeedback(){
+  const b=document.getElementById('jspaceFeedbackBtn');
+  const on=b.dataset.enabled!=='1';
+  b.textContent='…';
+  const d=await api('/jspace/feedback',{method:'POST',body:JSON.stringify({enabled:on})});
+  if(!d){b.textContent='Error';return}
+  await loadJspaceFeedback();
+  await loadJspace();
+}
+
+// === JSPACE LIVE (live reasoning) ===
+let jspaceLiveTimer=null;
+async function loadJspaceLive(){
+  if(!document.getElementById('tab-jspace').classList.contains('active'))return; // only while visible
+  const d=await api('/jspace/live?window=600');
+  const box=document.getElementById('jspaceLive');
+  if(!d){box.innerHTML='<span style="color:#ff4444">Live feed unavailable</span>';return}
+  const age=new Date(d.now*1000).toLocaleTimeString();
+  document.getElementById('jspaceLiveAge').textContent='· updated '+age+' · '+d.active_sessions+' active · '+(d.messages_scanned||'?')+' msgs · '+d.reasoning_chars+' reasoning chars scanned';
+  // JADR silent alarm: workspace drift vs previous window
+  if(d.drift){
+    const dc=d.drift.label==='major'?'#ff4444':(d.drift.label==='shifting'?'#F5C518':'#00ff88');
+    const ds=d.drift.label==='major'?'<b>':(d.drift.label==='shifting'?'<b>':'');
+    const de=d.drift.label==='major'?'</b>':(d.drift.label==='shifting'?'</b>':'');
+    document.getElementById('jspaceLiveAge').innerHTML+=' · <span style="color:'+dc+'" title="J-space drift vs previous window (Jaccard over top-8 concepts)">drift '+ds+esc(d.drift.label)+' '+d.drift.value.toFixed(2)+de+'</span>';
+  }
+  // JADR recognition→behavior alignment
+  if(d.alignment){
+    const al=d.alignment;
+    const ac=al.score>=0.5?'#00ff88':(al.score>=0.25?'#F5C518':'#ff4444');
+    document.getElementById('jspaceLiveAge').innerHTML+=' · <span style="color:'+ac+'" title="Reasoning concepts that materialized as memory broadcasts in the window">recognition→behavior '+al.materialized+'/'+al.recognized+' ('+(al.score*100).toFixed(0)+'%)</span>'
+      +(al.lost&&al.lost.length?' · <span style="color:var(--text-dim)" title="Reasoning concepts that never became memories">lost: '+esc(al.lost.slice(0,5).join(', '))+'</span>':'');
+  }
+  if(!d.sessions.length){
+    const ra=window.__jspaceRawActive||0;
+    const wmin=Math.round(d.window/60);
+    if(ra>0){
+      box.innerHTML=`<span style="color:#F5C518">No reasoning captured in the last ${wmin} min, but <b style="color:#00ff88">${ra} session(s)</b> are active (tool events) — likely a tool loop or a model that emits no reasoning. <a href="#" onclick="loadJspaceRaw();return false" style="color:var(--cyan)">Refresh raw activity</a></span>`;
+    }else{
+      box.innerHTML=`<span style="color:var(--text-dim)">No sessions reasoning in the last ${wmin} min. Fleet idle.</span>`;
+    }
+    return;
+  }
+  // reasoning feed
+  let h='<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:var(--text-dim);text-align:left">'
+    +'<th style="padding:4px">Session</th><th>Project</th><th>Tool</th><th>Reasoning</th><th>Age</th></tr></thead><tbody>';
+  for(const s of d.sessions.slice(0,15)){
+    const rAge=(s.reasoning_age!=null?s.reasoning_age:s.age);
+    const fresh=rAge<60;
+    const dot=fresh?'<span style="color:#00ff88">●</span>':'<span style="color:#F5C518">○</span>';
+    let reas=s.reasoning?s.reasoning:(s.content?(s.content.length>110?s.content.slice(0,108)+'…':s.content):'(no activity)');
+    if(!s.reasoning) reas='[activity] '+reas;
+    h+=`<tr style="border-top:1px solid var(--border)"><td style="padding:4px;white-space:nowrap">${dot} ${esc(s.id.slice(0,22))}</td>`
+      +`<td style="color:${s.namespace?'#00ff88':'var(--text-dim)'}">${esc(s.namespace||'—')}</td>`
+      +`<td>${esc(s.tool||'')}</td><td style="color:${fresh?'var(--text)':'var(--text-dim)'}">${esc(reas)}</td>`
+      +`<td style="white-space:nowrap">${fmtAgo(s.reasoning_ts||s.ts)}</td></tr>`;
+  }
+  h+='</tbody></table>';
+  // MindBank memory activity: ops from state.db + writes from MindBank
+  const mops=d.memory_ops||[], mwrites=d.memory_writes||[];
+  if(mops.length||mwrites.length){
+    h+='<div style="margin-top:8px;padding:6px 10px;border:1px solid rgba(187,154,247,0.4);border-radius:8px">'
+      +'<span style="color:#bb9af7;font-size:11px;font-weight:700">MEMORY ACTIVITY — MindBank: </span>';
+    if(mops.length){
+      h+='<div style="margin-top:4px">'+mops.map(o=>
+        `<span title="${esc(o.snippet)}" style="display:inline-block;margin:2px;padding:2px 8px;border-radius:10px;border:1px solid #bb9af7;font-size:11px">${esc(o.id.slice(0,12))} · ${esc(o.tool.replace('mcp_mindbank_','mb_').replace('mindbank_','mb_'))} <span style="color:var(--text-dim)">${fmtAgo(o.ts)}</span></span>`
+      ).join('')+'</div>';
+    }
+    if(mwrites.length){
+      h+='<div style="margin-top:4px">'+mwrites.map(mw=>
+        `<span title="session ${esc(mw.session_id||'?')} · ${esc(mw.node_type)}" style="display:inline-block;margin:2px;padding:2px 8px;border-radius:10px;border:1px solid #bb9af7;font-size:11px">✚ ${esc(mw.label.length>36?mw.label.slice(0,34)+'…':mw.label)} <span style="color:var(--text-dim)">${esc(mw.namespace)} ${fmtAgo(mw.age)}</span></span>`
+      ).join('')+'</div>';
+    }
+    h+='</div>';
+  }
+  // J-thought: sparse coefficient-weighted concept state (J-CoT)
+  if(d.jthought&&d.jthought.length){
+    h+='<div style="margin-top:8px;padding:6px 10px;border:1px solid rgba(0,255,136,0.4);border-radius:8px;background:rgba(0,255,136,0.05)">'
+      +'<span style="color:#00ff88;font-size:11px;font-weight:700">CURRENT J-THOUGHT: </span>'
+      +d.jthought.map(t=>`<span title="${esc(t.sessions.map(s=>s.id.slice(0,14)).join(', '))}" style="display:inline-block;margin:2px;padding:2px 8px;border-radius:10px;border:1px solid #00ff88;font-size:11px">${esc(t.term)} <span style="color:var(--text-dim)">${t.coefficient.toFixed(2)}</span></span>`).join('')
+      +'</div>';
+  }
+  // live concepts (terms + projects + session attribution)
+  const cp=d.concepts||{};
+  if((cp.terms&&cp.terms.length)||(cp.projects&&cp.projects.length)){
+    h+='<div style="margin-top:8px">';
+    if(cp.projects&&cp.projects.length){
+      h+='<span style="color:var(--text-dim);font-size:11px">projects: </span>'
+        +cp.projects.map(p=>`<span style="display:inline-block;margin:2px;padding:2px 8px;border-radius:10px;border:1px solid #00ff88;font-size:11px">${esc(p.name)} (${p.count})</span>`).join('');
+    }
+    if(cp.terms&&cp.terms.length){
+      h+='<div style="margin-top:4px"><span style="color:var(--text-dim);font-size:11px">on the fleet’s mind (held by): </span>'
+        +cp.terms.map(t=>{
+          const held=(t.sessions||[]).map(s=>s.id.slice(0,14)).join(', ');
+          return `<span title="${esc(held||'')}" style="display:inline-block;margin:2px;padding:2px 8px;border-radius:10px;border:1px solid var(--cyan);font-size:11px">${esc(t.term)} <span style="color:var(--text-dim)">(${t.count.toFixed?t.count.toFixed(1):t.count})</span>${held?` <span style="color:var(--text-dim);font-size:9px">⇢ ${esc(held)}</span>`:''}</span>`;
+        }).join('')+'</div>';
+    }
+    if(cp.co_occ&&cp.co_occ.length){
+      h+='<div style="margin-top:4px"><span style="color:var(--text-dim);font-size:11px">co-occupancy (shared across sessions): </span>'
+        +cp.co_occ.map(c=>`<span style="display:inline-block;margin:2px;padding:2px 8px;border-radius:10px;border:1px dashed #F5C518;font-size:11px">${esc(c.a)} ↔ ${esc(c.b)} <span style="color:var(--text-dim)">×${c.sessions}</span></span>`).join('')
+        +'</div>';
+    }
+    h+='</div>';
+  }
+  box.innerHTML=h;
+}
+function startJspaceLive(){
+  if(jspaceLiveTimer)return;
+  loadJspaceLive();
+  jspaceLiveTimer=setInterval(loadJspaceLive,10000);
+}
+function stopJspaceLive(){ if(jspaceLiveTimer){clearInterval(jspaceLiveTimer);jspaceLiveTimer=null;} }
+
+// === RAW SESSION ACTIVITY + ingestion funnel (MindBank-independent) ===
+async function loadJspaceRaw(){
+  const d=await api('/jspace/raw?window=3600');
+  if(!d)return;
+  const raw=d.raw||{}, funnel=d.funnel||{};
+  window.__jspaceRawActive=(raw.active_sessions!=null?raw.active_sessions:0);
+  document.getElementById('jspaceRawAge').textContent='· last '+Math.round((funnel.window||3600)/60)+'min';
+  // funnel bar: raw active sessions -> persisted
+  const cov=((funnel.persistence_coverage||0)*100).toFixed(0);
+  const covColor=cov>=50?'#00ff88':(cov>=20?'#F5C518':'#ff4444');
+  document.getElementById('jspaceFunnel').innerHTML=
+    '<div style="font-size:12px">Ingestion funnel: '
+    +`<span style="color:#00ff88">${funnel.sessions_active||0} sessions active</span> → `
+    +`<span style="color:#7aa2f7">${funnel.sessions_with_events||0} doing work</span> → `
+    +`<span style="color:#F5C518">${funnel.memory_write_calls||0} memory-write calls</span> → `
+    +`<span style="color:#bb9af7">${funnel.sessions_persisted||0} sessions persisted</span> → `
+    +`<span style="color:#9ece8a">${funnel.memories_persisted||0} memories</span>`
+    +` · <span style="color:${covColor}">coverage ${cov}%</span>`
+    +` · <span style="color:var(--text-dim)">${funnel.throughput_per_session||0} memories/active-session</span>`
+    +'</div>';
+  // tool chips + sessions
+  const box=document.getElementById('jspaceRaw');
+  if(!raw.total_events){box.innerHTML='<span style="color:var(--text-dim)">No raw session activity in the window (fleet idle).</span>';return}
+  let h='<span style="color:var(--text-dim);font-size:11px">tool events ('+raw.total_events+'): </span>';
+  h+=(raw.tool_stats||[]).map(t=>`<span title="${t.sessions} session(s)" style="display:inline-block;margin:2px;padding:2px 8px;border-radius:10px;border:1px solid #7aa2f7;font-size:11px">${esc(t.tool)} ×${t.count}</span>`).join('');
+  h+='<div style="margin-top:6px;font-size:12px">'+(raw.sessions||[]).map(s=>`<span style="display:inline-block;margin:2px 8px 2px 0"><span style="color:#00ff88">${esc(s.namespace||s.id.slice(0,12))}</span> <span style="color:var(--text-dim)">${s.events} ev · ${esc((s.tools||[]).slice(0,3).map(t=>t.tool+'×'+t.count).join(', '))}</span></span>`).join('')+'</div>';
+  box.innerHTML=h;
 }
 
 // === Epistemic Classification Functions ===

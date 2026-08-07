@@ -4,11 +4,11 @@
 
 # MindBank
 
-**Persistent graph memory for AI agents.**
+**Persistent graph memory for AI agents — a global workspace for your fleet of sessions.**
 
-Hybrid search · Temporal versioning · Local embeddings · Per-project isolation
+Hybrid search · Temporal versioning · Local embeddings · Per-project isolation · MCP server · Live global-workspace (JSPACE)
 
-[![Go](https://img.shields.io/badge/Go-1.23%2B-00ADD8?logo=go)](https://go.dev)
+[![Go](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go)](https://go.dev)
 [![Postgres](https://img.shields.io/badge/Postgres-16%2B-4169E1?logo=postgresql)](https://postgresql.org)
 [![Ollama](https://img.shields.io/badge/Ollama-local-000000?logo=ollama)](https://ollama.com)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -20,52 +20,91 @@ Hybrid search · Temporal versioning · Local embeddings · Per-project isolatio
 ## ⚡ One-Command Install
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/spfcraze/MindBank/main/scripts/setup.sh | bash
+curl -sSL https://raw.githubusercontent.com/spfcraze/MindBank/main/scripts/install.sh | bash
 ```
 
-**Dashboard:** http://localhost:8095
+That single command: checks prerequisites (Git, Go 1.25+, Docker), clones MindBank, starts the **pgvector** Postgres container, builds the API + MCP servers, runs migrations, and starts everything.
 
-> **Note:** The setup script creates a `.env` file with all required configuration. The API server (`mindbank-api`) and MCP server (`mindbank-mcp`) are started together via `scripts/start.sh`.
+**Dashboard:** http://localhost:8095 · **MCP:** http://localhost:8096/mcp
+
+Manual setup: see [QUICKSTART.md](QUICKSTART.md). Config reference: see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/API.md](docs/API.md).
 
 ---
 
 ## What is MindBank?
 
-MindBank is a **persistent memory layer** that lives between your AI agents and raw conversation history. Instead of losing context every time a session ends, MindBank remembers what matters — decisions, facts, problems, preferences — and surfaces them when relevant.
+MindBank is a **persistent, graph-structured memory layer** that sits between your AI agents and raw conversation history. Agents stop losing context between sessions: everything important they learn is written once, deduplicated, embedded, and linked into a growing knowledge graph — then recalled with hybrid full-text + semantic search.
 
-Think of it as a **second brain for AI**: structured, searchable, and relationship-aware.
-
-### The Problem
-
-Every AI conversation starts from zero. Ask Claude to refactor a service, and next session it has forgotten the design decisions. Ask it about a bug, and the context from three weeks ago is gone. You're re-explaining, re-contextualizing, re-deciding.
-
-### The Solution
-
-MindBank **remembers**:
-
-- **Decisions** → "We chose PostgreSQL over MongoDB for ACID compliance"
-- **Facts** → "The API base URL is https://api.internal/v2"
-- **Problems** → "Rate limiter fails under >1000 req/s"
-- **Preferences** → "User prefers functional React patterns"
-- **Questions** → "Should we migrate to gRPC?" (unanswered, tracked)
-
-...and connects them into a **graph** so your AI can follow relationships: "This decision depends on that problem, which relates to this project."
+It is also a **global workspace** (JSPACE) for many concurrent agent sessions: memories are broadcast into a shared, leased workspace, integrated into the graph, and surfaced live so the whole fleet shares what any one session learned.
 
 ---
 
 ## Why MindBank?
 
-| Feature | What you get |
-|---------|-------------|
-| 🔍 **Hybrid Search** | Full-text + semantic vector search combined with Reciprocal Rank Fusion. Find "auth bug" even if you wrote "authentication failure" |
-| 📁 **Temporal Versioning** | Never lose history. Every update creates a new version. See what changed, when, and why |
-| 🌱 **Local-First** | Embeddings run locally via Ollama (nomic-embed-text) — no keys, no cloud, no data leaves your machine by default |
-| 🔌 **Configurable LLM** | Optional knowledge extraction via any OpenAI-compatible API — local Ollama, or hosted OpenRouter/OpenAI/Groq for users without a GPU. Set it from the **Settings** tab |
-| 🔗 **Graph Relationships** | Nodes connected by typed edges (`contains`, `relates_to`, `depends_on`, `decided_by`, etc.) |
-| 🖼️ **Per-Project Isolation** | Auto-namespace by working directory. `~/project-a` and `~/project-b` have separate memory graphs |
-| ⚡ **Wake-Up Context** | Pre-computed snapshot of important memories served on session start |
-| 🔮 **Observer Perspective** | Trace causal precursors, detect blind spots, measure knowledge coverage — understand *why* a decision was made |
-| 🤖 **MCP Native** | Works with Claude Desktop, Claude Code CLI, and Hermes Agent out of the box |
+| Problem | MindBank |
+|---|---|
+| Agents forget everything between sessions | Durable memories written at session end (`create_node`, session mining) |
+| Keyword search misses meaning | **Hybrid search**: FTS + pgvector embeddings + graph expansion |
+| Memories pile up as duplicates | **Content-hash dedup** + re-observation reinforcement |
+| Old memories crowd out new ones | **Temporal versioning** + **TTL forgetting** with workspace-active protection |
+| Every project mixes into one blob | **Per-project namespaces** + workspaces, auto-derived from the working directory |
+| Many sessions run at once, unaware of each other | **JSPACE global workspace**: live reasoning feed, leased concept heatmap, event stream, integration health |
+
+---
+
+## Features
+
+### 🧠 Graph memory
+- **Nodes** — typed memories (fact, decision, preference, problem, advice, person, project, concept, event, session…) with importance, epistemic labels, validation status, and confirmation counts.
+- **Edges** — typed connections (supports, contradicts, depends_on, produced, relates_to…) with weights and temporal validity.
+- **Temporal versioning** — every update creates a new version with a predecessor link; full history is queryable and old versions can be purged on a schedule.
+- **Deduplication & reinforcement** — identical saves are merged and *reinforced* (confirmation + importance + epistemic promotion) instead of duplicated.
+
+### 🔎 Hybrid search
+- Full-text (FTS with synonyms + trigram fallback), **semantic** (pgvector HNSW, local Ollama embeddings), and **hybrid** (RRF-fused) search.
+- **Graph expansion** — top results pull in connected neighbors.
+- **Dependence tracing** — follow `depends_on`/`decided_by` chains to surface causal precursors.
+- Workspace-active memories get a small recall boost (JSPACE feedback loop).
+
+### 🌍 JSPACE — the global workspace tab
+Inspired by global-workspace theory and the J-space research program, the dashboard **JSPACE** tab shows what the whole fleet is thinking and remembering right now:
+- **LIVE reasoning feed** — real-time chain-of-thought traces from active sessions, with per-session project attribution.
+- **Workspace heatmap** — the top ~25 "lit up" memories, capacity-calibrated, clustered into concept families, rendered as tuple patterns with **leases**.
+- **Event stream** — every workspace transition (`created · reinforced · entered · left · consumed · expired`) is captured.
+- **Specialists panel** — parallel sessions, projects, activity.
+- **Ingestion funnel** — raw session activity vs what actually persisted (where the pipeline loses information).
+- **Feedback loop** (toggleable) — workspace-active memories are protected from TTL expiry and boosted in recall.
+- **Provenance labels** — every panel is tagged RAW (session data) vs CURATED (MindBank memory), so the two worlds are never conflated.
+
+### 🤖 MCP server
+A full Model Context Protocol server (stdio + HTTP) so agents can read and write memory as tools. 22 tools including:
+
+| Tool | Purpose |
+|---|---|
+| `create_node` / `create_nodes` | Save memories (dedup-aware, batch) |
+| `search` / `ask` | Hybrid recall with FTS fallback, `node_types` filter |
+| `get_node` / `update_node` / `delete_node` | Read / versioned-update / soft-delete |
+| `recent` / `history` | Recency recall / version history |
+| `snapshot` | Pre-computed wake-up context |
+| `neighbors` / `dependence` / `create_edge` | Graph traversal + causal trace |
+| `refine_connectivity` / `conflicts` / `evolution` | Knowledge hygiene + epistemic tooling |
+| `cluster_sessions` / `list_namespaces` / `dream_status` / `mine_sessions` | Fleet + consolidation |
+| `set_context` / `get_context` | Pin workspace/namespace per client |
+
+See [docs/MCP_HTTP_TRANSPORT.md](docs/MCP_HTTP_TRANSPORT.md) for the full protocol.
+
+### 🧩 Hermes integration
+- Hermes auto-detects the MCP server; sessions write memories as they work and recall them at session start.
+- **Automatic namespace attribution** — each session's project is derived from its transcript (state.db), so memories land in the right project even with hundreds of concurrent sessions.
+- Session mining extracts durable memories from transcripts (LLM extraction with graceful fallback).
+- Helper scripts: `scripts/hermes-mind.sh` (launcher that sets the project namespace), `scripts/hermes-session-ns.py` (session → project), `scripts/hermes-fleet-status.py` / `hermes-live-reasoning.py` / `hermes-raw-events.py` (JSPACE live data).
+
+### 🧹 Memory lifecycle
+- **Forgetting** — TTL-based expiry with a 14-day grace for recently-accessed memories; `workspace_active` memories are exempt.
+- **Privacy redaction** — secrets (API keys, tokens, credentials) are redacted from stored content by default.
+- **DQA** — data-quality analytics: orphans, duplicates, connectivity, topic coverage.
+- **Dream engine** — neural consolidation: reranks, bridges, and merges related memories over time.
+- **Repair tools** — heal orphan edges, merge exact duplicates, connect components (dry-run first).
 
 ---
 
@@ -74,506 +113,136 @@ MindBank **remembers**:
 ### Option 1: One-liner (recommended)
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/spfcraze/MindBank/main/scripts/setup.sh | bash
+curl -sSL https://raw.githubusercontent.com/spfcraze/MindBank/main/scripts/install.sh | bash
 ```
 
 ### Option 2: Manual
 
 ```bash
-# 1. Clone
-git clone https://github.com/spfcraze/MindBank.git ~/mindbank
-cd ~/mindbank
-
-# 2. Run the setup script (creates .env, starts Postgres, builds binaries)
-bash scripts/setup.sh
-
-# 3. Start Ollama + pull model
-curl -fsSL https://ollama.ai/install.sh | sh
-ollama pull nomic-embed-text
-
-# 4. Start MindBank (API + MCP)
-bash scripts/start.sh
-
-# 5. Verify
-curl http://localhost:8095/api/v1/health
-curl http://localhost:8096/mcp
-# → {"status":"ok","postgres":"connected","ollama":"connected"}
+git clone https://github.com/spfcraze/MindBank.git && cd MindBank
+cp .env.example .env                # edit ports/model as needed
+docker compose up -d --wait         # Postgres + pgvector
+go build -o mindbank-api ./cmd/mindbank
+go build -o mindbank-mcp ./cmd/mindbank-mcp
+bash scripts/start.sh               # starts API (:8095) + MCP (:8096)
 ```
 
-Open **http://localhost:8095** for the dashboard.
+Verify:
 
----
+```bash
+curl http://localhost:8095/api/v1/health
+# {"status":"ok","postgres":"connected","ollama":"connected",...}
+```
 
-## Dashboard
+You also need **Ollama** running with an embedding model:
 
-The web UI gives you:
-
-- **Dashboard** — Stats, namespace breakdown, activity feed, node creation, search
-- **Questions** — Unanswered queries tracked for future reference
-- **Edges** — Browse and filter graph relationships
-- **Tools** — Auto-connect, clean orphans, import/export, batch operations, data quality analyzer
-- **Graph 2D** — Interactive force-directed visualization
-- **Brain 3D** — Immersive 3D graph exploration
-- **Observer** — Causal precursor tracing, blind spot detection, knowledge coverage analysis
-- **Settings** — Configure the LLM backend used for knowledge extraction: local Ollama or any OpenAI-compatible API (OpenRouter, OpenAI, Groq, DeepSeek), with provider auto-detect and a Test Connection button
-
----
-
-## Lifecycle Event Capture
-
-MindBank captures detailed session lifecycle events via hooks:
-
-### Event Types
-
-| Event | Description | Payload |
-|---|---|---|
-| `session_start` | Session begins | `{model, timestamp}` |
-| `user_prompt_submit` | User sends message | `{prompt}` |
-| `pre_tool_use` | Before tool execution | `{tool, command, args}` |
-| `post_tool_use` | After tool execution | `{tool, result, error}` |
-| `stop` | Session ends | `{duration_seconds, exit_code}` |
-
-### Storage
-
-Events are stored as JSON files in `~/.hermes/sessions/events/<session_id>/`.
-Each event becomes a node in the graph with `temporal_next` edges linking the sequence.
-
-### Visualization
-
-Event nodes appear in Brain3D as colored dots:
-- Green: session_start
-- Blue: user_prompt_submit
-- Amber: pre_tool_use
-- Teal: post_tool_use
-- Red: stop
+```bash
+ollama pull nomic-embed-text        # embeddings
+ollama pull qwen3-coder:latest      # optional: LLM session mining
+```
 
 ---
 
 ## How It Works
 
-### Memory Model
+### Memory model
 
-```
-Node (type: decision)
-├── label: "Use PostgreSQL for primary store"
-├── content: "Chose Postgres over MongoDB because..."
-├── namespace: "my-project"
-├── importance: 0.92
-└── version: 3 (2 previous versions preserved)
+Sessions write **nodes** into workspaces and namespaces. Every node is embedded locally (Ollama) and stored in pgvector. Repeated saves of the same content **deduplicate and reinforce** instead of duplicating. Edges connect related nodes; the graph is traversable for neighbors and causal precursors.
 
-    Edge (decided_by)
-    └─── connects to Node "Load testing results"
+### Search pipeline
 
-    Edge (depends_on)
-    └─── connects to Node "ACID requirements"
-```
+`query → embed (cached) → FTS + vector candidates → RRF fusion → graph expansion → workspace-active boost → rank` — with graceful FTS-only fallback when the embedder is unavailable.
 
-### Search Pipeline
+### Importance scoring
 
-```
-User query
-    ↓
-[Hybrid Search]
-  ├── FTS: tsvector ts_rank_cd (keyword matching)
-  └── Vector: pgvector HNSW (semantic similarity)
-    ↓
-[Reciprocal Rank Fusion]
-    ↓
-[Graph Boost]
-  └── Edges to ranked nodes get boost
-    ↓
-Results ranked by combined score
-```
+A composite of intrinsic importance, access count, and confirmation count, decayed by recency — this also drives the JSPACE workspace membership (top-K leased memories).
 
-### Importance Scoring
+### Global workspace (JSPACE)
 
-Nodes are automatically scored by 5 factors:
-
-| Factor | Weight | What it measures |
-|--------|--------|-----------------|
-| Recency | 30% | How recently accessed/updated |
-| Frequency | 25% | How often referenced |
-| Connectivity | 20% | Number of edges (hub nodes) |
-| Explicit | 15% | User-set importance |
-| Type | 10% | Decisions and problems weigh more |
-
----
-
-## 🔮 Observer Perspective: Causal Intelligence
-
-MindBank doesn't just store memories — it understands their **causal structure**. The Observer Perspective system treats every memory as an observable event and traces backward to find its **domain of dependence**: the set of precursors that had to exist for this memory to be possible.
-
-### Why This Matters
-
-Traditional search gives you *what* you know. The Observer Perspective tells you *why* you know it:
-
-- **"We chose PostgreSQL"** → *Because* load testing showed MongoDB failed at 10k req/s
-- **"Use connection pooling"** → *Because* we learned from an outage where connections exhausted
-- **"JWT for auth"** → *Depends on* the decision to go stateless, which *depends on* scaling requirements
-
-Without this, AI agents repeat decisions without understanding their rationale. With it, they inherit the full reasoning chain.
-
-### Core Concepts
-
-| Concept | Definition |
-|---------|-----------|
-| **Domain of Dependence** | All causal precursors of a node — everything that had to happen for this memory to exist |
-| **Critical Depth** | The shallowest depth at which 90% of total influence is captured. If critical depth is 2, you only need to look 2 hops back to understand almost everything that matters |
-| **Coverage** | Fraction of a node's immediate edges that have upstream precursors. 100% = fully explained; low = orphan decisions |
-| **Influence Modes** | Ranked list of precursors by influence score (weighted by edge strength and decayed by depth) |
-| **Blind Spots** | Automatically detected gaps: unresolved contradictions, missing supporting evidence, orphan decisions |
-
-### How It Works
-
-```
-User asks: "Why did we choose PostgreSQL?"
-    ↓
-[Hybrid Search] finds node: "Use PostgreSQL for primary store"
-    ↓
-[Dependence Trace] backward BFS through causal edges:
-  depth 1: "Load testing results" (decided_by)
-  depth 1: "ACID requirements" (depends_on)
-  depth 2: "Financial data integrity" (depends_on)
-  depth 2: "MongoDB failure at 10k req/s" (learned_from)
-    ↓
-[Analysis]
-  Critical Depth: 2 (90% of influence within 2 hops)
-  Coverage: 100% (all immediate edges have precursors)
-  Blind Spots: none
-  Influence Modes:
-    1. "Load testing results" (score: 0.85, depth: 1)
-    2. "ACID requirements" (score: 0.72, depth: 1)
-    3. "MongoDB failure at 10k req/s" (score: 0.51, depth: 2)
-```
-
-### Dependence-Aware Search & Q&A
-
-Both search and Q&A support **opt-in dependence expansion**:
-
-```json
-// Search with causal context
-{"name": "mindbank_search", "arguments": {
-  "query": "database choice",
-  "dependence_expansion": true
-}}
-
-// Ask with supporting evidence
-{"name": "mindbank_ask", "arguments": {
-  "query": "why postgres over mongodb",
-  "dependence_expansion": true
-}}
-```
-
-When enabled, MindBank:
-1. Runs hybrid search to find the most relevant node
-2. Traces backward up to 2 hops through causal edges
-3. Appends the top precursors (up to `limit/4`) to the result set
-4. Returns both the answer *and* its supporting evidence chain
-
-This is **disabled by default** for backward compatibility. Agents must explicitly opt-in.
-
-### Direct Dependence Trace
-
-For deep causal analysis, use the dedicated `dependence` tool:
-
-```json
-{"name": "mindbank_dependence", "arguments": {
-  "query": "database configuration",
-  "max_depth": 3
-}}
-```
-
-Returns:
-- **Critical Depth**: How far back you need to go to capture 90% of influence
-- **Coverage %**: How well-explained the seed node is
-- **Influence Modes**: Ranked precursors with scores and depths
-- **Blind Spots**: Detected gaps (unresolved contradictions, missing evidence)
-- **Graph Stats**: Node and edge counts in the dependence subgraph
-
-### Edge Types Used for Causal Tracing
-
-The dependence system follows these edge types backward:
-
-| Edge Type | Direction | Meaning |
-|-----------|-----------|---------|
-| `contains` | A → B | A contains/is about B |
-| `relates_to` | A ↔ B | A is related to B (symmetric) |
-| `depends_on` | A → B | A depends on B (B is prerequisite) |
-| `learned_from` | A → B | A was learned from experience B |
-| `decided_by` | A → B | Decision A was informed by B |
-| `produced` | A → B | A produced outcome B |
-| `supports` | A → B | A supports/evidences B |
-| `contradicts` | A → B | A contradicts B (triggers blind spot detection) |
-| `tested_by` | A → B | A was empirically validated by B |
-| `invalidated_by` | A → B | A was disproven/invalidated by B |
-| `derived_from` | A → B | A was derived from B |
-| `assumed` | A → B | A assumes B as a premise |
-| `superseded_by` | A → B | A was replaced/superseded by B |
-| `refined_by` | A → B | A was refined/improved by B |
-| `merged_into` | A → B | A was merged into B |
-| `created_by` | A → B | A was created by agent B |
-| `reviewed_by` | A → B | A was reviewed by agent B |
-| `executed_by` | A → B | A was executed by agent B |
-| `failed_due_to` | A → B | A failed because of B |
-| `incompatible_with` | A → B | A is incompatible with B |
-| `precondition_for` | A → B | A is a precondition for B |
+The workspace is a **derived, recomputable layer** — it never writes into the memory graph. The feedback loop (hourly, toggleable) marks the top-25 memories as workspace-active with a timed lease; forgetting exempts them and search boosts them. Every transition is recorded in the workspace event stream.
 
 ---
 
 ## Connect Your AI Agent
 
-### Hermes Agent (Recommended)
+Any MCP client can use MindBank:
 
-MindBank connects to Hermes via MCP (Model Context Protocol) over HTTP:
-
-```bash
-# 1. Start MindBank (API + MCP)
-cd ~/mindbank && bash scripts/start.sh
-
-# 2. Hermes auto-detects the MCP server at http://localhost:8096/mcp
-#    (configured in ~/.hermes/config.yaml)
+```yaml
+# ~/.config/hermes/config.yaml (or your MCP client config)
+mcp_servers:
+  mindbank:
+    url: http://127.0.0.1:8096/mcp
+    enabled: true
 ```
 
-### Claude Desktop / Claude Code CLI
+For Hermes, add the namespace header so each session's memories land in its project:
 
-```bash
-bash scripts/install-plugin.sh
+```yaml
+mcp_servers:
+  mindbank:
+    url: http://127.0.0.1:8096/mcp
+    headers:
+      X-Mindbank-Namespace: ${MINDBANK_NAMESPACE}   # set by scripts/hermes-mind.sh
+    enabled: true
 ```
 
-Detects and configures:
-
-- **Claude Desktop** → `~/.config/claude/claude_desktop_config.json`
-- **Claude Code CLI** → `~/.claude/mcp.json`
-
-Or use flags:
-
-```bash
-bash scripts/install-plugin.sh --all
-bash scripts/install-plugin.sh --claude-desktop --hermes
-```
-
-### MCP Tools Available to Agents
-
-| Tool | Description |
-|------|-------------|
-| `mindbank_store` | Save facts, decisions, questions, preferences |
-| `mindbank_search` | Hybrid FTS + semantic search (opt-in causal precursors) |
-| `mindbank_ask` | Natural language query → structured context (opt-in supporting evidence) |
-| `mindbank_snapshot` | Get wake-up context on session start |
-| `mindbank_neighbors` | Graph traversal (connected nodes) |
-| `mindbank_dependence` | **Trace causal precursors** — understand *why* a decision exists |
-
-> The MCP server (Claude Desktop/Code) also exposes management tools beyond the core five: `create_edge`, `update_node`, `list_namespaces`, `evolution`, `cluster_sessions`, `refine_connectivity`, `mine_sessions`, `conflicts`, and `dream_status`.
-
-**Dependence Expansion:** Both `search` and `ask` support an optional `dependence_expansion` flag. When enabled, MindBank traces backward from the top result through `depends_on`, `learned_from`, `decided_by`, `produced`, and `supports` edges to surface the supporting evidence that led to a decision or fact. This gives your AI agent the full causal chain, not just the conclusion.
-
----
-
-## Session Mining
-
-MindBank mines knowledge from your Hermes/agent session transcripts and turns them into
-structured memories. When an LLM backend is configured (see the **Settings** tab), it
-extracts decisions/facts/problems/preferences with an LLM; otherwise it falls back to a
-lightweight heuristic.
-
-**Trigger mining via the API (recommended):**
-
-```bash
-# Mine all un-processed sessions for a workspace
-curl -X POST http://localhost:8095/api/v1/sessions/mine \
-  -H 'Content-Type: application/json' -d '{"workspace":"hermes","mine_all":true}'
-```
-
-…or from any MCP client with the `mine_sessions` tool.
-
-**Scripts (for automation / cron):**
-
-```bash
-python3 scripts/session_watcher.py       # Watch session dir, auto-mine new files
-python3 scripts/batch_mine.py            # Batch-mine existing sessions
-python3 scripts/mine_jsonl_sessions.py   # Mine Hermes .jsonl session files
-python3 scripts/auto_miner.py <file>     # Mine a single session file
-python3 scripts/backfill_namespaces.py   # Re-derive project namespaces from paths
-```
-
-The Go scheduler (`cmd/scheduler`) can also poll for new sessions continuously.
-
-### Skill Query
-
-Query nodes by the skill that produced them:
-
-```bash
-curl "http://127.0.0.1:8095/api/v1/nodes?skill=gap-analysis&limit=5"
-```
+Claude Desktop / Cursor / any stdio-capable client can also launch `./mindbank-mcp` directly.
 
 ---
 
 ## API Overview
 
-### Nodes
+| Endpoint | Description |
+|---|---|
+| `POST /api/v1/nodes` | Create a node (dedup-aware) |
+| `GET /api/v1/nodes` | List nodes (filters: workspace, namespace, type, sort) |
+| `GET/PUT/DELETE /api/v1/nodes/{id}` | Read / versioned-update / soft-delete |
+| `GET /api/v1/nodes/{id}/history` | Version history |
+| `POST /api/v1/search/hybrid` | Hybrid FTS + semantic search |
+| `GET /api/v1/snapshot` | Wake-up context of the most important memories |
+| `GET /api/v1/analytics/graph` | Graph metrics |
+| `GET /api/v1/jspace/overview` | Global workspace aggregate |
+| `GET /api/v1/jspace/live` | Live fleet reasoning + memory activity |
+| `GET /api/v1/jspace/raw` | Raw session activity + ingestion funnel |
+| `GET/POST /api/v1/jspace/feedback` | Toggle the workspace feedback loop |
+| `POST /api/v1/analyze/repair-orphan-edges` | Repair edges pointing at dead nodes |
 
-```bash
-# Create
-POST /api/v1/nodes
-{"label":"API Rate Limit","type":"problem","content":"...","namespace":"my-project"}
-
-# List (with filters)
-GET /api/v1/nodes?namespace=my-project&type=decision&limit=50
-
-# List by skill (skill provenance)
-GET /api/v1/nodes?skill=gap-analysis&limit=5
-
-# Get (bumps access count)
-GET /api/v1/nodes/{id}
-
-# Update (creates temporal version)
-PUT /api/v1/nodes/{id}
-
-# History
-GET /api/v1/nodes/{id}/history
-
-# Neighbors (graph traversal)
-GET /api/v1/nodes/{id}/neighbors?depth=2
-```
-
-### Search
-
-```bash
-# Full-text
-GET /api/v1/search?q=authentication&limit=10
-
-# Semantic
-POST /api/v1/search/semantic
-{"query":"how do we handle auth","limit":10}
-
-# Hybrid (best of both)
-POST /api/v1/search/hybrid
-{"query":"rate limiter bug","limit":10}
-
-# Dependence trace
-POST /api/v1/analyze/dependence
-{"query":"database choice","max_depth":3}
-```
-
-### Snapshots
-
-```bash
-# Get wake-up context
-GET /api/v1/snapshot
-
-# Rebuild
-POST /api/v1/snapshot/rebuild
-```
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    MindBank Architecture                     │
-└─────────────────────────────────────────────────────────────────────┘
-
-  💻 Dashboard (static/)          🤖 MCP Server (HTTP :8096)
-         │                              │
-         └──────────────────────────────────┘
-                        │
-              🔗 Go HTTP API (chi router)
-                        │
-       ┌──────────────────────────────────────────┐
-       │                                              │
-   💾 PostgreSQL 16+                          🔬 Ollama
-   • pgvector (HNSW)                          • nomic-embed-text:v1.5
-   • tsvector (FTS)                           • 768 dims
-   • Temporal tables                          • Local, offline
-   • Recursive CTEs                           • 4 concurrent semaphores
-   • Dependence analysis (BFS)                • Embedding client
-```
-
-### Key Design Decisions
-
-- **Temporal versioning** — `valid_from`/`valid_to` columns, never `DELETE`. Full audit trail.
-- **Dual history path** — Fast `latest` view + complete version chain.
-- **Semaphore-bounded embeddings** — Max 4 concurrent Ollama requests to prevent overload.
-- **Typed errors** — `BUSY` (retry), `UNAVAILABLE` (wait), `BAD_QUERY` (don't retry).
-- **Rate limiting** — 100 req/min per IP with chi middleware.
-- **Observer Perspective** — Recursive CTE BFS for causal precursor tracing, influence scoring with depth decay, and blind spot detection.
+Full reference: [docs/API.md](docs/API.md)
 
 ---
 
 ## Configuration
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MB_PORT` | `8095` | HTTP server port |
-| `MB_DB_DSN` | `postgres://mindbank:mindbank@localhost:5434/mindbank?sslmode=disable` | PostgreSQL connection string |
-| `MB_POSTGRES_PASSWORD` | `mindbank` | Postgres password (used by docker-compose) |
-| `MB_OLLAMA_URL` | `http://localhost:11434` | Ollama API endpoint |
-| `MB_EMBED_MODEL` | `nomic-embed-text` | Embedding model (always local) |
-| `MB_LLM_API_URL` | `<ollama>/v1` | LLM extraction endpoint (OpenAI-compatible). Overridable from the Settings tab |
-| `MB_LLM_API_KEY` | *(none)* | API key for the LLM endpoint (blank for local Ollama) |
-| `MB_LLM_MODEL` | *(none)* | Extraction model. Empty = LLM extraction off (regex fallback) |
-| `MB_LOG_LEVEL` | `info` | debug / info / warn / error |
-| `MB_API_KEY` | *(none)* | Require API key for all endpoints |
-| `MCP_HTTP_PORT` | `8096` | MCP server HTTP port |
-| `MCP_TRANSPORT` | `http` | Transport mode (`http` for the bundled service; `stdio` for direct MCP clients) |
+Environment variables (see `.env.example`):
 
-> **Tip:** The **Settings** tab writes `MB_LLM_*` values to the database at runtime, so you can switch the extraction model without editing `.env` or restarting.
+| Var | Default | Purpose |
+|---|---|---|
+| `MB_DB_DSN` | `postgres://mindbank:mindbank@localhost:5436/mindbank` | Postgres/pgvector DSN |
+| `MB_PORT` | `8095` | Dashboard + API port |
+| `MCP_HTTP_PORT` | `8096` | MCP HTTP port |
+| `MB_OLLAMA_URL` | `http://localhost:11434` | Embedding endpoint |
+| `MB_EMBED_MODEL` | `nomic-embed-text` | Embedding model |
+| `MB_LLM_MODEL` | `qwen3-coder:latest` | LLM for session mining |
+| `MB_API_KEY` | *(empty)* | Set to require API auth |
+| `MB_LOG_LEVEL` | `info` | Log verbosity |
 
 ---
 
 ## Development
 
 ```bash
-# Build
-make build        # API server
-make build-mcp    # MCP server
-
-# Run
-make run          # Build + start Postgres + start API
-make stop         # Stop everything
-
-# Quality
-make test         # Run Go tests
-make vet          # Run go vet
-make health       # Quick health check
-
-# Update
-make update       # Check GitHub + auto-update
+make build          # build mindbank-api
+make build-mcp      # build mindbank-mcp
+make test           # run unit + integration tests (needs a running DB)
+go vet ./...        # static analysis
 ```
 
----
-
-## Node Types
-
-MindBank natively understands these memory types:
-
-| Type | Use for | Example |
-|------|---------|---------|
-| `decision` | Architecture choices, tech stack | "Use Go for the API" |
-| `fact` | Technical facts, config values | "Redis runs on port 6379" |
-| `problem` | Known issues, bugs, limitations | "Webhook delivery is unreliable" |
-| `preference` | Style guides, user preferences | "Prefer table-driven tests" |
-| `advice` | Recommendations, best practices | "Use connection pooling" |
-| `project` | Top-level project containers | "MindBank v2 refactor" |
-| `question` | Unanswered queries (tracked) | "Should we add caching?" |
-| `concept` | Domain concepts, definitions | "Idempotency" |
-| `topic` | Thematic groupings | "Authentication" |
-| `person` | Team members, stakeholders | "Sarah owns the frontend" |
-| `event` | Milestones, incidents | "v1.0 launch" |
+The dashboard is a single self-contained HTML app embedded in the binary (`internal/handler/static/`).
 
 ---
 
 ## License
 
-MIT — free for personal and commercial use.
+MIT — see [LICENSE](LICENSE).
 
 ---
-
-<div align="center">
-
-Built with ❤️ for AI agents that deserve to remember.
-
-[Report Bug](https://github.com/spfcraze/MindBank/issues) · [Request Feature](https://github.com/spfcraze/MindBank/issues) · [Releases](https://github.com/spfcraze/MindBank/releases)
-
-</div>

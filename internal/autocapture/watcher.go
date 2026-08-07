@@ -88,8 +88,26 @@ func (w *Watcher) ProcessFile(ctx context.Context, path string) error {
 		return fmt.Errorf("read session file: %w", err)
 	}
 
+	// Skip hidden/state files (e.g. .processed, .mindbank_processed): these are
+	// miner ledgers and editor artifacts, not sessions. Without this guard they
+	// were parsed (and logged as parse failures) on every startup, and older
+	// builds ingested them as bogus sessions.
+	if strings.HasPrefix(filepath.Base(path), ".") {
+		return nil
+	}
+
 	hash := contentHash(data)
 	if w.alreadyProcessed(ctx, path, hash) {
+		return nil
+	}
+
+	// QUALITY GATE 2 first: only session-shaped JSON with a real user message
+	// is a candidate. Checking this before namespace parsing avoids spurious
+	// "failed to parse session for namespace" warnings for every non-session
+	// file in the watch directory (marker files, .jsonl transcripts, etc.).
+	if !w.hasMeaningfulContent(data) {
+		slog.Info("skipping empty session", "path", path)
+		w.recordProcessed(ctx, path, hash, "skipped_empty", "")
 		return nil
 	}
 
@@ -107,13 +125,6 @@ func (w *Watcher) ProcessFile(ctx context.Context, path string) error {
 	if w.isLowQualityLabel(label) {
 		slog.Info("skipping low-quality session", "path", path, "label", label)
 		w.recordProcessed(ctx, path, hash, "skipped_low_quality", "")
-		return nil
-	}
-
-	// QUALITY GATE 2: Skip sessions with no meaningful content
-	if !w.hasMeaningfulContent(data) {
-		slog.Info("skipping empty session", "path", path)
-		w.recordProcessed(ctx, path, hash, "skipped_empty", "")
 		return nil
 	}
 

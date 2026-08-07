@@ -72,7 +72,9 @@ func (h *SessionMineHandler) MineSessions(w http.ResponseWriter, r *http.Request
 	// Find session files
 	sessionDir := filepath.Join(os.Getenv("HOME"), ".hermes", "sessions")
 	if sessionDir == "" || sessionDir == "/sessions" {
-		sessionDir = "/home/rat/.hermes/sessions"
+		if h, err := os.UserHomeDir(); err == nil {
+			sessionDir = filepath.Join(h, ".hermes", "sessions")
+		}
 	}
 
 	var sessionFiles []string
@@ -170,7 +172,7 @@ func (h *SessionMineHandler) mineSessionFile(sessionPath, workspace, namespace s
 	}
 
 	// Derive namespace from the session's project directory. The robust
-	// extractor handles JSONL and scans message bodies for /home/rat/<project>
+	// extractor handles JSONL and scans message bodies for /home/<user>/<project>
 	// — the single-field checks below only worked on the rare old format and
 	// left everything in "global".
 	ns := namespace

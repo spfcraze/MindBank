@@ -1,6 +1,0 @@
-name: mindbank
-version: 1.0.0
-description: "Graph-structured persistent memory with semantic search, temporal versioning, and neural visualization"
-hooks:
-  - on_session_end
-  - on_memory_write
